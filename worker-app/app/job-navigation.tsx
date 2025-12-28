@@ -360,17 +360,17 @@ export default function JobNavigationScreen() {
   const completeJobWithPayment = async (paymentMethod: 'cash' | 'online') => {
     setNavStatus('completed');
     
-    // Emit work completed event with payment info
+    // Emit work completed event with payment info (but don't set paymentStatus to paid yet)
     socketService.emit('work:completed', {
       bookingId,
       workerId: worker?.id,
       endTime: new Date().toISOString(),
       duration: workDuration,
       paymentMethod,
-      paymentStatus: 'paid',
+      paymentStatus: 'pending', // Keep as pending until both confirm
     });
 
-    // Update booking status
+    // Update booking status to completed (but keep paymentStatus as pending)
     try {
       const apiUrl = getApiUrl();
       await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
@@ -379,21 +379,19 @@ export default function JobNavigationScreen() {
         body: JSON.stringify({ 
           status: 'completed',
           paymentMethod,
-          paymentStatus: 'paid',
+          paymentStatus: 'pending', // Keep as pending until both confirm
         }),
       });
       
       // Show success notification
       showToast(
-        `Job completed! Payment received via ${paymentMethod}. Customer has been notified.`,
+        `Job completed! Please confirm payment when customer pays.`,
         '✅ Job Completed!',
         'success'
       );
       
-      // Navigate back after a short delay
-      setTimeout(() => {
-        router.push('/(tabs)');
-      }, 2000);
+      // Update local booking state
+      setBooking((prev: any) => prev ? { ...prev, status: 'completed', paymentMethod, paymentStatus: 'pending' } : prev);
     } catch (error) {
       console.error('Error updating booking status:', error);
       showToast(
@@ -401,6 +399,47 @@ export default function JobNavigationScreen() {
         'Error',
         'error'
       );
+    }
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!booking || !worker?.id) return;
+    
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/confirm-payment`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmedBy: 'worker',
+          workerId: worker.id,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        showToast(data.message || 'Payment confirmed!', 'Success', 'success');
+        // Update local state
+        setBooking((prev: any) => prev ? {
+          ...prev,
+          workerConfirmedPayment: true,
+          paymentStatus: data.booking.paymentStatus,
+          userConfirmedPayment: data.booking.userConfirmedPayment,
+        } : null);
+        
+        // If both confirmed, navigate back
+        if (data.booking.paymentStatus === 'paid') {
+          setTimeout(() => {
+            router.push('/(tabs)');
+          }, 2000);
+        }
+      } else {
+        const errorData = await response.json();
+        showToast(errorData.message || 'Failed to confirm payment', 'Error', 'error');
+      }
+    } catch (error) {
+      console.error('Error confirming payment:', error);
+      showToast('Failed to confirm payment. Please try again.', 'Error', 'error');
     }
   };
 

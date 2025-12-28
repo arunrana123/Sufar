@@ -53,12 +53,15 @@ interface Booking {
   images?: string[];
 }
 
+type FilterType = 'all' | 'completed' | 'in_progress' | 'pending';
+
 export default function TrackingScreen() {
   const { theme } = useTheme();
   const { user } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
 
   const fetchBookings = async () => {
     if (!user?.id) {
@@ -143,6 +146,29 @@ export default function TrackingScreen() {
     router.replace('/home');
   };
 
+  // Filter bookings based on active filter
+  const filteredBookings = bookings.filter((booking) => {
+    switch (activeFilter) {
+      case 'completed':
+        return booking.status === 'completed';
+      case 'in_progress':
+        return ['accepted', 'in_progress'].includes(booking.status);
+      case 'pending':
+        return booking.status === 'pending';
+      case 'all':
+      default:
+        return true;
+    }
+  });
+
+  // Get counts for each filter
+  const filterCounts = {
+    all: bookings.length,
+    completed: bookings.filter(b => b.status === 'completed').length,
+    in_progress: bookings.filter(b => ['accepted', 'in_progress'].includes(b.status)).length,
+    pending: bookings.filter(b => b.status === 'pending').length,
+  };
+
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
@@ -155,6 +181,115 @@ export default function TrackingScreen() {
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <SafeAreaView style={styles.safe}>
+        {/* Header with Back Button */}
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable 
+            style={styles.backButton} 
+            onPress={handleBack}
+          >
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Track Services</ThemedText>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* Filter Buttons */}
+        {bookings.length > 0 && (
+          <View style={styles.filterContainer}>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterScrollContent}
+            >
+                <TouchableOpacity
+                  style={[
+                    styles.filterButton,
+                    activeFilter === 'all' && styles.filterButtonActive,
+                    activeFilter === 'all' && { backgroundColor: theme.primary }
+                  ]}
+                  onPress={() => setActiveFilter('all')}
+                >
+                  <Text style={[
+                    styles.filterButtonText,
+                    activeFilter === 'all' && styles.filterButtonTextActive,
+                    activeFilter === 'all' && { color: '#fff' }
+                  ]}>
+                    All ({filterCounts.all})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.filterButton,
+                    activeFilter === 'completed' && styles.filterButtonActive,
+                    activeFilter === 'completed' && { backgroundColor: theme.success }
+                  ]}
+                  onPress={() => setActiveFilter('completed')}
+                >
+                  <Ionicons 
+                    name="checkmark-circle" 
+                    size={16} 
+                    color={activeFilter === 'completed' ? '#fff' : theme.success} 
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={[
+                    styles.filterButtonText,
+                    activeFilter === 'completed' && styles.filterButtonTextActive,
+                    activeFilter === 'completed' && { color: '#fff' }
+                  ]}>
+                    Completed ({filterCounts.completed})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.filterButton,
+                    activeFilter === 'in_progress' && styles.filterButtonActive,
+                    activeFilter === 'in_progress' && { backgroundColor: theme.info }
+                  ]}
+                  onPress={() => setActiveFilter('in_progress')}
+                >
+                  <Ionicons 
+                    name="hourglass" 
+                    size={16} 
+                    color={activeFilter === 'in_progress' ? '#fff' : theme.info} 
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={[
+                    styles.filterButtonText,
+                    activeFilter === 'in_progress' && styles.filterButtonTextActive,
+                    activeFilter === 'in_progress' && { color: '#fff' }
+                  ]}>
+                    In Progress ({filterCounts.in_progress})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.filterButton,
+                    activeFilter === 'pending' && styles.filterButtonActive,
+                    activeFilter === 'pending' && { backgroundColor: theme.warning }
+                  ]}
+                  onPress={() => setActiveFilter('pending')}
+                >
+                  <Ionicons 
+                    name="time-outline" 
+                    size={16} 
+                    color={activeFilter === 'pending' ? '#fff' : theme.warning} 
+                    style={{ marginRight: 4 }}
+                  />
+                  <Text style={[
+                    styles.filterButtonText,
+                    activeFilter === 'pending' && styles.filterButtonTextActive,
+                    activeFilter === 'pending' && { color: '#fff' }
+                  ]}>
+                    Pending ({filterCounts.pending})
+                  </Text>
+                </TouchableOpacity>
+            </ScrollView>
+          </View>
+        )}
+
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
@@ -163,18 +298,26 @@ export default function TrackingScreen() {
           }
           showsVerticalScrollIndicator={false}
         >
-          {/* Header with Back Button */}
-          <View style={[styles.header, { backgroundColor: theme.tint }]}>
-            <Pressable 
-              style={styles.backButton} 
-              onPress={handleBack}
-            >
-              <Ionicons name="arrow-back" size={28} color="#fff" />
-            </Pressable>
-            <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Track Services</ThemedText>
-            <View style={{ width: 40 }} />
-          </View>
-          {bookings.length === 0 ? (
+          {filteredBookings.length === 0 && bookings.length > 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="filter-outline" size={64} color={theme.icon} />
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>
+                No {activeFilter === 'all' ? '' : activeFilter === 'completed' ? 'Completed' : activeFilter === 'in_progress' ? 'In Progress' : 'Pending'} Bookings
+              </Text>
+              <Text style={[styles.emptySubtitle, { color: theme.secondary }]}>
+                {activeFilter === 'all' 
+                  ? 'You don\'t have any bookings at the moment'
+                  : `You don't have any ${activeFilter === 'completed' ? 'completed' : activeFilter === 'in_progress' ? 'in progress' : 'pending'} services to track`
+                }
+              </Text>
+              <TouchableOpacity 
+                style={[styles.exploreButton, { backgroundColor: theme.tint }]}
+                onPress={() => setActiveFilter('all')}
+              >
+                <Text style={styles.exploreButtonText}>Show All</Text>
+              </TouchableOpacity>
+            </View>
+          ) : bookings.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="location-outline" size={64} color={theme.icon} />
               <Text style={[styles.emptyTitle, { color: theme.text }]}>No Active Bookings</Text>
@@ -190,7 +333,7 @@ export default function TrackingScreen() {
             </View>
           ) : (
             <View style={styles.bookingsList}>
-              {bookings.map((booking) => (
+              {filteredBookings.map((booking) => (
                 <View key={booking._id} style={[styles.bookingCard, { backgroundColor: theme.card }]}>
                   {/* Status Header */}
                   <View style={styles.statusHeader}>
@@ -644,6 +787,48 @@ const styles = StyleSheet.create({
   trackButtonText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  filterContainer: {
+    backgroundColor: '#fff',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  filterScrollContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginRight: 8,
+  },
+  filterButtonActive: {
+    borderWidth: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  filterButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  filterButtonTextActive: {
+    fontWeight: '700',
   },
 });
 

@@ -79,6 +79,11 @@ interface BookingDetails {
   startTime?: string;
   estimatedDuration?: number;
   remainingTime?: number;
+  price?: number;
+  paymentStatus?: 'pending' | 'paid' | 'refunded';
+  paymentMethod?: string;
+  userConfirmedPayment?: boolean;
+  workerConfirmedPayment?: boolean;
 }
 
 export default function LiveTrackingScreen() {
@@ -459,6 +464,19 @@ export default function LiveTrackingScreen() {
       }
     };
 
+    // Listen for payment status updates
+    const handlePaymentStatusUpdated = (data: any) => {
+      if (data.bookingId === bookingId) {
+        console.log('💳 Payment status updated:', data);
+        setBooking(prev => prev ? {
+          ...prev,
+          paymentStatus: data.paymentStatus,
+          userConfirmedPayment: data.userConfirmed,
+          workerConfirmedPayment: data.workerConfirmed,
+        } : prev);
+      }
+    };
+
     // Listen for booking status updates (from backend status endpoint)
     const handleBookingUpdated = (updatedBooking: any) => {
       if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
@@ -513,6 +531,7 @@ export default function LiveTrackingScreen() {
       socketService.off('work:started', handleWorkStarted);
       socketService.off('work:completed', handleWorkCompleted);
       socketService.off('booking:updated', handleBookingUpdated);
+      socketService.off('payment:status_updated', handlePaymentStatusUpdated);
     };
   }, [bookingId, booking, user?.id]);
 
@@ -528,6 +547,44 @@ export default function LiveTrackingScreen() {
       return () => clearInterval(interval);
     }
   }, [workStatus, workStartTime]);
+
+  const handleConfirmPayment = async () => {
+    if (!booking || !user?.id) return;
+    
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/bookings/${booking._id}/confirm-payment`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmedBy: 'user',
+          userId: user.id,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        Alert.alert('Success', data.message || 'Payment confirmed!');
+        // Update local state
+        setBooking(prev => prev ? {
+          ...prev,
+          userConfirmedPayment: true,
+          paymentStatus: data.booking.paymentStatus,
+          workerConfirmedPayment: data.booking.workerConfirmedPayment,
+        } : null);
+        // Refresh booking details
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 500);
+      } else {
+        const errorData = await response.json();
+        Alert.alert('Error', errorData.message || 'Failed to confirm payment');
+      }
+    } catch (error) {
+      console.error('Error confirming payment:', error);
+      Alert.alert('Error', 'Failed to confirm payment. Please try again.');
+    }
+  };
 
   const formatDuration = (seconds: number): string => {
     const hours = Math.floor(seconds / 3600);
@@ -879,12 +936,35 @@ export default function LiveTrackingScreen() {
           )}
 
           {workStatus === 'completed' && (
-            <View style={styles.completedBadge}>
-              <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
-              <Text style={styles.completedText}>
-                {workerName} has completed the work! Please proceed to payment.
-              </Text>
-            </View>
+            <>
+              <View style={styles.completedBadge}>
+                <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+                <Text style={styles.completedText}>
+                  {workerName} has completed the work! Please proceed to payment.
+                </Text>
+              </View>
+              {booking.paymentStatus !== 'paid' && !booking.userConfirmedPayment && (
+                <TouchableOpacity
+                  style={[styles.confirmPaymentButton, { backgroundColor: '#4CAF50' }]}
+                  onPress={handleConfirmPayment}
+                >
+                  <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                  <Text style={styles.confirmPaymentButtonText}>Confirm Payment</Text>
+                </TouchableOpacity>
+              )}
+              {booking.paymentStatus !== 'paid' && booking.userConfirmedPayment && !booking.workerConfirmedPayment && (
+                <View style={styles.waitingPaymentBadge}>
+                  <Ionicons name="hourglass" size={16} color="#FF9800" />
+                  <Text style={styles.waitingPaymentText}>Waiting for worker to confirm payment</Text>
+                </View>
+              )}
+              {booking.paymentStatus === 'paid' && (
+                <View style={styles.paidBadge}>
+                  <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+                  <Text style={styles.paidText}>Payment Confirmed by Both Parties</Text>
+                </View>
+              )}
+            </>
           )}
 
           {/* Worker Info */}
@@ -1237,6 +1317,48 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#4CAF50',
     marginTop: 4,
+  },
+  confirmPaymentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  confirmPaymentButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  waitingPaymentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  waitingPaymentText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF9800',
+  },
+  paidBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#E8F5E9',
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  paidText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#4CAF50',
   },
   completedBadge: {
     flexDirection: 'row',

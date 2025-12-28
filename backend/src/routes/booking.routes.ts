@@ -1,12 +1,14 @@
 // BOOKING ROUTES - Handles all booking CRUD operations and status updates
 // Endpoints: POST /create, GET /user/:userId, GET /:id, DELETE /:id, PUT /:id/status
 // Features: Create bookings, fetch user bookings, update status, cancel bookings, Socket.IO notifications
-import { Router, Request, Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import Booking from '../models/Booking.model';
 import WorkerUser from '../models/WorkerUser.model';
 import User from '../models/User.model';
 import Notification from '../models/Notification.model';
+import Service from '../models/Service.model';
 
 const router = Router();
 
@@ -122,7 +124,7 @@ router.post('/', async (req: Request, res: Response) => {
           serviceCategories: { $elemMatch: { $regex: new RegExp(`^${booking.serviceCategory}$`, 'i') } },
           isActive: true,
           status: 'available',
-        }).select('_id name email phone serviceCategories categoryVerificationStatus location lastLocation');
+        }).select('_id name email phone serviceCategories categoryVerificationStatus currentLocation rating completedJobs');
 
         console.log(`🔍 Found ${availableWorkers.length} available workers with service category "${booking.serviceCategory}"`);
 
@@ -137,7 +139,7 @@ router.post('/', async (req: Request, res: Response) => {
           .map((worker) => {
             // Calculate distance if worker has location
             let distance = Infinity;
-            const workerLoc = worker.lastLocation || worker.location;
+            const workerLoc = worker.currentLocation;
             if (workerLoc?.coordinates?.latitude && workerLoc?.coordinates?.longitude) {
               distance = calculateDistance(
                 userLat, userLng,
@@ -145,13 +147,35 @@ router.post('/', async (req: Request, res: Response) => {
                 workerLoc.coordinates.longitude
               );
             }
-            return { worker, distance };
+            
+            // Calculate badge priority (higher = better)
+            // Gold (1200+): 3, Silver (500-1199): 2, Iron (0-499): 1
+            const completedJobs = worker.completedJobs || 0;
+            let badgePriority = 1; // Iron
+            if (completedJobs >= 1200) {
+              badgePriority = 3; // Gold
+            } else if (completedJobs >= 500) {
+              badgePriority = 2; // Silver
+            }
+            
+            // Combine badge priority with rating for overall priority score
+            const rating = worker.rating || 0;
+            const priorityScore = (badgePriority * 100) + (rating * 10); // Badge is more important than rating
+            
+            return { worker, distance, badgePriority, priorityScore };
           })
-          .sort((a, b) => a.distance - b.distance); // Sort by distance (nearest first)
+          .sort((a, b) => {
+            // First sort by priority score (higher is better), then by distance (lower is better)
+            if (b.priorityScore !== a.priorityScore) {
+              return b.priorityScore - a.priorityScore;
+            }
+            return a.distance - b.distance;
+          });
 
-        console.log(`✅ Found ${eligibleWorkers.length} eligible workers, sorted by distance`);
+        console.log(`✅ Found ${eligibleWorkers.length} eligible workers, sorted by badge priority and distance`);
         eligibleWorkers.slice(0, 5).forEach((w, i) => {
-          console.log(`  ${i+1}. ${w.worker.name} - ${w.distance === Infinity ? 'Unknown' : w.distance.toFixed(2) + ' km'}`);
+          const badgeName = w.badgePriority === 3 ? 'Gold' : w.badgePriority === 2 ? 'Silver' : 'Iron';
+          console.log(`  ${i+1}. ${w.worker.name} - ${badgeName} (${w.worker.completedJobs || 0} jobs, ${(w.worker.rating || 0).toFixed(1)}★) - ${w.distance === Infinity ? 'Unknown' : w.distance.toFixed(2) + ' km'}`);
         });
 
         const bookingRequest = {
@@ -240,7 +264,8 @@ router.post('/', async (req: Request, res: Response) => {
     res.status(201).json(booking);
   } catch (error) {
     console.error('Create booking error:', error);
-    res.status(500).json({ message: 'Failed to create booking', error: error.message });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    res.status(500).json({ message: 'Failed to create booking', error: errorMessage });
   }
 });
 
@@ -366,7 +391,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
             serviceName: booking.serviceName,
             workerId: booking.workerId,
             status: 'in_progress',
-            workStartTime: workStartTime || booking.workStartTime,
+            workStartTime: new Date(),
           },
         });
         console.log('✅ Work started notification created:', userNotification._id);
@@ -393,16 +418,42 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
         });
         console.log('✅ Work completed notification created:', userNotification._id);
         
-        // Set worker status back to 'available' when job is completed
+        // Set worker status back to 'available' and update completedJobs count
         if (booking.workerId) {
           try {
-            await WorkerUser.findByIdAndUpdate(booking.workerId, {
+            const workerId = typeof booking.workerId === 'object' ? (booking.workerId as any)._id : booking.workerId;
+            
+            // Count actual completed bookings for this worker
+            const completedBookingsCount = await Booking.countDocuments({
+              workerId: workerId,
+              status: 'completed',
+            });
+            
+            // Calculate real average rating from all completed bookings with ratings
+            const ratedBookings = await Booking.find({
+              workerId: workerId,
+              status: 'completed',
+              rating: { $exists: true, $gt: 0 },
+            });
+            
+            const totalRating = ratedBookings.reduce((sum, b) => sum + (b.rating || 0), 0);
+            const avgRating = ratedBookings.length > 0 ? totalRating / ratedBookings.length : 0;
+            
+            // Update worker with real data
+            await WorkerUser.findByIdAndUpdate(workerId, {
               status: 'available',
               currentBookingId: null,
+              completedJobs: completedBookingsCount,
+              rating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
             });
-            console.log('✅ Worker status set back to available:', booking.workerId);
+            
+            console.log('✅ Worker stats updated:', {
+              workerId,
+              completedJobs: completedBookingsCount,
+              rating: Math.round(avgRating * 10) / 10,
+            });
           } catch (workerStatusError) {
-            console.error('⚠️ Error resetting worker status:', workerStatusError);
+            console.error('⚠️ Error updating worker stats:', workerStatusError);
           }
         }
       }
@@ -494,14 +545,28 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
 
     console.log('✅ Booking status updated:', booking.status);
 
-    // Emit real-time event to user
+    // Emit real-time event to user and worker
     const io = req.app.get('io');
     if (io) {
       io.to(String(booking.userId)).emit('booking:status_updated', {
         bookingId: booking._id,
         status: booking.status,
-        workStartTime: booking.workStartTime,
+        workStartTime: booking.status === 'in_progress' ? new Date() : booking.updatedAt,
       });
+      
+      // Also emit to worker if booking is completed (so they can see updated stats)
+      if (status === 'completed' && booking.workerId) {
+        const workerId = typeof booking.workerId === 'object' ? (booking.workerId as any)._id : booking.workerId;
+        io.to(String(workerId)).emit('booking:status_updated', {
+          bookingId: booking._id,
+          status: booking.status,
+          workerId: workerId,
+        });
+        io.to(String(workerId)).emit('worker:stats_updated', {
+          workerId: workerId,
+          message: 'Your stats have been updated',
+        });
+      }
     }
 
     res.json(booking);
@@ -581,6 +646,33 @@ router.patch('/:id/review', async (req: Request, res: Response) => {
       }
     }
 
+    // Update service rating and review count
+    if (booking.serviceId) {
+      const serviceId = booking.serviceId;
+      
+      // Get all rated bookings for this service
+      const serviceBookings = await Booking.find({ 
+        serviceId: serviceId, 
+        rating: { $exists: true, $gt: 0 } 
+      });
+      
+      const totalServiceReviews = serviceBookings.length;
+      const avgServiceRating = totalServiceReviews > 0 
+        ? serviceBookings.reduce((sum, b) => sum + (b.rating || 0), 0) / totalServiceReviews 
+        : 0;
+      
+      await Service.findByIdAndUpdate(serviceId, { 
+        rating: Math.round(avgServiceRating * 10) / 10, // Round to 1 decimal
+        reviewCount: totalServiceReviews,
+      });
+      
+      console.log('✅ Service rating updated:', {
+        serviceId,
+        avgRating: Math.round(avgServiceRating * 10) / 10,
+        reviewCount: totalServiceReviews,
+      });
+    }
+
     res.json({ 
       success: true, 
       message: 'Review submitted successfully',
@@ -589,6 +681,107 @@ router.patch('/:id/review', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Add review error:', error);
     res.status(500).json({ message: 'Failed to add review' });
+  }
+});
+
+// Confirm payment (user or worker)
+router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { confirmedBy, userId, workerId } = req.body; // confirmedBy: 'user' | 'worker'
+
+    console.log('💳 Confirm payment request:', { bookingId: id, confirmedBy, userId, workerId });
+
+    if (!confirmedBy || (confirmedBy !== 'user' && confirmedBy !== 'worker')) {
+      return res.status(400).json({ message: 'confirmedBy must be "user" or "worker"' });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // Verify the user/worker has permission to confirm
+    if (confirmedBy === 'user' && String(booking.userId) !== String(userId)) {
+      return res.status(403).json({ message: 'Unauthorized: User does not match booking' });
+    }
+    if (confirmedBy === 'worker' && String(booking.workerId) !== String(workerId)) {
+      return res.status(403).json({ message: 'Unauthorized: Worker does not match booking' });
+    }
+
+    // Check if booking is completed
+    if (booking.status !== 'completed') {
+      return res.status(400).json({ message: 'Payment can only be confirmed for completed bookings' });
+    }
+
+    // Update confirmation status
+    const updateData: any = {};
+    if (confirmedBy === 'user') {
+      updateData.userConfirmedPayment = true;
+    } else {
+      updateData.workerConfirmedPayment = true;
+    }
+
+    // Check if both parties have confirmed
+    const willHaveUserConfirmed = confirmedBy === 'user' ? true : booking.userConfirmedPayment;
+    const willHaveWorkerConfirmed = confirmedBy === 'worker' ? true : booking.workerConfirmedPayment;
+
+    if (willHaveUserConfirmed && willHaveWorkerConfirmed) {
+      // Both confirmed - update payment status to paid
+      updateData.paymentStatus = 'paid';
+      updateData.paymentConfirmedAt = new Date();
+      console.log('✅ Both parties confirmed payment - updating to paid');
+    }
+
+    const updatedBooking = await Booking.findByIdAndUpdate(id, updateData, { new: true })
+      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('workerId', 'firstName lastName profileImage')
+      .exec();
+
+    if (!updatedBooking) {
+      return res.status(404).json({ message: 'Booking not found after update' });
+    }
+
+    // Emit real-time events
+    const io = req.app.get('io');
+    if (io) {
+      // Emit payment status update to both user and worker
+      io.to(String(booking.userId)).emit('payment:status_updated', {
+        bookingId: id,
+        paymentStatus: updatedBooking.paymentStatus,
+        userConfirmed: updatedBooking.userConfirmedPayment,
+        workerConfirmed: updatedBooking.workerConfirmedPayment,
+        booking: updatedBooking.toObject(),
+      });
+      
+      if (booking.workerId) {
+        io.to(String(booking.workerId)).emit('payment:status_updated', {
+          bookingId: id,
+          paymentStatus: updatedBooking.paymentStatus,
+          userConfirmed: updatedBooking.userConfirmedPayment,
+          workerConfirmed: updatedBooking.workerConfirmedPayment,
+          booking: updatedBooking.toObject(),
+        });
+      }
+
+      // Also emit booking:updated for general updates
+      io.to(String(booking.userId)).emit('booking:updated', updatedBooking.toObject());
+      if (booking.workerId) {
+        io.to(String(booking.workerId)).emit('booking:updated', updatedBooking.toObject());
+      }
+
+      console.log('✅ Payment confirmation events emitted');
+    }
+
+    res.json({
+      booking: updatedBooking,
+      message: willHaveUserConfirmed && willHaveWorkerConfirmed 
+        ? 'Payment confirmed by both parties. Status updated to paid.' 
+        : `Payment confirmed by ${confirmedBy}. Waiting for ${confirmedBy === 'user' ? 'worker' : 'user'} confirmation.`,
+    });
+  } catch (error) {
+    console.error('Confirm payment error:', error);
+    res.status(500).json({ message: 'Failed to confirm payment' });
   }
 });
 
@@ -1028,7 +1221,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       workerId: booking.workerId,
       workerLocation,
       worker,
-      startTime: booking.startedAt,
+      startTime: booking.status === 'in_progress' ? booking.updatedAt : booking.createdAt,
       estimatedDuration: booking.estimatedDuration,
       remainingTime: booking.estimatedDuration,
       price: booking.price,

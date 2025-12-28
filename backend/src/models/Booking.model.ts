@@ -22,8 +22,11 @@ export interface IBooking extends Document {
   status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled';
   price: number;
   paymentStatus: 'pending' | 'paid' | 'refunded';
-  paymentMethod?: 'esewa' | 'khalti' | 'phonepe';
+  paymentMethod?: 'esewa' | 'khalti' | 'phonepe' | 'cash' | 'online';
   paymentId?: string;
+  userConfirmedPayment?: boolean;
+  workerConfirmedPayment?: boolean;
+  paymentConfirmedAt?: Date;
   rating?: number;
   review?: string;
   workerNotes?: string;
@@ -66,9 +69,12 @@ const BookingSchema: Schema = new Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['esewa', 'khalti', 'phonepe']
+    enum: ['esewa', 'khalti', 'phonepe', 'cash', 'online']
   },
   paymentId: { type: String },
+  userConfirmedPayment: { type: Boolean, default: false },
+  workerConfirmedPayment: { type: Boolean, default: false },
+  paymentConfirmedAt: { type: Date },
   rating: { type: Number, min: 1, max: 5 },
   review: { type: String },
   workerNotes: { type: String },

@@ -25,11 +25,48 @@ import PasswordChangeModal from '@/components/PasswordChangeModal';
 import NotificationSettingsModal from '@/components/NotificationSettingsModal';
 import HelpSupportModal from '@/components/HelpSupportModal';
 
+// Helper function to get badge based on completed jobs
+const getWorkerBadge = (completedJobs: number = 0) => {
+  if (completedJobs >= 1200) {
+    return { name: 'Gold', color: '#FFD700', icon: 'medal' };
+  } else if (completedJobs >= 500) {
+    return { name: 'Silver', color: '#C0C0C0', icon: 'medal' };
+  } else {
+    return { name: 'Iron', color: '#8B7355', icon: 'shield' };
+  }
+};
+
+// Helper function to render rating stars
+const renderRatingStars = (rating: number = 0) => {
+  const fullStars = Math.floor(rating);
+  const hasHalfStar = rating % 1 >= 0.5;
+  const emptyStars = 5 - fullStars - (hasHalfStar ? 1 : 0);
+  
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      {[...Array(fullStars)].map((_, i) => (
+        <Ionicons key={`full-${i}`} name="star" size={18} color="#FFD700" />
+      ))}
+      {hasHalfStar && (
+        <Ionicons name="star-half" size={18} color="#FFD700" />
+      )}
+      {[...Array(emptyStars)].map((_, i) => (
+        <Ionicons key={`empty-${i}`} name="star-outline" size={18} color="#E0E0E0" />
+      ))}
+      <Text style={{ marginLeft: 6, fontSize: 14, fontWeight: '600', color: '#333' }}>
+        {rating > 0 ? rating.toFixed(1) : '0.0'}
+      </Text>
+    </View>
+  );
+};
+
 export default function ProfileScreen() {
   const { worker, updateWorker, logout } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(worker?.profileImage || null);
   const [pendingImageUpdate, setPendingImageUpdate] = useState(false);
+  const [workerRating, setWorkerRating] = useState<number>((worker as any)?.rating || 0);
+  const [completedJobs, setCompletedJobs] = useState<number>((worker as any)?.completedJobs || 0);
   const [formData, setFormData] = useState({
     name: worker?.name || '',
     email: worker?.email || '',
@@ -92,10 +129,158 @@ export default function ProfileScreen() {
   const [uploadingCategory, setUploadingCategory] = useState<string | null>(null);
   const [newServiceSectionExpanded, setNewServiceSectionExpanded] = useState(false);
 
+  // Fetch worker rating and completed jobs from backend (real-time data)
+  const fetchWorkerStats = async () => {
+    if (!worker?.id) return;
+    
+    try {
+      const apiUrl = getApiUrl();
+      
+      // Fetch worker data
+      const workerResponse = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-cache',
+      });
+      
+      if (workerResponse.ok) {
+        const workerData = await workerResponse.json();
+        
+        // Also fetch actual booking stats to verify/calculate real data
+        try {
+          const bookingsResponse = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-cache',
+          });
+          
+          if (bookingsResponse.ok) {
+            const completedBookings = await bookingsResponse.json();
+            const actualCompletedJobs = Array.isArray(completedBookings) ? completedBookings.length : 0;
+            
+            // Calculate real average rating from bookings with ratings
+            const ratedBookings = Array.isArray(completedBookings) 
+              ? completedBookings.filter((b: any) => b.rating && b.rating > 0)
+              : [];
+            
+            const totalRating = ratedBookings.reduce((sum: number, b: any) => sum + (b.rating || 0), 0);
+            const actualRating = ratedBookings.length > 0 ? totalRating / ratedBookings.length : 0;
+            
+            // Use calculated values if they differ from worker data (more accurate)
+            const realRating = actualRating > 0 ? actualRating : (workerData.rating || 0);
+            const realCompletedJobs = actualCompletedJobs > 0 ? actualCompletedJobs : (workerData.completedJobs || 0);
+            
+            console.log('📊 Worker stats fetched:', { 
+              rating: realRating.toFixed(1), 
+              completedJobs: realCompletedJobs,
+              fromBookings: actualRating > 0 || actualCompletedJobs > 0,
+            });
+            
+            setWorkerRating(realRating);
+            setCompletedJobs(realCompletedJobs);
+            
+            // Also update worker context if data changed
+            if (realRating !== (worker as any)?.rating || realCompletedJobs !== (worker as any)?.completedJobs) {
+              updateWorker({
+                ...worker,
+                rating: realRating,
+                completedJobs: realCompletedJobs,
+              } as any);
+            }
+          } else {
+            // Fallback to worker data if bookings fetch fails
+            const realRating = workerData.rating || 0;
+            const realCompletedJobs = workerData.completedJobs || 0;
+            
+            setWorkerRating(realRating);
+            setCompletedJobs(realCompletedJobs);
+          }
+        } catch (bookingsError) {
+          console.warn('Could not fetch booking stats, using worker data:', bookingsError);
+          // Fallback to worker data
+          const realRating = workerData.rating || 0;
+          const realCompletedJobs = workerData.completedJobs || 0;
+          
+          setWorkerRating(realRating);
+          setCompletedJobs(realCompletedJobs);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching worker stats:', error);
+    }
+  };
+
+  // Initial fetch and periodic refresh
+  useEffect(() => {
+    if (!worker?.id) return;
+    
+    // Fetch immediately
+    fetchWorkerStats();
+    
+    // Refresh every 10 seconds for real-time updates
+    const intervalId = setInterval(() => {
+      fetchWorkerStats();
+    }, 10000);
+    
+    return () => clearInterval(intervalId);
+  }, [worker?.id]);
+
+  // Listen to socket events for real-time updates
+  useEffect(() => {
+    if (!worker?.id) return;
+    
+    // Listen for booking completion events
+    const handleBookingCompleted = () => {
+      console.log('🔄 Booking completed, refreshing stats...');
+      // Refresh stats after a short delay to allow backend to update
+      setTimeout(() => {
+        fetchWorkerStats();
+      }, 2000);
+    };
+    
+    // Listen for work completed events
+    const handleWorkCompleted = (data: any) => {
+      if (data.workerId === worker.id || data.bookingId) {
+        handleBookingCompleted();
+      }
+    };
+    
+    // Listen for booking status updates
+    const handleBookingStatusUpdate = (data: any) => {
+      if (data.status === 'completed' && (data.workerId === worker.id || data.bookingId)) {
+        handleBookingCompleted();
+      }
+    };
+    
+    // Listen for various completion events
+    const handleStatsUpdate = () => {
+      console.log('🔄 Worker stats updated, refreshing...');
+      setTimeout(() => {
+        fetchWorkerStats();
+      }, 1500);
+    };
+    
+    socketService.on('work:completed', handleWorkCompleted);
+    socketService.on('booking:completed', handleBookingCompleted);
+    socketService.on('booking:status_updated', handleBookingStatusUpdate);
+    
+    // Listen for worker stats update event (emitted from backend)
+    socketService.on('worker:stats_updated', handleStatsUpdate);
+    
+    return () => {
+      socketService.off('work:completed', handleWorkCompleted);
+      socketService.off('booking:completed', handleBookingCompleted);
+      socketService.off('booking:status_updated', handleBookingStatusUpdate);
+      socketService.off('worker:stats_updated', handleStatsUpdate);
+    };
+  }, [worker?.id]);
+
   // Initialize data from worker on mount only
   useEffect(() => {
     if (worker) {
       setProfileImage(worker.profileImage || null);
+      setWorkerRating((worker as any)?.rating || 0);
+      setCompletedJobs((worker as any)?.completedJobs || 0);
       
       if (worker.documents) {
         setUploadedDocuments({
@@ -1007,6 +1192,27 @@ export default function ProfileScreen() {
             </View>
             <Text style={styles.imageName}>{worker?.name || 'Worker'}</Text>
             <Text style={styles.imageEmail}>{worker?.email || ''}</Text>
+            
+            {/* Rating Stars */}
+            <View style={styles.ratingContainer}>
+              {renderRatingStars(workerRating)}
+            </View>
+            
+            {/* Badge Display */}
+            {(() => {
+              const badge = getWorkerBadge(completedJobs);
+              return (
+                <View style={[styles.badgeContainer, { backgroundColor: badge.color + '20', borderColor: badge.color }]}>
+                  <Ionicons name={badge.icon as any} size={20} color={badge.color} />
+                  <Text style={[styles.badgeText, { color: badge.color }]}>
+                    {badge.name} Worker
+                  </Text>
+                  <Text style={styles.badgeSubtext}>
+                    {completedJobs} tasks completed
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
 
           {/* Profile Details */}
@@ -1895,6 +2101,32 @@ const styles = StyleSheet.create({
   imageEmail: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 12,
+  },
+  ratingContainer: {
+    marginTop: 8,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  badgeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 2,
+    marginTop: 8,
+    gap: 8,
+  },
+  badgeText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginRight: 4,
+  },
+  badgeSubtext: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 'auto',
   },
   detailsSection: {
     backgroundColor: '#fff',

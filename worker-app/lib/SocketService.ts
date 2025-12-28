@@ -40,6 +40,12 @@ export interface SocketEvents {
   'notification:new': (notification: any) => void;
   'notification:read': (notificationId: string) => void;
 
+  // Booking status events
+  'booking:status_updated': (data: any) => void;
+
+  // Worker stats events
+  'worker:stats_updated': (data: { workerId: string; message?: string }) => void;
+
   // Service events
   'service:updated': (service: any) => void;
   'service:created': (service: any) => void;

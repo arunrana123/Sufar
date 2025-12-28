@@ -36,20 +36,59 @@ export default function ReviewScreen() {
 
     try {
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/review`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          rating,
-          comment,
-        }),
-      });
+      console.log('📝 Submitting review:', { bookingId, rating, comment });
+      
+      // Use AbortController for proper timeout handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      
+      let response;
+      try {
+        response = await fetch(`${apiUrl}/api/bookings/${bookingId}/review`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            rating,
+            comment,
+          }),
+          signal: controller.signal,
+          cache: 'no-cache',
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Request timeout: The server took too long to respond. Please check your connection and try again.');
+        }
+        
+        // Check for network errors
+        if (fetchError.message?.includes('Network request failed') || fetchError.name === 'TypeError') {
+          console.error('❌ Network error details:', {
+            message: fetchError.message,
+            name: fetchError.name,
+            apiUrl: `${apiUrl}/api/bookings/${bookingId}/review`,
+          });
+          throw new Error(`Network connection failed. Please ensure:\n• Backend server is running at ${apiUrl}\n• Your device is on the same WiFi network\n• Try again in a moment`);
+        }
+        
+        throw fetchError;
+      }
+
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text);
+        throw new Error('Server returned an invalid response. Please try again.');
+      }
 
       const data = await response.json();
 
       if (response.ok) {
+        console.log('✅ Review submitted successfully:', data);
         Alert.alert(
           '🎉 Thank You!',
           `Your ${rating}-star review has been submitted successfully!\n\nThis helps ${workerName} improve their service ranking.`,
@@ -61,11 +100,38 @@ export default function ReviewScreen() {
           ]
         );
       } else {
-        Alert.alert('Error', data.message || 'Failed to submit review');
+        console.error('❌ Review submission failed:', data);
+        Alert.alert('Error', data.message || 'Failed to submit review. Please try again.');
       }
-    } catch (error) {
-      console.error('Review error:', error);
-      Alert.alert('Error', 'Network error. Please try again.');
+    } catch (error: any) {
+      console.error('❌ Review submission error:', error);
+      
+      // More specific error messages
+      let errorMessage = 'Failed to submit review. Please try again.';
+      let errorTitle = 'Submission Error';
+      
+      if (error?.message?.includes('timeout') || error?.message?.includes('Request timeout')) {
+        errorTitle = 'Request Timeout';
+        errorMessage = 'The request took too long. Please check your connection and try again.';
+      } else if (error?.message?.includes('Network connection failed') || error?.message?.includes('Network request failed')) {
+        errorTitle = 'Network Error';
+        errorMessage = error.message;
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert(
+        errorTitle,
+        errorMessage,
+        [
+          { text: 'OK', style: 'default' },
+          {
+            text: 'Retry',
+            onPress: () => handleSubmitReview(),
+            style: 'default'
+          }
+        ]
+      );
     } finally {
       setLoading(false);
     }

@@ -54,6 +54,8 @@ interface Booking {
   createdAt: string;
   completedAt?: string;
   paymentStatus: 'pending' | 'paid' | 'refunded';
+  userConfirmedPayment?: boolean;
+  workerConfirmedPayment?: boolean;
   rating?: number;
   review?: string;
 }
@@ -216,6 +218,25 @@ export default function MyBookingsScreen() {
         // Refresh bookings to remove deleted booking
         fetchBookings();
       });
+
+      // Listen for payment status updates
+      socketService.on('payment:status_updated', (data: any) => {
+        console.log('💳 Payment status updated event received:', data);
+        if (data.bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { 
+                    ...b, 
+                    paymentStatus: data.paymentStatus,
+                    userConfirmedPayment: data.userConfirmed,
+                    workerConfirmedPayment: data.workerConfirmed,
+                  }
+                : b
+            )
+          );
+        }
+      });
     }
     
     return () => {
@@ -225,6 +246,7 @@ export default function MyBookingsScreen() {
       socketService.off('booking:deleted');
       socketService.off('work:started');
       socketService.off('work:completed');
+      socketService.off('payment:status_updated');
     };
   }, [user?.id]);
 
@@ -412,6 +434,48 @@ export default function MyBookingsScreen() {
     }
   };
 
+  const handleConfirmPayment = async (booking: Booking) => {
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/bookings/${booking._id}/confirm-payment`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmedBy: 'user',
+          userId: user?.id,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        Alert.alert('Success', data.message || 'Payment confirmed!');
+        // Update local state
+        setBookings(prev => 
+          prev.map(b => 
+            b._id === booking._id 
+              ? { 
+                  ...b, 
+                  userConfirmedPayment: true,
+                  paymentStatus: data.booking.paymentStatus,
+                  workerConfirmedPayment: data.booking.workerConfirmedPayment,
+                }
+              : b
+          )
+        );
+        // Refresh to get latest data
+        setTimeout(() => {
+          fetchBookings();
+        }, 500);
+      } else {
+        const errorData = await response.json();
+        Alert.alert('Error', errorData.message || 'Failed to confirm payment');
+      }
+    } catch (error) {
+      console.error('Error confirming payment:', error);
+      Alert.alert('Error', 'Failed to confirm payment. Please try again.');
+    }
+  };
+
   const handlePayment = (booking: Booking) => {
     // Navigate to payment screen or show payment modal
     Alert.alert(
@@ -593,14 +657,20 @@ export default function MyBookingsScreen() {
                             <View style={styles.actionButtons}>
                               {booking.status === 'completed' ? (
                                 <>
-                                  {booking.paymentStatus !== 'paid' && (
+                                  {booking.paymentStatus !== 'paid' && !booking.userConfirmedPayment && (
                                     <TouchableOpacity
-                                      style={styles.payButton}
-                                      onPress={() => handlePayment(booking)}
+                                      style={[styles.payButton, { backgroundColor: theme.success }]}
+                                      onPress={() => handleConfirmPayment(booking)}
                                     >
-                                      <Ionicons name="card" size={16} color="#fff" />
-                                      <Text style={styles.payButtonText}>Make Payment</Text>
+                                      <Ionicons name="checkmark-circle" size={16} color="#fff" />
+                                      <Text style={styles.payButtonText}>Confirm Payment</Text>
                                     </TouchableOpacity>
+                                  )}
+                                  {booking.paymentStatus !== 'paid' && booking.userConfirmedPayment && !booking.workerConfirmedPayment && (
+                                    <View style={styles.waitingBadge}>
+                                      <Ionicons name="hourglass" size={14} color={theme.warning} />
+                                      <Text style={styles.waitingText}>Waiting for worker confirmation</Text>
+                                    </View>
                                   )}
                                   {booking.paymentStatus === 'paid' && !booking.review && (
                                     <TouchableOpacity
@@ -1023,6 +1093,22 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  waitingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FFF3CD',
+    borderWidth: 1,
+    borderColor: '#FFC107',
+    gap: 6,
+  },
+  waitingText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#856404',
   },
   reviewedBadge: {
     flexDirection: 'row',

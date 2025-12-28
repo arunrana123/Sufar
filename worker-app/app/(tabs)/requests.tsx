@@ -30,6 +30,7 @@ import { getApiUrl } from '@/lib/config';
 import { socketService } from '@/lib/SocketService';
 import { router } from 'expo-router';
 import ToastNotification from '@/components/ToastNotification';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Booking {
   _id: string;
@@ -62,6 +63,10 @@ export default function RequestsScreen() {
   const [incomingBooking, setIncomingBooking] = useState<any | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
+  
+  // Track accepted and rejected requests
+  const [acceptedCount, setAcceptedCount] = useState(0);
+  const [rejectedCount, setRejectedCount] = useState(0);
   
   // Toast notification state
   const [toast, setToast] = useState<{
@@ -231,6 +236,70 @@ export default function RequestsScreen() {
     }
   };
 
+  // Load and update request statistics
+  const loadRequestStats = async () => {
+    if (!worker?.id) return;
+    
+    try {
+      const storageKey = `worker_request_stats_${worker.id}`;
+      const stored = await AsyncStorage.getItem(storageKey);
+      let stats = { accepted: 0, rejected: 0 };
+      
+      if (stored) {
+        stats = JSON.parse(stored);
+      }
+      
+      // Count accepted bookings from backend
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=accepted`);
+      if (response.ok) {
+        const acceptedBookings = await response.json();
+        const actualAccepted = Array.isArray(acceptedBookings) ? acceptedBookings.length : 0;
+        
+        // Use the higher value (backend count or stored count)
+        stats.accepted = Math.max(stats.accepted, actualAccepted);
+      }
+      
+      setAcceptedCount(stats.accepted);
+      setRejectedCount(stats.rejected);
+      
+      console.log('📊 Request stats loaded:', { accepted: stats.accepted, rejected: stats.rejected });
+      
+      // Save updated stats
+      await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+    } catch (error) {
+      console.error('Error loading request stats:', error);
+    }
+  };
+
+  // Save request statistics
+  const saveRequestStats = async (incrementAccepted = false, incrementRejected = false) => {
+    if (!worker?.id) return;
+    
+    try {
+      const storageKey = `worker_request_stats_${worker.id}`;
+      const stored = await AsyncStorage.getItem(storageKey);
+      let stats = { accepted: 0, rejected: 0 };
+      
+      if (stored) {
+        stats = JSON.parse(stored);
+      }
+      
+      if (incrementAccepted) {
+        stats.accepted += 1;
+        setAcceptedCount(prev => prev + 1);
+      }
+      if (incrementRejected) {
+        stats.rejected += 1;
+        setRejectedCount(prev => prev + 1);
+      }
+      
+      await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+    } catch (error) {
+      console.error('Error saving request stats:', error);
+    }
+  };
+
   const fetchBookings = async (isRefresh = false) => {
     try {
       if (!worker?.id) {
@@ -250,6 +319,9 @@ export default function RequestsScreen() {
         console.log('📋 Booking IDs:', data.map((b: any) => b._id));
         // Store all bookings (pending and accepted) in state
         setBookings(data);
+        
+        // Update stats after fetching bookings
+        await loadRequestStats();
       } else {
         const errorText = await response.text();
         console.error('❌ Failed to fetch bookings:', response.status, errorText);
@@ -264,6 +336,9 @@ export default function RequestsScreen() {
   useEffect(() => {
     if (worker?.id) {
       console.log('🚀 Setting up requests page for worker:', worker.id);
+      
+      // Load request stats
+      loadRequestStats();
       
       // Initial fetch
       fetchBookings();
@@ -440,6 +515,34 @@ export default function RequestsScreen() {
   const pendingBookings = bookings.filter(b => b.status === 'pending');
   const acceptedBookings = bookings.filter(b => b.status === 'accepted');
 
+  // Update accepted count when bookings change
+  useEffect(() => {
+    if (worker?.id && bookings.length > 0) {
+      const actualAccepted = bookings.filter(b => 
+        b.status === 'accepted' && b.workerId === worker.id
+      ).length;
+      
+      if (actualAccepted !== acceptedCount) {
+        // Update if backend has more accepted than stored
+        if (actualAccepted > acceptedCount) {
+          setAcceptedCount(actualAccepted);
+          // Save to storage
+          const updateStats = async () => {
+            const storageKey = `worker_request_stats_${worker.id}`;
+            const stored = await AsyncStorage.getItem(storageKey);
+            let stats = { accepted: 0, rejected: 0 };
+            if (stored) {
+              stats = JSON.parse(stored);
+            }
+            stats.accepted = Math.max(stats.accepted, actualAccepted);
+            await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+          };
+          updateStats();
+        }
+      }
+    }
+  }, [bookings, worker?.id]);
+
   const handleAccept = async (bookingId: string) => {
     try {
       const apiUrl = getApiUrl();
@@ -456,6 +559,9 @@ export default function RequestsScreen() {
       if (response.ok) {
         const booking = await response.json();
         console.log('✅ Booking accepted successfully:', booking._id);
+        
+        // Increment accepted count
+        await saveRequestStats(true, false);
         
         // Show toast notification
         showToast(
@@ -527,6 +633,9 @@ export default function RequestsScreen() {
               });
 
               if (response.ok) {
+                // Increment rejected count
+                await saveRequestStats(false, true);
+                
                 showToast(
                   'Request rejected. It will be sent to another worker.',
                   'Request Rejected',
@@ -584,6 +693,58 @@ export default function RequestsScreen() {
               <Text style={styles.badgeText}>{pendingBookings.length}</Text>
             </View>
           )}
+        </View>
+
+        {/* Status Bar - Accepted vs Rejected - Always Visible */}
+        <View style={styles.statusBarContainer}>
+          <View style={styles.statusBar}>
+            {/* Accepted Section (Green) */}
+            {acceptedCount > 0 ? (
+              <View 
+                style={[
+                  styles.statusBarSection,
+                  styles.acceptedSection,
+                  { 
+                    flex: acceptedCount || 1,
+                  }
+                ]}
+              >
+                <Text style={styles.statusBarText} numberOfLines={1}>Accepted</Text>
+                <Text style={styles.statusBarCount}>{acceptedCount}</Text>
+              </View>
+            ) : (
+              <View style={[styles.statusBarSection, styles.emptySection, { flex: 1 }]}>
+                <Text style={styles.statusBarTextEmpty}>Accepted</Text>
+                <Text style={styles.statusBarCountEmpty}>0</Text>
+              </View>
+            )}
+            
+            {/* Rejected Section (Red) */}
+            {rejectedCount > 0 ? (
+              <View 
+                style={[
+                  styles.statusBarSection,
+                  styles.rejectedSection,
+                  { 
+                    flex: rejectedCount || 1,
+                  }
+                ]}
+              >
+                <Text style={styles.statusBarText} numberOfLines={1}>Rejected</Text>
+                <Text style={styles.statusBarCount}>{rejectedCount}</Text>
+              </View>
+            ) : (
+              <View style={[styles.statusBarSection, styles.emptySection, { flex: 1 }]}>
+                <Text style={styles.statusBarTextEmpty}>Rejected</Text>
+                <Text style={styles.statusBarCountEmpty}>0</Text>
+              </View>
+            )}
+          </View>
+          
+          {/* Total Count */}
+          <Text style={styles.statusBarTotal}>
+            Total: {acceptedCount + rejectedCount} requests
+          </Text>
         </View>
 
         <ScrollView 
@@ -800,6 +961,10 @@ export default function RequestsScreen() {
                         if (res.ok) {
                           const booking = await res.json();
                           console.log('✅ Booking accepted:', booking._id);
+                          
+                          // Increment accepted count
+                          await saveRequestStats(true, false);
+                          
                           showToast('Booking accepted! You can now start navigation.', 'Success', 'success');
                           closeDetails();
                           fetchBookings();
@@ -1102,6 +1267,80 @@ const styles = StyleSheet.create({
     color: '#374151',
     fontSize: 16,
     fontWeight: '600',
+  },
+  statusBarContainer: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  statusBar: {
+    height: 56,
+    borderRadius: 28,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    marginBottom: 10,
+    width: '100%',
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+  },
+  statusBarSection: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    position: 'relative',
+    height: '100%',
+    minWidth: 80,
+  },
+  acceptedSection: {
+    backgroundColor: '#10B981',
+  },
+  rejectedSection: {
+    backgroundColor: '#EF4444',
+  },
+  emptySection: {
+    backgroundColor: '#E5E7EB',
+    flex: 1,
+  },
+  statusBarText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  statusBarTextEmpty: {
+    color: '#6B7280',
+    fontSize: 13,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  statusBarCount: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  statusBarCountEmpty: {
+    color: '#9CA3AF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  statusBarTotal: {
+    fontSize: 13,
+    color: '#374151',
+    textAlign: 'center',
+    fontWeight: '600',
+    marginTop: 4,
   },
 });
 
