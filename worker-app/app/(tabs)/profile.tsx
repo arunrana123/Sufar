@@ -313,13 +313,18 @@ export default function ProfileScreen() {
 
       // Test API connectivity first
       try {
+        const testController = new AbortController();
+        const testTimeout = setTimeout(() => testController.abort(), 5000);
         const testResponse = await fetch(`${apiUrl}/health`, {
           method: 'GET',
-          timeout: 5000,
-        } as any);
+          signal: testController.signal,
+          cache: 'no-cache',
+        });
+        clearTimeout(testTimeout);
         console.log('✅ Backend health check:', testResponse.status);
-      } catch (testError) {
-        console.warn('⚠️ Backend health check failed, but continuing...', testError);
+      } catch (testError: any) {
+        console.warn('⚠️ Backend health check failed:', testError.message);
+        // Don't block upload, but log the warning
       }
 
       const formData = new FormData();
@@ -387,24 +392,43 @@ export default function ProfileScreen() {
       // Add timeout and better error handling
       let response;
       try {
-        // Use Promise.race for timeout (works in all platforms)
-        const fetchPromise = fetch(`${apiUrl}/api/workers/upload-category-documents`, {
-          method: 'POST',
-          // Don't set Content-Type header - let React Native set it automatically with boundary
-          body: formData,
-        });
-
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => {
-            reject(new Error('Request timeout: The server took too long to respond. Please check your connection.'));
-          }, 30000); // 30 second timeout
-        });
-
-        response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
-      } catch (fetchError: any) {
-        if (fetchError.message?.includes('timeout')) {
+        // Use AbortController for proper timeout handling
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout for file upload
+        
+        try {
+          response = await fetch(`${apiUrl}/api/workers/upload-category-documents`, {
+            method: 'POST',
+            // Don't set Content-Type header - let React Native set it automatically with boundary
+            body: formData,
+            signal: controller.signal,
+            cache: 'no-cache',
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId);
+          
+          if (fetchError.name === 'AbortError') {
+            throw new Error('Request timeout: The server took too long to respond. Please check your connection and try again.');
+          }
+          
+          // Check for network errors
+          if (fetchError.message?.includes('Network request failed') || fetchError.name === 'TypeError') {
+            console.error('❌ Network error details:', {
+              message: fetchError.message,
+              name: fetchError.name,
+              apiUrl: `${apiUrl}/api/workers/upload-category-documents`,
+            });
+            const networkError: any = new Error('Network connection failed');
+            networkError.isNetworkError = true;
+            networkError.apiUrl = apiUrl;
+            throw networkError;
+          }
+          
           throw fetchError;
         }
+      } catch (fetchError: any) {
+        console.error('❌ Error submitting category verification:', fetchError);
         throw fetchError;
       }
 
@@ -483,10 +507,11 @@ export default function ProfileScreen() {
       let errorMessage = 'Failed to submit documents.';
       let errorTitle = 'Submission Failed';
       
-      if (error?.message?.includes('Network request failed')) {
+      if (error?.isNetworkError || error?.message?.includes('Network request failed') || error?.message?.includes('Network connection failed')) {
         errorTitle = 'Network Error';
-        errorMessage = `Cannot connect to server at ${getApiUrl()}. Please check:\n\n1. Backend server is running\n2. Your device and server are on the same network\n3. Firewall is not blocking the connection`;
-      } else if (error?.message?.includes('timeout')) {
+        const serverUrl = error?.apiUrl || getApiUrl();
+        errorMessage = `Cannot connect to server at ${serverUrl}\n\nPlease check:\n• Backend server is running\n• Your device and server are on the same WiFi network\n• Firewall is not blocking the connection\n• Try accessing ${serverUrl} in your phone browser`;
+      } else if (error?.message?.includes('timeout') || error?.message?.includes('Request timeout')) {
         errorTitle = 'Request Timeout';
         errorMessage = 'The request took too long. Please check your connection and try again.';
       } else if (error?.message) {

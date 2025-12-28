@@ -80,10 +80,10 @@ export class SocketService {
     if (this.initialized) return;
     
     try {
-      // Use getApiUrl() from config to ensure correct IP (192.168.1.96)
+      // Use getApiUrl() from config to ensure correct IP (192.168.1.112)
       const apiUrl = getApiUrl();
       console.log('✅ Initializing socket connection to:', apiUrl);
-      console.log('   Using correct IP (192.168.1.96):', apiUrl.includes('192.168.1.96'));
+      console.log('   Using correct IP (192.168.1.112):', apiUrl.includes('192.168.1.112'));
       
       this.socket = io(apiUrl, {
         transports: ['websocket', 'polling'], // Fallback to polling if websocket fails

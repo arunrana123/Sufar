@@ -155,11 +155,11 @@ export default function LoginScreen() {
       }
       
       // Verify IP address is correct
-      if (!apiUrl.includes('192.168.1.96') && !apiUrl.includes('localhost') && !apiUrl.includes('10.0.2.2')) {
-        console.error('❌ ERROR: API URL does not contain expected IP (192.168.1.96):', apiUrl);
+      if (!apiUrl.includes('192.168.1.112') && !apiUrl.includes('localhost') && !apiUrl.includes('10.0.2.2')) {
+        console.error('❌ ERROR: API URL does not contain expected IP (192.168.1.112):', apiUrl);
         Alert.alert(
           'Configuration Error',
-          `Wrong server IP detected: ${apiUrl}\n\nExpected: http://192.168.1.96:5001\n\nPlease check your configuration.`,
+          `Wrong server IP detected: ${apiUrl}\n\nExpected: http://192.168.1.112:5001\n\nPlease check your configuration.`,
           [{ text: 'OK' }]
         );
         setLoading(false);
