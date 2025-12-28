@@ -10,6 +10,7 @@ import {
   SafeAreaView,
   RefreshControl,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import BottomNav from '@/components/BottomNav';
 import { router } from 'expo-router';
@@ -44,6 +45,7 @@ export default function TrackingScreen() {
   const [completedJobs, setCompletedJobs] = useState<Job[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [completedJobsCount, setCompletedJobsCount] = useState<number>(0);
 
   const fetchJobs = async () => {
     try {
@@ -114,6 +116,11 @@ export default function TrackingScreen() {
         setActiveJobs(active);
         setCompletedJobs(completed);
         console.log('✅ Active jobs:', active.length, 'Completed jobs:', completed.length);
+        
+        // Update completed jobs count
+        if (completed.length > 0) {
+          updateCompletedJobsCount(completed.length);
+        }
       } else {
         const errorText = await response.text();
         console.error('❌ Failed to fetch jobs:', response.status, errorText);
@@ -126,8 +133,57 @@ export default function TrackingScreen() {
     }
   };
 
+  // Load completed jobs count from storage
+  const loadCompletedJobsCount = async () => {
+    if (!worker?.id) return;
+    
+    try {
+      const storageKey = `worker_completed_tracking_jobs_${worker.id}`;
+      const stored = await AsyncStorage.getItem(storageKey);
+      
+      if (stored) {
+        const count = parseInt(stored, 10);
+        setCompletedJobsCount(isNaN(count) ? 0 : count);
+        console.log('📊 Completed tracking jobs count loaded:', count);
+      } else {
+        // If no stored count, fetch from backend
+        const apiUrl = getApiUrl();
+        const response = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`);
+        if (response.ok) {
+          const completedBookings = await response.json();
+          const count = Array.isArray(completedBookings) ? completedBookings.length : 0;
+          setCompletedJobsCount(count);
+          await AsyncStorage.setItem(storageKey, String(count));
+          console.log('📊 Completed tracking jobs count initialized from backend:', count);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading completed jobs count:', error);
+    }
+  };
+
+  // Update completed jobs count
+  const updateCompletedJobsCount = async (newCount: number) => {
+    if (!worker?.id) return;
+    
+    try {
+      const storageKey = `worker_completed_tracking_jobs_${worker.id}`;
+      // Use the higher count (either stored or new)
+      const stored = await AsyncStorage.getItem(storageKey);
+      const storedCount = stored ? parseInt(stored, 10) : 0;
+      const finalCount = Math.max(storedCount, newCount);
+      
+      setCompletedJobsCount(finalCount);
+      await AsyncStorage.setItem(storageKey, String(finalCount));
+      console.log('📊 Completed tracking jobs count updated:', finalCount);
+    } catch (error) {
+      console.error('Error updating completed jobs count:', error);
+    }
+  };
+
   useEffect(() => {
     if (worker?.id) {
+      loadCompletedJobsCount();
       fetchJobs();
 
       // Connect to socket for real-time updates
@@ -240,6 +296,10 @@ export default function TrackingScreen() {
             setActiveJobs(prev => prev.filter(job => job._id !== updatedJob._id));
             setCompletedJobs(prev => {
               const exists = prev.some(job => job._id === updatedJob._id);
+              if (!exists) {
+                // New completed job - increment count
+                updateCompletedJobsCount(prev.length + 1);
+              }
               if (exists) {
                 return prev.map(job => 
                   job._id === updatedJob._id ? updatedJob : job
@@ -284,6 +344,13 @@ export default function TrackingScreen() {
       };
     }
   }, [worker?.id]);
+
+  // Sync completed jobs count when completedJobs state changes
+  useEffect(() => {
+    if (completedJobs.length > 0 && completedJobs.length > completedJobsCount) {
+      updateCompletedJobsCount(completedJobs.length);
+    }
+  }, [completedJobs.length]);
 
   const formatTimeAgo = (dateString: string): string => {
     const date = new Date(dateString);
@@ -341,6 +408,16 @@ export default function TrackingScreen() {
               <Text style={styles.badgeText}>{activeJobs.length}</Text>
             </View>
           )}
+        </View>
+
+        {/* Completed Jobs Count Bar */}
+        <View style={styles.completedJobsBar}>
+          <View style={styles.completedJobsBarContent}>
+            <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+            <Text style={styles.completedJobsBarText}>
+              Completed Jobs: {completedJobsCount}
+            </Text>
+          </View>
         </View>
 
         <ScrollView 
@@ -731,5 +808,27 @@ const styles = StyleSheet.create({
   },
   inProgressText: {
     color: '#FF7A2C',
+  },
+  completedJobsBar: {
+    backgroundColor: '#E8F5E9',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#C8E6C9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  completedJobsBarContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  completedJobsBarText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#2E7D32',
   },
 });
