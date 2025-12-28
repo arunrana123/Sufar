@@ -5,14 +5,18 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
+  Pressable,
   ScrollView,
   SafeAreaView,
 } from 'react-native';
+import { ThemedText } from '@/components/ThemedText';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Linking } from 'react-native';
 import * as Location from 'expo-location';
 import { socketService } from '@/lib/SocketService';
+import { useTheme } from '@/contexts/ThemeContext';
+import { getApiUrl } from '@/lib/config';
 
 interface Service {
   _id: string;
@@ -29,6 +33,7 @@ interface SearchResult extends Service {
 }
 
 export default function SearchServicesScreen() {
+  const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [allServices, setAllServices] = useState<Service[]>([]);
@@ -93,7 +98,7 @@ export default function SearchServicesScreen() {
 
   const fetchAllServices = async () => {
     try {
-      const apiUrl = 'http://192.168.1.92:5001';
+      const apiUrl = getApiUrl();
       const response = await fetch(`${apiUrl}/api/services/all`);
       
       if (response.ok) {
@@ -143,7 +148,7 @@ export default function SearchServicesScreen() {
   const fetchAvailableWorkers = async (category: string) => {
     setIsFetchingWorkers(true);
     try {
-      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.92:5001';
+      const apiUrl = getApiUrl();
       const params = new URLSearchParams();
       params.append('serviceCategory', category);
       if (userLocation) {
@@ -240,23 +245,29 @@ export default function SearchServicesScreen() {
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.push('/home')} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color="#999" style={styles.searchIcon} />
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.push('/home')} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Search Services</ThemedText>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* Search Section */}
+        <View style={[styles.searchSection, { backgroundColor: theme.background }]}>
+          <View style={[styles.searchContainer, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder }]}>
+            <Ionicons name="search" size={20} color={theme.icon} style={styles.searchIcon} />
             <TextInput
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: theme.text }]}
               placeholder="Search services..."
-              placeholderTextColor="#999"
+              placeholderTextColor={theme.icon}
               value={searchQuery}
               onChangeText={handleSearch}
               autoFocus
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity onPress={clearSearch} style={styles.clearButton}>
-                <Ionicons name="close-circle" size={20} color="#999" />
+                <Ionicons name="close-circle" size={20} color={theme.icon} />
               </TouchableOpacity>
             )}
           </View>
@@ -266,28 +277,28 @@ export default function SearchServicesScreen() {
           {/* Search Results */}
           {searchQuery.trim() !== '' && searchResults.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Search Results ({searchResults.length})</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Search Results ({searchResults.length})</Text>
               {searchResults.map((result) => (
                 <TouchableOpacity
                   key={result._id}
-                  style={styles.resultItem}
+                  style={[styles.resultItem, { backgroundColor: theme.card, borderColor: theme.border }]}
                   onPress={() => handleSelectService(result)}
                 >
-                  <View style={styles.resultIcon}>
-                    <Ionicons name="construct-outline" size={24} color="#4A90E2" />
+                  <View style={[styles.resultIcon, { backgroundColor: theme.tint + '15' }]}>
+                    <Ionicons name="construct-outline" size={24} color={theme.tint} />
                   </View>
                   <View style={styles.resultContent}>
-                    <Text style={styles.resultTitle}>{result.title}</Text>
-                    <Text style={styles.resultCategory}>{result.category}</Text>
+                    <Text style={[styles.resultTitle, { color: theme.text }]}>{result.title}</Text>
+                    <Text style={[styles.resultCategory, { color: theme.secondary }]}>{result.category}</Text>
                     <View style={styles.resultFooter}>
-                      <Text style={styles.resultPrice}>{formatPrice(result)}</Text>
+                      <Text style={[styles.resultPrice, { color: theme.tint }]}>{formatPrice(result)}</Text>
                       <View style={styles.ratingContainer}>
                         <Ionicons name="star" size={12} color="#FFD700" />
                         <Text style={styles.ratingText}>{result.rating}</Text>
                       </View>
                     </View>
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color="#999" />
+                  <Ionicons name="chevron-forward" size={20} color={theme.icon} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -296,16 +307,16 @@ export default function SearchServicesScreen() {
           {/* Available Workers in Selected Category */}
           {searchQuery.trim() !== '' && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>
                 {isFetchingWorkers ? 'Finding nearby workers…' : `Available Workers (${workers.length})`}
               </Text>
               {locationPermissionDenied && (
-                <View style={{ backgroundColor: '#FFF7ED', borderColor: '#FED7AA', borderWidth: 1, padding: 12, borderRadius: 10, marginBottom: 10 }}>
-                  <Text style={{ color: '#9A3412', marginBottom: 8 }}>
+                <View style={[styles.locationWarning, { backgroundColor: theme.warning + '20', borderColor: theme.warning }]}>
+                  <Text style={[styles.locationWarningText, { color: theme.warning }]}>
                     Location permission is disabled. Enable it for better nearby results.
                   </Text>
-                  <TouchableOpacity onPress={handleEnableLocation} style={{ alignSelf: 'flex-start', backgroundColor: '#FF7A2C', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 }}>
-                    <Text style={{ color: '#fff', fontWeight: '700' }}>Enable Location</Text>
+                  <TouchableOpacity onPress={handleEnableLocation} style={[styles.enableLocationButton, { backgroundColor: theme.tint }]}>
+                    <Text style={styles.enableLocationButtonText}>Enable Location</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -344,19 +355,19 @@ export default function SearchServicesScreen() {
           {searchQuery.trim() === '' && recentSearches.length > 0 && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Recent Searches</Text>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Recent Searches</Text>
                 <TouchableOpacity onPress={() => setRecentSearches([])}>
-                  <Text style={styles.clearAllText}>Clear All</Text>
+                  <Text style={[styles.clearAllText, { color: theme.tint }]}>Clear All</Text>
                 </TouchableOpacity>
               </View>
               {recentSearches.map((search, index) => (
                 <TouchableOpacity
                   key={index}
-                  style={styles.recentItem}
+                  style={[styles.recentItem, { backgroundColor: theme.card, borderColor: theme.border }]}
                   onPress={() => handleSelectSearch(search)}
                 >
-                  <Ionicons name="time-outline" size={20} color="#666" />
-                  <Text style={styles.recentText}>{search}</Text>
+                  <Ionicons name="time-outline" size={20} color={theme.icon} />
+                  <Text style={[styles.recentText, { color: theme.text }]}>{search}</Text>
                   <TouchableOpacity
                     onPress={() =>
                       setRecentSearches(recentSearches.filter((_, i) => i !== index))
@@ -403,19 +414,32 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    backgroundColor: '#4A90E2',
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
   },
   backButton: {
-    padding: 4,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  searchSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   searchContainer: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
@@ -449,11 +473,9 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
     marginBottom: 16,
   },
   clearAllText: {
-    color: '#4A90E2',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -501,7 +523,6 @@ const styles = StyleSheet.create({
   resultPrice: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#4A90E2',
   },
   ratingContainer: {
     flexDirection: 'row',
@@ -562,10 +583,29 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
   },
+  locationWarning: {
+    borderWidth: 1,
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  locationWarningText: {
+    marginBottom: 8,
+  },
+  enableLocationButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  enableLocationButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
   workerMeta: {
     fontSize: 12,
-    color: '#666',
     marginTop: 4,
+    opacity: 0.7,
   },
 });
 

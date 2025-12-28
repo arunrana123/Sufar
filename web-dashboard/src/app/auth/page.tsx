@@ -85,6 +85,17 @@ export default function AuthPage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [currentWallpaper, setCurrentWallpaper] = useState('');
   const [imageLoaded, setImageLoaded] = useState(false);
+  
+  // Forgot password states
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
+  const [forgotPasswordStep, setForgotPasswordStep] = useState<'email' | 'otp' | 'password'>('email');
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [resetToken, setResetToken] = useState('');
+  const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
+  const [forgotPasswordMessage, setForgotPasswordMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Randomly select wallpaper on mount
   useEffect(() => {
@@ -135,8 +146,18 @@ export default function AuthPage() {
       }
       
       if (isLogin) {
-        // Store admin session and redirect to dashboard
-        localStorage.setItem('adminUser', JSON.stringify(data));
+        // Store admin session with all data from backend
+        const adminData = {
+          id: data.id,
+          name: data.name,
+          email: data.email,
+          phone: data.phone || '',
+          address: data.address || '',
+          role: data.role,
+          profileImage: data.profileImage || null,
+          createdAt: data.createdAt,
+        };
+        localStorage.setItem('adminUser', JSON.stringify(adminData));
         window.location.href = '/dashboard';
       } else {
         // Show success message and switch to login
@@ -161,9 +182,134 @@ export default function AuthPage() {
     }
   };
 
-  const handleGoogleLogin = async () => {
-    // Placeholder: UI button is visible now. To fully enable, wire up Google OAuth per GOOGLE_AUTH_IMPLEMENTATION.md
-    alert('Google Sign-In: Please complete Google OAuth setup (client ID) to enable sign-in.');
+
+  const handleForgotPassword = async () => {
+    if (!forgotPasswordEmail) {
+      setForgotPasswordMessage({ type: 'error', text: 'Please enter your email address' });
+      return;
+    }
+
+    setForgotPasswordLoading(true);
+    setForgotPasswordMessage(null);
+
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotPasswordEmail }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setForgotPasswordMessage({ type: 'success', text: data.message || 'OTP sent to your email address' });
+        setForgotPasswordStep('otp');
+        setTimeout(() => setForgotPasswordMessage(null), 5000);
+      } else {
+        setForgotPasswordMessage({ type: 'error', text: data.message || 'Failed to send OTP. Please try again.' });
+      }
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      setForgotPasswordMessage({ type: 'error', text: 'Network error. Please check your connection and try again.' });
+    } finally {
+      setForgotPasswordLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    if (!otp || otp.length !== 4) {
+      setForgotPasswordMessage({ type: 'error', text: 'Please enter a valid 4-digit OTP' });
+      return;
+    }
+
+    setForgotPasswordLoading(true);
+    setForgotPasswordMessage(null);
+
+    try {
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotPasswordEmail, otp }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setResetToken(data.resetToken);
+        setForgotPasswordMessage({ type: 'success', text: 'OTP verified successfully!' });
+        setForgotPasswordStep('password');
+        setTimeout(() => setForgotPasswordMessage(null), 3000);
+      } else {
+        setForgotPasswordMessage({ type: 'error', text: data.message || 'Invalid or expired OTP. Please try again.' });
+      }
+    } catch (error) {
+      console.error('Verify OTP error:', error);
+      setForgotPasswordMessage({ type: 'error', text: 'Network error. Please check your connection and try again.' });
+    } finally {
+      setForgotPasswordLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!newPassword || newPassword.length < 6) {
+      setForgotPasswordMessage({ type: 'error', text: 'Password must be at least 6 characters long' });
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setForgotPasswordMessage({ type: 'error', text: 'Passwords do not match' });
+      return;
+    }
+
+    if (!resetToken) {
+      setForgotPasswordMessage({ type: 'error', text: 'Reset token is missing. Please start over.' });
+      return;
+    }
+
+    setForgotPasswordLoading(true);
+    setForgotPasswordMessage(null);
+
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, password: newPassword }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok) {
+        setForgotPasswordMessage({ type: 'success', text: 'Password reset successfully! You can now login with your new password.' });
+        setTimeout(() => {
+          setShowForgotPassword(false);
+          setForgotPasswordStep('email');
+          setForgotPasswordEmail('');
+          setOtp('');
+          setNewPassword('');
+          setConfirmNewPassword('');
+          setResetToken('');
+          setForgotPasswordMessage(null);
+        }, 2000);
+      } else {
+        setForgotPasswordMessage({ type: 'error', text: data.message || 'Failed to reset password. Please try again.' });
+      }
+    } catch (error) {
+      console.error('Reset password error:', error);
+      setForgotPasswordMessage({ type: 'error', text: 'Network error. Please check your connection and try again.' });
+    } finally {
+      setForgotPasswordLoading(false);
+    }
+  };
+
+  const closeForgotPasswordModal = () => {
+    setShowForgotPassword(false);
+    setForgotPasswordStep('email');
+    setForgotPasswordEmail('');
+    setOtp('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setResetToken('');
+    setForgotPasswordMessage(null);
   };
 
   return (
@@ -194,19 +340,19 @@ export default function AuthPage() {
       )}
       
       {/* Login Container */}
-      <div className="bg-gradient-to-br from-blue-100 via-orange-50 to-blue-100 backdrop-blur-md rounded-2xl shadow-2xl p-8 w-full max-w-md relative z-10 border-2 border-orange-200/50">
+      <div className="bg-white backdrop-blur-md rounded-2xl shadow-2xl p-8 w-full max-w-md relative z-10 border-2 border-gray-200/50">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-orange-400 to-orange-600 bg-clip-text text-transparent mb-2">Sufar</h1>
-          <p className="text-blue-700 font-medium">Admin Dashboard</p>
+          <h1 className="text-3xl font-bold text-purple-600 mb-2">Sufar</h1>
+          <p className="text-gray-700 font-medium">Admin Dashboard</p>
         </div>
 
-        <div className="flex bg-gradient-to-r from-blue-50 to-orange-50 rounded-lg p-1 mb-6 border border-orange-200/30">
+        <div className="flex bg-gray-100 rounded-lg p-1 mb-6 border border-gray-200/30">
           <button
             onClick={() => setIsLogin(true)}
             className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all duration-200 ${
               isLogin
-                ? 'bg-gradient-to-r from-blue-500 to-orange-400 text-white shadow-md transform scale-105'
-                : 'text-gray-600 hover:text-blue-600'
+                ? 'bg-purple-600 text-white shadow-md transform scale-105'
+                : 'text-gray-600 hover:text-purple-600'
             }`}
           >
             Login
@@ -215,8 +361,8 @@ export default function AuthPage() {
             onClick={() => setIsLogin(false)}
             className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-all duration-200 ${
               !isLogin
-                ? 'bg-gradient-to-r from-blue-500 to-orange-400 text-white shadow-md transform scale-105'
-                : 'text-gray-600 hover:text-orange-600'
+                ? 'bg-purple-600 text-white shadow-md transform scale-105'
+                : 'text-gray-600 hover:text-purple-600'
             }`}
           >
             Sign Up
@@ -233,7 +379,7 @@ export default function AuthPage() {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 border-2 border-orange-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 bg-white/90 transition-all"
+                className="w-full px-3 py-2 border-2 border-gray-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
                 placeholder="Enter your full name"
                 required={!isLogin}
               />
@@ -248,7 +394,7 @@ export default function AuthPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 border-2 border-orange-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 bg-white/90 transition-all"
+              className="w-full px-3 py-2 border-2 border-gray-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
               placeholder="Enter your email"
               required
             />
@@ -263,7 +409,7 @@ export default function AuthPage() {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-2 pr-10 border-2 border-orange-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 bg-white/90 transition-all"
+                className="w-full px-3 py-2 pr-10 border-2 border-gray-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
                 placeholder="Enter your password"
                 required
               />
@@ -296,7 +442,7 @@ export default function AuthPage() {
                   type={showConfirmPassword ? "text" : "password"}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full px-3 py-2 pr-10 border-2 border-orange-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-orange-400 bg-white/90 transition-all"
+                  className="w-full px-3 py-2 pr-10 border-2 border-gray-200/50 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
                   placeholder="Confirm your password"
                   required={!isLogin}
                 />
@@ -322,35 +468,197 @@ export default function AuthPage() {
 
           <button
             type="submit"
-            className="w-full bg-gradient-to-r from-blue-500 to-orange-400 text-white py-2 px-4 rounded-lg hover:from-blue-600 hover:to-orange-500 transition-all duration-200 shadow-md hover:shadow-lg font-medium transform hover:scale-[1.02]"
+            className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-all duration-200 shadow-md hover:shadow-lg font-medium transform hover:scale-[1.02]"
           >
             {isLogin ? 'Login' : 'Create Account'}
-          </button>
-
-          {/* Google Login Button */}
-          <button
-            type="button"
-            onClick={handleGoogleLogin}
-            className="w-full flex items-center justify-center py-2 px-4 border-2 border-orange-300/50 rounded-lg hover:bg-gradient-to-r hover:from-blue-50 hover:to-orange-50 transition-all duration-200 bg-white/80"
-          >
-            <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-            </svg>
-            <span className="text-gray-700 font-medium">Continue with Google</span>
           </button>
         </form>
 
         {isLogin && (
           <div className="text-center mt-4">
-            <a href="#" className="text-sm bg-gradient-to-r from-blue-600 to-orange-500 bg-clip-text text-transparent hover:underline font-medium">
+            <button
+              type="button"
+              onClick={() => setShowForgotPassword(true)}
+              className="text-sm text-purple-600 hover:text-purple-700 hover:underline font-medium"
+            >
               Forgot password?
-            </a>
+            </button>
           </div>
         )}
       </div>
+
+      {/* Forgot Password Modal */}
+      {showForgotPassword && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md relative">
+            <button
+              onClick={closeForgotPasswordModal}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Reset Password</h2>
+            <p className="text-sm text-gray-600 mb-6">
+              {forgotPasswordStep === 'email' && 'Enter your email address to receive an OTP'}
+              {forgotPasswordStep === 'otp' && 'Enter the 4-digit OTP sent to your email'}
+              {forgotPasswordStep === 'password' && 'Enter your new password'}
+            </p>
+
+            {/* Message Display */}
+            {forgotPasswordMessage && (
+              <div className={`mb-4 p-3 rounded-md ${
+                forgotPasswordMessage.type === 'success' 
+                  ? 'bg-green-50 border border-green-200 text-green-800' 
+                  : 'bg-red-50 border border-red-200 text-red-800'
+              }`}>
+                <p className="text-sm font-medium">{forgotPasswordMessage.text}</p>
+              </div>
+            )}
+
+            {/* Step 1: Email */}
+            {forgotPasswordStep === 'email' && (
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="forgot-email" className="block text-sm font-medium text-gray-700 mb-1">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    id="forgot-email"
+                    value={forgotPasswordEmail}
+                    onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                    className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
+                    placeholder="Enter your email address"
+                    required
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={forgotPasswordLoading}
+                  className="w-full bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-all duration-200 shadow-md hover:shadow-lg font-medium transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {forgotPasswordLoading ? 'Sending...' : 'Send OTP'}
+                </button>
+              </div>
+            )}
+
+            {/* Step 2: OTP Verification */}
+            {forgotPasswordStep === 'otp' && (
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="otp" className="block text-sm font-medium text-gray-700 mb-1">
+                    Enter OTP
+                  </label>
+                  <input
+                    type="text"
+                    id="otp"
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all text-center text-2xl font-bold tracking-widest"
+                    placeholder="0000"
+                    maxLength={4}
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-2">
+                    Check your email for the 4-digit OTP code
+                  </p>
+                </div>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotPasswordStep('email');
+                      setOtp('');
+                      setForgotPasswordMessage(null);
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-all"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleVerifyOTP}
+                    disabled={forgotPasswordLoading || otp.length !== 4}
+                    className="flex-1 bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-all duration-200 shadow-md hover:shadow-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {forgotPasswordLoading ? 'Verifying...' : 'Verify OTP'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={forgotPasswordLoading}
+                  className="w-full text-sm text-purple-600 hover:text-purple-700 hover:underline font-medium"
+                >
+                  Resend OTP
+                </button>
+              </div>
+            )}
+
+            {/* Step 3: New Password */}
+            {forgotPasswordStep === 'password' && (
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="new-password" className="block text-sm font-medium text-gray-700 mb-1">
+                    New Password
+                  </label>
+                  <input
+                    type="password"
+                    id="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
+                    placeholder="Enter new password"
+                    required
+                    minLength={6}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="confirm-new-password" className="block text-sm font-medium text-gray-700 mb-1">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    id="confirm-new-password"
+                    value={confirmNewPassword}
+                    onChange={(e) => setConfirmNewPassword(e.target.value)}
+                    className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-purple-400 bg-white transition-all"
+                    placeholder="Confirm new password"
+                    required
+                    minLength={6}
+                  />
+                </div>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForgotPasswordStep('otp');
+                      setNewPassword('');
+                      setConfirmNewPassword('');
+                      setForgotPasswordMessage(null);
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-all"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetPassword}
+                    disabled={forgotPasswordLoading || !newPassword || !confirmNewPassword}
+                    className="flex-1 bg-purple-600 text-white py-2 px-4 rounded-lg hover:bg-purple-700 transition-all duration-200 shadow-md hover:shadow-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {forgotPasswordLoading ? 'Resetting...' : 'Reset Password'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

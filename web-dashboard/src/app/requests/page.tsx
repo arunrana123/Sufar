@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import SidebarLayout from '../../components/SidebarLayout';
 
 type WorkerRequest = {
   _id: string;
@@ -408,7 +407,7 @@ export default function RequestsPage() {
   };
 
   const handleClearAllRequests = async () => {
-    const statusMap: { [key: string]: string } = {
+    const statusMap: { [key: string]: string | undefined } = {
       'pending': 'pending',
       'approved': 'verified',
       'rejected': 'rejected',
@@ -483,15 +482,14 @@ export default function RequestsPage() {
 
   if (loading || !admin) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Loading...</div>
       </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name}>
-      <div className="p-8">
+    <div className="p-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Worker Verification Requests</h1>
@@ -804,7 +802,6 @@ export default function RequestsPage() {
             </div>
           </div>
         )}
-      </div>
-    </SidebarLayout>
+    </div>
   );
 }

@@ -16,6 +16,7 @@ import serviceRoutes from "./src/routes/service.routes";
 import bookingRoutes from "./src/routes/booking.routes";
 import syncRoutes from "./src/routes/sync.routes";
 import adminRoutes from "./src/routes/admin.routes";
+import { googleAuthRoutes } from "./src/routes/google-auth.routes";
 
 dotenv.config();
 const app = express();
@@ -152,6 +153,183 @@ io.on('connection', (socket) => {
     io.emit('booking:completed', data);
   });
 
+  // Location tracking started - broadcast to user
+  socket.on('location:tracking:started', async (data) => {
+    console.log('📍 Location tracking started:', data);
+    if (data.bookingId) {
+      // Get booking to find userId
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          // Emit to the specific user who made the booking
+          io.to(String(booking.userId)).emit('location:tracking:started', data);
+          console.log('✅ Location tracking started event sent to user:', booking.userId);
+        } else {
+          // Fallback: emit to all (for backward compatibility)
+          io.emit('location:tracking:started', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for location tracking:', error);
+        // Fallback: emit to all
+        io.emit('location:tracking:started', data);
+      }
+    }
+  });
+
+  // Navigation events - broadcast to user
+  socket.on('navigation:started', async (data) => {
+    console.log('🚗 Navigation started:', data);
+    if (data.bookingId) {
+      // Get booking to find userId
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          io.to(String(booking.userId)).emit('navigation:started', data);
+          console.log('✅ Navigation started event sent to user:', booking.userId);
+        } else {
+          io.emit('navigation:started', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for navigation:', error);
+        io.emit('navigation:started', data);
+      }
+    }
+  });
+
+  socket.on('navigation:arrived', async (data) => {
+    console.log('📍 Navigation arrived:', data);
+    if (data.bookingId) {
+      // Get booking to find userId
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          io.to(String(booking.userId)).emit('navigation:arrived', data);
+          console.log('✅ Navigation arrived event sent to user:', booking.userId);
+        } else {
+          io.emit('navigation:arrived', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for arrival:', error);
+        io.emit('navigation:arrived', data);
+      }
+    }
+  });
+
+  socket.on('navigation:ended', async (data) => {
+    console.log('✅ Navigation ended:', data);
+    if (data.bookingId) {
+      // Get booking to find userId
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          io.to(String(booking.userId)).emit('navigation:ended', data);
+          console.log('✅ Navigation ended event sent to user:', booking.userId);
+        } else {
+          io.emit('navigation:ended', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for navigation end:', error);
+        io.emit('navigation:ended', data);
+      }
+    }
+  });
+
+  // Work events - broadcast to user
+  socket.on('work:started', async (data) => {
+    console.log('🔨 Work started:', data);
+    if (data.bookingId) {
+      // Get booking to find userId
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          io.to(String(booking.userId)).emit('work:started', data);
+          console.log('✅ Work started event sent to user:', booking.userId, 'Start time:', data.startTime);
+        } else {
+          io.emit('work:started', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for work started:', error);
+        io.emit('work:started', data);
+      }
+    }
+  });
+
+  socket.on('work:completed', async (data) => {
+    console.log('✅ Work completed:', data);
+    if (data.bookingId) {
+      // Get booking to find userId and worker info
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const Notification = require('./src/models/Notification.model').default;
+        const WorkerUser = require('./src/models/WorkerUser.model').default;
+        
+        const booking = await Booking.findById(data.bookingId).populate('workerId').lean();
+        
+        if (booking && booking.userId) {
+          // Get worker name
+          const workerName = booking.workerId?.firstName 
+            ? `${booking.workerId.firstName} ${booking.workerId.lastName || ''}`.trim()
+            : 'Worker';
+          
+          // Create notification for user
+          const notification = new Notification({
+            userId: booking.userId,
+            type: 'booking',
+            title: '✅ Service Completed!',
+            message: `${workerName} has completed your ${booking.serviceName || 'service'}. Payment method: ${data.paymentMethod || 'N/A'}`,
+            data: {
+              bookingId: data.bookingId,
+              workerId: data.workerId,
+              paymentMethod: data.paymentMethod,
+              paymentStatus: data.paymentStatus,
+              duration: data.duration,
+            },
+            read: false,
+          });
+          await notification.save();
+          console.log('✅ Completion notification saved for user:', booking.userId);
+
+          // Emit work completed event to user
+          io.to(String(booking.userId)).emit('work:completed', {
+            ...data,
+            workerName,
+            serviceName: booking.serviceName,
+          });
+          
+          // Also emit notification event
+          io.to(String(booking.userId)).emit('notification:new', {
+            _id: notification._id,
+            type: 'booking',
+            title: '✅ Service Completed!',
+            message: `${workerName} has completed your ${booking.serviceName || 'service'}. Payment: ${data.paymentMethod || 'N/A'}`,
+            data: notification.data,
+            createdAt: notification.createdAt,
+          });
+          
+          console.log('✅ Work completed event and notification sent to user:', booking.userId);
+        } else {
+          io.emit('work:completed', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for work completed:', error);
+        io.emit('work:completed', data);
+      }
+    }
+  });
+
+  // Worker location updates - broadcast to user
+  socket.on('worker:location', (data) => {
+    if (data.bookingId) {
+      // Emit to the user who made the booking
+      io.emit('worker:location', data);
+    }
+  });
+
   socket.on('notification:send', (data) => {
     console.log('📬 Notification send:', data);
     io.to(data.userId).emit('notification:new', data);
@@ -171,6 +349,7 @@ app.set('io', io);
 
 app.use("/api/items", itemRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/users", googleAuthRoutes);
 app.use("/api/workers", workerRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/dashboard", dashboardRoutes);
@@ -335,14 +514,57 @@ app.post('/api/workers/upload-category-documents', upload.fields([
 
     console.log(`✅ Category documents saved for ${category}`);
 
+    // Create admin notification for category verification
+    try {
+      const Notification = require('./src/models/Notification.model').default;
+      const User = require('./src/models/User.model').default;
+      
+      // Find admin user (assuming admin has role 'admin')
+      const admin = await User.findOne({ role: 'admin' });
+      const adminId = admin ? admin._id : '000000000000000000000000'; // Fallback admin ID
+      
+      await Notification.create({
+        userId: adminId,
+        type: 'category_verification_submitted',
+        title: 'New Service Category Verification',
+        message: `${worker.name} has submitted verification documents for ${category} service category`,
+        data: {
+          workerId: String(workerId),
+          workerName: worker.name,
+          category: category,
+          skillProof: files.skillProof[0].filename,
+          experience: files.experience[0].filename,
+          submittedAt: new Date().toISOString(),
+        },
+        priority: 'high',
+      });
+      console.log(`📧 Admin notification created for category verification: ${category}`);
+    } catch (notificationError) {
+      console.error('⚠️ Failed to create admin notification:', notificationError);
+      // Don't fail the request if notification creation fails
+    }
+
     // Emit Socket.IO event for real-time notification
     if (io) {
+      // Emit to admin room
+      io.to('admin').emit('category:verification:submitted', {
+        workerId: String(workerId),
+        workerName: worker.name,
+        category,
+        skillProof: files.skillProof[0].filename,
+        experience: files.experience[0].filename,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Also emit general event
       io.emit('category:verification:submitted', {
         workerId: String(workerId),
         category,
         skillProof: files.skillProof[0].filename,
         experience: files.experience[0].filename,
       });
+      
+      console.log(`📢 Category verification submitted event emitted for ${category}`);
     }
 
     res.json({

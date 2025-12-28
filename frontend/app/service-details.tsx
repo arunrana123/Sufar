@@ -8,12 +8,16 @@ import {
   SafeAreaView,
   Image,
   Platform,
+  Pressable,
 } from 'react-native';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { ThemedText } from '@/components/ThemedText';
+import { useTheme } from '@/contexts/ThemeContext';
 
 export default function ServiceDetailsScreen() {
   const params = useLocalSearchParams();
+  const { theme } = useTheme();
   const {
     serviceId,
     serviceName,
@@ -55,11 +59,11 @@ export default function ServiceDetailsScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Service Details</Text>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Service Details</ThemedText>
           <View style={styles.placeholder} />
         </View>
 
@@ -176,21 +180,26 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    backgroundColor: '#3B82F6',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
   },
   backButton: {
     padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
   },
   placeholder: {
     width: 40,

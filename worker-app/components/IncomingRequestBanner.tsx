@@ -35,7 +35,7 @@ export default function IncomingRequestBanner({
           </Text>
         </View>
         <TouchableOpacity style={styles.reviewBtn} onPress={onReview}>
-          <Text style={styles.reviewText}>Review</Text>
+          <Text style={styles.reviewText}>View</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.acceptBtn} onPress={onAccept}>
           <Text style={styles.acceptText}>Accept</Text>
@@ -53,21 +53,24 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 16,
     right: 16,
-    bottom: 24,
-    zIndex: 1000,
+    top: 100,
+    zIndex: 9999,
+    elevation: 999,
   },
   content: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 20,
+    borderWidth: 2,
+    borderColor: '#10B981',
   },
   iconWrap: {
     width: 36,

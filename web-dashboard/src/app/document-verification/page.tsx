@@ -4,7 +4,6 @@
 
 import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
-import SidebarLayout from '../../components/SidebarLayout';
 import { useRouter } from 'next/navigation';
 import { socketService } from '../../lib/socketService';
 
@@ -213,6 +212,8 @@ export default function DocumentVerificationPage() {
 
       if (response.ok) {
         const result = await response.json();
+        console.log('✅ Document verification successful:', result);
+        
         // Refresh workers to get updated status
         await fetchWorkers();
         
@@ -224,7 +225,10 @@ export default function DocumentVerificationPage() {
           }
         }
         
-        alert(`Document ${status === 'verified' ? 'approved' : 'rejected'} successfully!`);
+        // The backend will emit socket events which will trigger stats refresh in workers page
+        // No need to manually refresh stats here as socket listeners handle it
+        
+        alert(`Document ${status === 'verified' ? 'approved' : 'rejected'} successfully! Stats will update automatically.`);
       } else {
         const errorData = await response.json();
         alert(errorData.message || 'Failed to verify document');
@@ -285,17 +289,14 @@ export default function DocumentVerificationPage() {
 
   if (loading) {
     return (
-      <SidebarLayout adminName={admin.name}>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
-        </div>
-      </SidebarLayout>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
+      </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name}>
-      <div className="container mx-auto p-6">
+    <div className="container mx-auto p-6">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Document Verification</h1>
         <p className="text-gray-600 mt-2">Review and verify worker documents ({workers.length} workers submitted)</p>
@@ -510,7 +511,6 @@ export default function DocumentVerificationPage() {
           ) || 'document'} 
         />
       )}
-      </div>
-    </SidebarLayout>
+    </div>
   );
 }

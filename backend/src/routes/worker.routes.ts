@@ -112,7 +112,8 @@ router.post("/login", async (req: Request, res: Response) => {
         verificationStatus: worker.verificationStatus,
         verificationSubmitted: worker.verificationSubmitted,
         submittedAt: worker.submittedAt,
-        serviceCategories: worker.serviceCategories,
+        serviceCategories: worker.serviceCategories || [],
+        categoryVerificationStatus: worker.categoryVerificationStatus || {},
         currentLocation: worker.currentLocation,
         isActive: worker.isActive
       }
@@ -192,7 +193,8 @@ router.post("/google-login", async (req: Request, res: Response) => {
         verificationStatus: worker.verificationStatus,
         verificationSubmitted: worker.verificationSubmitted,
         submittedAt: worker.submittedAt,
-        serviceCategories: worker.serviceCategories,
+        serviceCategories: worker.serviceCategories || [],
+        categoryVerificationStatus: worker.categoryVerificationStatus || {},
         currentLocation: worker.currentLocation,
         isActive: worker.isActive
       }
@@ -377,21 +379,22 @@ router.post("/search", async (req: Request, res: Response) => {
     })));
 
     // Find available workers in the specified service category
-    // Only show workers who are:
+    // Show all workers who are:
     // 1. Status = 'available'
     // 2. isActive = true
     // 3. Have location data
     // 4. Match the service category (case-insensitive)
+    // Note: We show all matching workers here. Verification filtering happens when sending booking requests.
     const workers = await WorkerUser.find({
       serviceCategories: { $elemMatch: { $regex: new RegExp(String(serviceCategory), 'i') } },
       status: 'available',
       isActive: true,
       verificationStatus: { $in: ['verified', 'pending'] },
       'currentLocation.coordinates': { $exists: true }, // Must have location
-    }).select('name phone email serviceCategories rating totalJobs completedJobs currentLocation profileImage status _id').lean();
+    }).select('name phone email serviceCategories rating totalJobs completedJobs currentLocation profileImage status _id categoryVerificationStatus').lean();
 
-    console.log(`✅ Found ${workers.length} workers matching ALL criteria for "${serviceCategory}"`);
-    console.log('🎯 Matching workers:', workers.map(w => ({ 
+    console.log(`✅ Found ${workers.length} available workers for "${serviceCategory}"`);
+    console.log('🎯 Available workers:', workers.map(w => ({ 
       id: w._id,
       name: w.name, 
       phone: w.phone,
@@ -399,11 +402,12 @@ router.post("/search", async (req: Request, res: Response) => {
       hasLocation: !!w.currentLocation?.coordinates,
       status: w.status,
       isActive: w.isActive,
+      categoryVerification: w.categoryVerificationStatus?.[serviceCategory] || 'not set',
     })));
 
     // If no workers match, show why
     if (workers.length === 0 && allWorkersDb.length > 0) {
-      console.warn('⚠️ No workers match strict criteria. Checking each worker:');
+      console.warn('⚠️ No available workers found. Checking each worker:');
       allWorkersDb.forEach(worker => {
         const status = worker.verificationStatus;
         const verificationStatusStr = typeof status === 'string' 
@@ -614,6 +618,7 @@ router.get("/available", async (req: Request, res: Response) => {
     }
 
     console.log(`🔍 Fetching available workers with query:`, JSON.stringify(query, null, 2));
+    console.log('ℹ️ Note: Showing all available workers. Verification filtering happens when sending booking requests.');
 
     // First, let's check ALL workers in the database to see what we have
     const allWorkersDb = await WorkerUser.find({}).select('_id name phone email serviceCategories status isActive verificationStatus currentLocation').lean();
@@ -868,23 +873,57 @@ router.get("/stats-by-category", async (req: Request, res: Response) => {
         
         const totalWorkers = workersInCategory.length;
 
-        // Count pending verification requests
-        const pendingRequests = workersInCategory.filter(worker => {
-          const status = worker.verificationStatus;
-          return (
-            (status && typeof status === 'object' && status.overall === 'pending') ||
-            (status === 'pending') ||
-            (worker.verificationSubmitted && status && typeof status === 'object' && status.overall !== 'verified')
-          );
-        }).length;
-
-        // Count verified workers
+        // Count verified workers FIRST (to exclude them from pending)
         const verifiedWorkers = workersInCategory.filter(worker => {
           const status = worker.verificationStatus;
-          return (
-            (status && typeof status === 'object' && status.overall === 'verified') ||
-            (status === 'verified')
-          );
+          // A worker is verified if overall status is 'verified'
+          if (status && typeof status === 'object' && status.overall === 'verified') {
+            return true;
+          }
+          if (status === 'verified') {
+            return true;
+          }
+          return false;
+        }).length;
+
+        // Count pending verification requests (EXCLUDE verified workers)
+        // A worker is pending if:
+        // 1. They have submitted documents (verificationSubmitted = true)
+        // 2. Their overall status is NOT 'verified' (could be 'pending' or 'rejected' or not set)
+        const pendingRequests = workersInCategory.filter(worker => {
+          const status = worker.verificationStatus;
+          
+          // CRITICAL: If worker is verified, they are NEVER pending
+          if (status && typeof status === 'object' && status.overall === 'verified') {
+            return false; // Verified workers are NOT pending
+          }
+          if (status === 'verified') {
+            return false; // Verified workers are NOT pending
+          }
+          
+          // Worker has submitted documents for verification
+          if (worker.verificationSubmitted) {
+            // Check overall status
+            if (status && typeof status === 'object') {
+              // If overall is 'pending' or not set, they are pending
+              if (!status.overall || status.overall === 'pending') {
+                return true;
+              }
+              // If overall is 'rejected', they are still pending (needs resubmission/review)
+              if (status.overall === 'rejected') {
+                return true;
+              }
+              // If overall is 'verified', they are NOT pending (already checked above, but double-check)
+              if (status.overall === 'verified') {
+                return false;
+              }
+            } else if (!status || status === 'pending') {
+              // No status object or status is string 'pending'
+              return true;
+            }
+          }
+          
+          return false;
         }).length;
 
         return {

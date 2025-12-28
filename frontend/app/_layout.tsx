@@ -6,6 +6,15 @@ import 'react-native-reanimated';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
+import * as SplashScreen from 'expo-splash-screen';
+import GlobalNotificationHandler from '../components/GlobalNotificationHandler';
+import { pushNotificationService } from '../lib/PushNotificationService';
+
+// Prevent auto-hiding splash screen
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // Ignore errors if already prevented
+});
 
 function RootLayoutNav() {
   const { colorScheme } = useTheme();
@@ -13,6 +22,42 @@ function RootLayoutNav() {
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
+
+  // Hide expo splash screen once fonts are loaded
+  useEffect(() => {
+    const hideSplash = async () => {
+      if (loaded) {
+        try {
+          await SplashScreen.hideAsync();
+          console.log('✅ Expo splash screen hidden');
+        } catch (error) {
+          console.log('Splash screen already hidden or error:', error);
+        }
+      }
+    };
+    
+    hideSplash();
+  }, [loaded]);
+
+  // Register for push notifications when app loads
+  useEffect(() => {
+    pushNotificationService.registerForPushNotifications().then((token) => {
+      if (token) {
+        console.log('✅ Push notifications registered for user app:', token);
+        // You can send this token to your backend to send push notifications
+      }
+    });
+  }, []);
+
+  // Emergency timeout: If stuck on loading for more than 5 seconds, force to index
+  useEffect(() => {
+    if (loaded && isLoading) {
+      const emergencyTimer = setTimeout(() => {
+        console.log('⚠️ EMERGENCY: Loading took too long, check AsyncStorage or network');
+      }, 5000);
+      return () => clearTimeout(emergencyTimer);
+    }
+  }, [loaded, isLoading]);
 
   if (!loaded) {
     // Async font loading only occurs in development.
@@ -76,6 +121,8 @@ function RootLayoutNav() {
         <Stack.Screen name="optimized-home" options={{ headerShown: false }} />
         <Stack.Screen name="+not-found" />
       </Stack>
+      {/* Global notification handler - shows floating toasts on all screens */}
+      <GlobalNotificationHandler />
       <StatusBar style="auto" />
     </NavigationThemeProvider>
   );

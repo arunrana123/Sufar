@@ -4,7 +4,6 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import SidebarLayout from '../../components/SidebarLayout';
 
 type AdminUser = {
   id: string;
@@ -153,15 +152,14 @@ export default function DashboardPage() {
 
   if (!admin) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Loading...</div>
       </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name}>
-      <div className="p-8">
+    <div className="p-8">
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
           <p className="text-sm text-gray-500 mt-1">Live statistics from user and worker apps</p>
@@ -293,7 +291,7 @@ export default function DashboardPage() {
         <div className="fixed bottom-6 right-6 z-50">
           <button
             onClick={() => setIsActivityOpen(!isActivityOpen)}
-            className="bg-blue-600 hover:bg-blue-700 text-white rounded-full p-4 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2 group"
+            className="bg-purple-600 hover:bg-purple-700 text-white rounded-full p-4 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2 group"
             aria-label="Toggle Recent Activity"
           >
             <svg 
@@ -314,7 +312,6 @@ export default function DashboardPage() {
             )}
           </button>
         </div>
-      </div>
-    </SidebarLayout>
+    </div>
   );
 }

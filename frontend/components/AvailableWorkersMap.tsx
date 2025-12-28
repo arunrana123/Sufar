@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Platform } from 'react-native';
 import { MapView, Marker, PROVIDER_GOOGLE } from './react-native-maps';
+import { getApiUrl } from '@/lib/config';
 
 interface Worker {
   _id: string;
@@ -74,7 +75,7 @@ export default function AvailableWorkersMap({
     setLoading(true);
     
     try {
-      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.92:5001';
+      const apiUrl = getApiUrl();
       
       const response = await fetch(`${apiUrl}/api/workers/available?serviceCategory=${serviceCategory}&latitude=${userLocation.latitude}&longitude=${userLocation.longitude}&radius=10`, {
         method: 'GET',

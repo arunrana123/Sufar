@@ -13,9 +13,13 @@ import HelpTooltip from '@/components/HelpTooltip';
 import { getCurrentUser, setCurrentUser } from '@/lib/session';
 import { notificationService } from '@/lib/NotificationService';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import { detectLocation, AVAILABLE_LOCATIONS } from '@/lib/LocationDetector';
 import { useState, useEffect, useCallback } from 'react';
 
 export default function HomeScreen() {
+  const { theme } = useTheme();
+  const { user } = useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [selectedLocation, setSelectedLocation] = useState('Kathmandu');
@@ -30,7 +34,6 @@ export default function HomeScreen() {
   useEffect(() => {
     console.log('Home screen - Profile image state changed to:', profileImage);
   }, [profileImage]);
-  const { user } = useAuth();
 
   // Loads user's profile image from AuthContext
   // Triggered by: User login or profile photo update
@@ -75,10 +78,40 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       refreshProfileImage();
-    }, [])
+      
+      // Auto-update location when screen comes into focus
+      const updateLocation = async () => {
+        try {
+          const detectedLocation = await detectLocation();
+          if (detectedLocation && detectedLocation !== selectedLocation) {
+            console.log('📍 Location updated on focus:', detectedLocation);
+            setSelectedLocation(detectedLocation);
+          }
+        } catch (error) {
+          console.error('Error updating location on focus:', error);
+        }
+      };
+      
+      updateLocation();
+    }, [selectedLocation])
   );
 
-  const locations = ['Kathmandu', 'Kanchanpur', 'Kailali'];
+  const locations = AVAILABLE_LOCATIONS;
+
+  // Auto-detect location on mount
+  useEffect(() => {
+    const autoDetectLocation = async () => {
+      try {
+        const detectedLocation = await detectLocation();
+        console.log('📍 Auto-detected location:', detectedLocation);
+        setSelectedLocation(detectedLocation);
+      } catch (error) {
+        console.error('Error auto-detecting location:', error);
+      }
+    };
+
+    autoDetectLocation();
+  }, []);
 
   // Filters services based on user search query
   // Triggered by: User types in search input
@@ -175,8 +208,8 @@ export default function HomeScreen() {
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
-        <View style={styles.header}>
-          <View style={styles.profileLogo}>
+        <View style={[styles.header, { backgroundColor: theme.primary }]}>
+          <Pressable style={styles.profileLogo} onPress={() => router.push('/profile')}>
             {profileImage ? (
               <Image
                 source={{ uri: profileImage }}
@@ -192,7 +225,7 @@ export default function HomeScreen() {
             ) : (
               <Ionicons name="person" size={24} color="#fff" />
             )}
-          </View>
+          </Pressable>
           <Pressable 
             style={styles.locationWrap} 
             onPress={() => setShowLocationDropdown(!showLocationDropdown)}
@@ -208,13 +241,13 @@ export default function HomeScreen() {
           </Pressable>
           
           {showLocationDropdown && (
-            <View style={styles.locationDropdown}>
+            <View style={[styles.locationDropdown, { backgroundColor: theme.background, borderColor: theme.border }]}>
               {locations.map((location) => (
                 <Pressable
                   key={location}
                   style={[
                     styles.locationOption,
-                    selectedLocation === location && styles.selectedLocationOption
+                    selectedLocation === location && { backgroundColor: theme.primary + '15' }
                   ]}
                   onPress={() => {
                     setSelectedLocation(location);
@@ -223,7 +256,7 @@ export default function HomeScreen() {
                 >
                   <ThemedText style={[
                     styles.locationOptionText,
-                    selectedLocation === location && styles.selectedLocationOptionText
+                    { color: selectedLocation === location ? theme.primary : theme.text }
                   ]}>
                     {location}
                   </ThemedText>
@@ -231,13 +264,13 @@ export default function HomeScreen() {
               ))}
             </View>
           )}
-          <Pressable style={styles.searchButton} onPress={() => router.push('/search-services')}>
-            <Ionicons name="search" size={18} color="#000" />
+          <Pressable style={[styles.searchButton, { backgroundColor: theme.background }]} onPress={() => router.push('/search-services')}>
+            <Ionicons name="search" size={18} color={theme.text} />
           </Pressable>
-          <Pressable style={styles.bellWrap} onPress={() => router.replace('/notifications')}>
-            <Ionicons name="notifications-outline" size={18} color="#0a7ea4" />
+          <Pressable style={[styles.bellWrap, { backgroundColor: theme.background }]} onPress={() => router.replace('/notifications')}>
+            <Ionicons name="notifications-outline" size={18} color={theme.text} />
             {unreadCount > 0 && (
-              <View style={styles.notificationBadge}>
+              <View style={[styles.notificationBadge, { backgroundColor: theme.danger }]}>
                 <ThemedText style={styles.badgeText}>
                   {unreadCount > 99 ? '99+' : unreadCount.toString()}
                 </ThemedText>
@@ -248,30 +281,30 @@ export default function HomeScreen() {
 
         {/* Search Box */}
         {showSearchBox && (
-          <View style={styles.searchContainer}>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={20} color="#666" style={styles.searchBoxIcon} />
+          <View style={[styles.searchContainer, { backgroundColor: theme.background }]}>
+            <View style={[styles.searchBox, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder }]}>
+              <Ionicons name="search" size={20} color={theme.icon} style={styles.searchBoxIcon} />
               <TextInput
-                style={styles.searchInput}
+                style={[styles.searchInput, { color: theme.text }]}
                 placeholder="Search services..."
-                placeholderTextColor="#999"
+                placeholderTextColor={theme.icon}
                 value={searchQuery}
                 onChangeText={handleSearch}
                 autoFocus={true}
               />
               <Pressable onPress={clearSearch} style={styles.clearButton}>
-                <Ionicons name="close" size={20} color="#666" />
+                <Ionicons name="close" size={20} color={theme.icon} />
               </Pressable>
             </View>
             
             {/* Search Results */}
             {searchQuery.trim() !== '' && (
-              <ScrollView style={styles.searchResults} showsVerticalScrollIndicator={false}>
+              <ScrollView style={[styles.searchResults, { backgroundColor: theme.background }]} showsVerticalScrollIndicator={false}>
                 {searchResults.length > 0 ? (
                   searchResults.map((service) => (
                     <Pressable
                       key={service.id}
-                      style={styles.searchResultItem}
+                      style={[styles.searchResultItem, { backgroundColor: theme.card, borderColor: theme.border }]}
                       onPress={() => {
                         router.replace(service.route);
                         clearSearch();
@@ -281,16 +314,16 @@ export default function HomeScreen() {
                         <Ionicons name={service.icon as any} size={24} color={service.color} />
                       </View>
                       <View style={styles.searchResultText}>
-                        <ThemedText style={styles.searchResultName}>{service.name}</ThemedText>
-                        <ThemedText style={styles.searchResultCategory}>{service.category}</ThemedText>
+                        <ThemedText style={[styles.searchResultName, { color: theme.text }]}>{service.name}</ThemedText>
+                        <ThemedText style={[styles.searchResultCategory, { color: theme.secondary }]}>{service.category}</ThemedText>
                       </View>
                     </Pressable>
                   ))
                 ) : (
                   <View style={styles.noResults}>
-                    <Ionicons name="search-outline" size={48} color="#ccc" />
-                    <ThemedText style={styles.noResultsText}>Service not available</ThemedText>
-                    <ThemedText style={styles.noResultsSubtext}>Try searching with different keywords</ThemedText>
+                    <Ionicons name="search-outline" size={48} color={theme.icon} />
+                    <ThemedText style={[styles.noResultsText, { color: theme.text }]}>Service not available</ThemedText>
+                    <ThemedText style={[styles.noResultsSubtext, { color: theme.secondary }]}>Try searching with different keywords</ThemedText>
                   </View>
                 )}
               </ScrollView>
@@ -298,17 +331,18 @@ export default function HomeScreen() {
           </View>
         )}
 
-        <View style={styles.content}>
+        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           <ThemedText style={styles.welcome}>Welcome to our Service Hub</ThemedText>
           
+          {/* Available Services Grid */}
           <View style={styles.servicesSection}>
             <View style={styles.sectionHeader}>
-              <ThemedText style={styles.sectionTitle}>Available services</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Available Services</ThemedText>
               <Pressable 
                 style={styles.viewAllBtn} 
                 onPress={() => router.replace('/all-services')}
               >
-                <ThemedText style={styles.viewAllText}>View All</ThemedText>
+                <ThemedText style={[styles.viewAllText, { color: theme.primary }]}>View All</ThemedText>
               </Pressable>
             </View>
             
@@ -316,18 +350,98 @@ export default function HomeScreen() {
               {displayedServices.map((service) => (
                 <Pressable 
                   key={service.id} 
-                  style={styles.serviceCard} 
+                  style={[styles.serviceCard, { backgroundColor: theme.card }]} 
                   onPress={() => router.replace(service.route)}
                 >
                   <View style={styles.serviceIcon}>
                     <Ionicons name={service.icon as any} size={32} color={service.color} />
                   </View>
-                  <ThemedText style={styles.serviceLabel}>{service.name}</ThemedText>
+                  <ThemedText style={[styles.serviceLabel, { color: theme.text }]}>{service.name}</ThemedText>
                 </Pressable>
               ))}
             </View>
           </View>
-        </View>
+
+          {/* Popular Services - Horizontal Scroll */}
+          <View style={styles.horizontalSection}>
+            <View style={styles.sectionHeader}>
+              <ThemedText style={styles.sectionTitle}>🔥 Popular Services</ThemedText>
+              <Pressable style={styles.viewAllBtn} onPress={() => router.replace('/all-services')}>
+                <ThemedText style={[styles.viewAllText, { color: theme.primary }]}>See All</ThemedText>
+              </Pressable>
+            </View>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              contentContainerStyle={styles.horizontalScroll}
+            >
+              {[
+                { id: 'plumber', name: 'Plumber', icon: 'build-outline', color: '#4A90E2', route: '/plumber', price: 'From Rs.450', rating: '4.8' },
+                { id: 'electrician', name: 'Electrician', icon: 'flash-outline', color: '#F5A623', route: '/electrician', price: 'From Rs.300', rating: '4.9' },
+                { id: 'cleaner', name: 'Cleaner', icon: 'sparkles-outline', color: '#4ECDC4', route: '/cleaner', price: 'From Rs.600', rating: '4.7' },
+                { id: 'beautician', name: 'Beautician', icon: 'flower-outline', color: '#E91E63', route: '/beautician', price: 'From Rs.300', rating: '4.9' },
+                { id: 'ac-repair', name: 'AC Repair', icon: 'snow-outline', color: '#50E3C2', route: '/ac-repair', price: 'From Rs.600', rating: '4.6' },
+              ].map((service) => (
+                <Pressable 
+                  key={service.id} 
+                  style={[styles.popularCard, { backgroundColor: theme.card, borderColor: theme.border }]}
+                  onPress={() => router.replace(service.route as any)}
+                >
+                  <View style={[styles.popularIconWrap, { backgroundColor: service.color + '20' }]}>
+                    <Ionicons name={service.icon as any} size={28} color={service.color} />
+                  </View>
+                  <ThemedText style={[styles.popularName, { color: theme.text }]}>{service.name}</ThemedText>
+                  <ThemedText style={[styles.popularPrice, { color: theme.secondary }]}>{service.price}</ThemedText>
+                  <View style={styles.popularRating}>
+                    <Ionicons name="star" size={12} color="#FFD700" />
+                    <ThemedText style={[styles.popularRatingText, { color: theme.text }]}>{service.rating}</ThemedText>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+
+          {/* Recommended For You - Horizontal Scroll */}
+          <View style={styles.horizontalSection}>
+            <View style={styles.sectionHeader}>
+              <ThemedText style={styles.sectionTitle}>⭐ Recommended For You</ThemedText>
+            </View>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              contentContainerStyle={styles.horizontalScroll}
+            >
+              {[
+                { id: 'carpenter', name: 'Carpenter', icon: 'hammer-outline', color: '#D0021B', route: '/carpenter', desc: 'Furniture & Repair', rating: '4.8' },
+                { id: 'cook', name: 'Cook', icon: 'restaurant-outline', color: '#FFA07A', route: '/cook', desc: 'Home Cooking', rating: '4.9' },
+                { id: 'driver', name: 'Driver', icon: 'car-sport-outline', color: '#98D8C8', route: '/driver', desc: 'Personal Driver', rating: '4.7' },
+                { id: 'gardener', name: 'Gardener', icon: 'leaf-outline', color: '#45B7D1', route: '/gardener', desc: 'Garden Care', rating: '4.6' },
+                { id: 'technician', name: 'Technician', icon: 'settings-outline', color: '#BB8FCE', route: '/technician', desc: 'Tech Support', rating: '4.8' },
+              ].map((service) => (
+                <Pressable 
+                  key={service.id} 
+                  style={[styles.recommendedCard, { backgroundColor: theme.card, borderColor: theme.border }]}
+                  onPress={() => router.replace(service.route as any)}
+                >
+                  <View style={[styles.recommendedIconWrap, { backgroundColor: service.color }]}>
+                    <Ionicons name={service.icon as any} size={24} color="#fff" />
+                  </View>
+                  <View style={styles.recommendedInfo}>
+                    <ThemedText style={[styles.recommendedName, { color: theme.text }]}>{service.name}</ThemedText>
+                    <ThemedText style={[styles.recommendedDesc, { color: theme.secondary }]}>{service.desc}</ThemedText>
+                  </View>
+                  <View style={styles.recommendedRating}>
+                    <Ionicons name="star" size={14} color="#FFD700" />
+                    <ThemedText style={styles.recommendedRatingText}>{service.rating}</ThemedText>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+          
+          {/* Bottom spacing for nav */}
+          <View style={{ height: 100 }} />
+        </ScrollView>
       </SafeAreaView>
       <BottomNav />
       <ProfileSheet
@@ -538,15 +652,83 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 20,
   },
-  content: { paddingHorizontal: 12, paddingTop: 14, alignItems: 'center' },
-  welcome: { fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 20 },
-  servicesSection: { width: '100%', alignItems: 'flex-start' },
+  content: { flex: 1, paddingTop: 14 },
+  welcome: { fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 16, paddingHorizontal: 12 },
+  
+  // Horizontal sections
+  horizontalSection: { marginBottom: 20 },
+  horizontalScroll: { paddingHorizontal: 12, gap: 12 },
+  
+  // Popular cards
+  popularCard: {
+    width: 140,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  popularIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  popularName: { fontSize: 14, fontWeight: '600', marginBottom: 4 },
+  popularPrice: { fontSize: 12, marginBottom: 6 },
+  popularRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  popularRatingText: { fontSize: 12, fontWeight: '500' },
+  
+  // Recommended cards
+  recommendedCard: {
+    width: 200,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  recommendedIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  recommendedInfo: { flex: 1 },
+  recommendedName: { fontSize: 14, fontWeight: '600', marginBottom: 2 },
+  recommendedDesc: { fontSize: 12 },
+  recommendedRating: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 2,
+    backgroundColor: '#FFF8E1',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  recommendedRatingText: { fontSize: 11, fontWeight: '600', color: '#F59E0B' },
+  
+  servicesSection: { width: '100%', alignItems: 'flex-start', paddingHorizontal: 12 },
   sectionHeader: { 
     flexDirection: 'row', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
     width: '100%', 
-    marginBottom: 16 
+    marginBottom: 16,
+    paddingHorizontal: 12,
   },
   sectionTitle: { fontSize: 18, fontWeight: '600' },
   viewAllBtn: {
@@ -569,6 +751,8 @@ const styles = StyleSheet.create({
     aspectRatio: 0.8,
     alignItems: 'center', 
     marginBottom: 16,
+    borderRadius: 12,
+    padding: 8,
   },
   serviceIcon: { 
     width: '100%', 

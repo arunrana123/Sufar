@@ -16,6 +16,7 @@ import {
   Modal,
   ActivityIndicator,
   Linking,
+  Pressable,
 } from 'react-native';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,12 +25,14 @@ import * as Location from 'expo-location';
 import { getCurrentUser } from '@/lib/session';
 import { socketService } from '@/lib/SocketService';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { getApiUrl } from '@/lib/config';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import WorkerSearchModal from '../components/WorkerSearchModal';
 import HelpTooltip from '../components/HelpTooltip';
 import ToastNotification from '../components/ToastNotification';
 import { canBookService, checkPermissionWithAlert } from '@/lib/permissions';
+import { ThemedText } from '@/components/ThemedText';
 
 const { width } = Dimensions.get('window');
 
@@ -48,6 +51,7 @@ interface Service {
 
 export default function BookServiceScreen() {
   const params = useLocalSearchParams();
+  const { theme } = useTheme();
   // Construct service object from params (params are all strings)
   const service: Service = {
     id: (params.serviceId as string) || (params.id as string) || '',
@@ -122,29 +126,28 @@ export default function BookServiceScreen() {
 
     // Listen for booking acceptance
     const handleBookingAccepted = (data: any) => {
-      console.log('Booking accepted event received:', data);
+      console.log('✅ Booking accepted event received:', data);
       const bookingId = data.bookingId || data.booking?._id;
       
       if (bookingId) {
-        Alert.alert(
+        const workerName = data.booking?.workerId?.firstName 
+          ? `${data.booking.workerId.firstName} ${data.booking.workerId.lastName || ''}`.trim()
+          : data.booking?.worker?.name || 'Worker';
+        
+        // Show toast notification
+        showToast(
+          `${workerName} has accepted your request! Opening live tracking...`,
           'Worker Assigned!',
-          'A worker has accepted your service request. You can now track them in real-time.',
-          [
-            {
-              text: 'Start Tracking',
-              onPress: () => {
-                router.push({
-                  pathname: '/live-tracking',
-                  params: { bookingId: String(bookingId) },
-                });
-              },
-            },
-            {
-              text: 'Later',
-              style: 'cancel',
-            },
-          ]
+          'success'
         );
+        
+        // Auto-navigate to live tracking after a short delay
+        setTimeout(() => {
+          router.push({
+            pathname: '/live-tracking',
+            params: { bookingId: String(bookingId) },
+          });
+        }, 1000);
       }
     };
 
@@ -382,76 +385,55 @@ export default function BookServiceScreen() {
       }
 
       const booking = await response.json();
-      console.log('Booking created successfully:', booking);
+      console.log('✅ Booking created successfully:', booking._id);
+      console.log('📤 Backend will automatically notify workers via socket');
 
-      // Connect to socket for real-time updates
+      // Connect to socket for real-time updates (for receiving acceptance notifications)
       if (user?.id) {
         socketService.connect(user.id, 'user');
-      }
-
-      // Emit booking request to workers for real-time notification
-      try {
-        console.log('📤 Sending booking request via socket:', {
-          bookingId: booking._id,
-          serviceName: booking.serviceName,
-          serviceCategory: booking.serviceCategory,
-        });
-        
-        socketService.sendBookingRequest({
-          _id: booking._id,
-          userId: booking.userId,
-          serviceId: booking.serviceId,
-          serviceName: booking.serviceName,
-          serviceCategory: booking.serviceCategory,
-          price: booking.price,
-          location: booking.location,
-          createdAt: booking.createdAt,
-        });
-        
-        console.log('✅ Booking request sent via socket');
-      } catch (e) {
-        console.error('❌ Socket emit failed for booking:request', e);
       }
 
       // Close worker search modal first
       setShowWorkerSearch(false);
 
+      // Show success toast notification
       if (worker) {
-        // User selected a specific worker (like Kallu)
-        // Immediately open tracking map and show "Request sent to worker" status
+        // User selected a specific worker
         console.log('✅ Booking sent to specific worker:', worker.name);
-        
-        // Show toast notification
         showToast(
-          `Your request has been sent to ${worker.name}. Opening live tracking...`,
+          `Your request has been sent to ${worker.name}. You will be notified when they accept.`,
           `Request Sent to ${worker.name}!`,
           'success'
         );
-        
-        // Auto-open map after 1 second (single opening)
-        setTimeout(() => {
-          router.push({
-            pathname: '/live-tracking',
-            params: { bookingId: booking._id },
-          });
-        }, 1000);
       } else {
-        // Open QR/map screen for scanning/selecting a worker
-        try {
-          router.push('/qr-scanner');
-        } catch {}
-
-        // Show toast notification
-        // For scheduled booking, show success message with scheduled date
+        // No specific worker selected - booking sent to available workers
         const scheduledDateStr = scheduledDate ? scheduledDate.toLocaleDateString() : 'TBD';
         const scheduledTimeStr = scheduledDate ? scheduledDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'TBD';
         
-        showToast(
-          `Your ${service.serviceName || service.name} service has been scheduled for ${scheduledDateStr} at ${scheduledTimeStr}. You will be notified when a worker accepts it.`,
-          'Booking Scheduled!',
-          'success'
-        );
+        if (isNow) {
+          showToast(
+            `Your ${service.serviceName || service.name} service request has been sent to available workers. You will be notified when a worker accepts it.`,
+            'Booking Request Sent!',
+            'success'
+          );
+        } else {
+          showToast(
+            `Your ${service.serviceName || service.name} service has been scheduled for ${scheduledDateStr} at ${scheduledTimeStr}. You will be notified when a worker accepts it.`,
+            'Booking Scheduled!',
+            'success'
+          );
+        }
       }
+
+      // Navigate to tracking page to show worker location on map
+      setTimeout(() => {
+        router.replace({
+          pathname: '/tracking',
+          params: { 
+            bookingId: booking._id,
+          },
+        });
+      }, 1500);
     } catch (error: any) {
       console.error('Booking error:', error);
       
@@ -489,11 +471,11 @@ export default function BookServiceScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Book Service</Text>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Book Service</ThemedText>
           <View style={styles.placeholder} />
         </View>
 
@@ -760,21 +742,26 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    backgroundColor: '#3B82F6',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
   },
   backButton: {
     padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
   },
   placeholder: {
     width: 40,

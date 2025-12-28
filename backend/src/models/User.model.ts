@@ -10,6 +10,8 @@ export interface IUser extends Document {
   email: string;
   password: string;
   profilePhoto?: string;
+  phone?: string;
+  address?: string;
   role?: 'user' | 'admin';
   googleId?: string;
   createdAt: Date;
@@ -26,6 +28,8 @@ const UserSchema: Schema = new Schema({
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   password: { type: String, required: true },
   profilePhoto: { type: String },
+  phone: { type: String, trim: true },
+  address: { type: String, trim: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   googleId: { type: String, unique: true, sparse: true }, // Google Sign-In ID
   createdAt: { type: Date, default: Date.now },
@@ -35,6 +39,7 @@ const UserSchema: Schema = new Schema({
   otpExpires: { type: Date },
 });
 
-export default mongoose.model<IUser>("User", UserSchema);
+export const User = mongoose.model<IUser>("User", UserSchema);
+export default User;
 
 

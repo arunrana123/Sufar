@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   SafeAreaView,
   RefreshControl,
   ActivityIndicator,
@@ -15,10 +16,13 @@ import {
   Image,
   Linking,
   Alert,
+  Modal,
 } from 'react-native';
+import { ThemedText } from '@/components/ThemedText';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { socketService } from '@/lib/SocketService';
 import { getApiUrl } from '@/lib/config';
 import { MapView, Marker, Polyline, PROVIDER_GOOGLE } from '@/components/react-native-maps';
@@ -55,6 +59,7 @@ interface Booking {
 }
 
 export default function MyBookingsScreen() {
+  const { theme } = useTheme();
   const { user } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,6 +67,7 @@ export default function MyBookingsScreen() {
   const [showTracking, setShowTracking] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [trackingData, setTrackingData] = useState<any>(null);
+  const [clearAllModalVisible, setClearAllModalVisible] = useState(false);
   const mapRef = useRef<any>(null);
 
   const fetchBookings = async (isRefresh = false) => {
@@ -95,7 +101,131 @@ export default function MyBookingsScreen() {
     console.log('My bookings - User ID:', user?.id);
     if (user?.id) {
       fetchBookings();
+      
+      // Connect to socket for real-time updates
+      socketService.connect(user.id, 'user');
+      
+      // Listen for booking acceptance - auto-navigate to live tracking
+      socketService.on('booking:accepted', (data: any) => {
+        console.log('✅ Booking accepted event received in my-bookings:', data);
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          // Refresh bookings to show updated status
+          fetchBookings();
+          
+          // Auto-navigate to live tracking when booking is accepted
+          const workerName = data.booking?.workerId?.firstName 
+            ? `${data.booking.workerId.firstName} ${data.booking.workerId.lastName || ''}`.trim()
+            : data.booking?.worker?.name || 'Worker';
+          
+          // Show alert and navigate
+          setTimeout(() => {
+            Alert.alert(
+              'Worker Assigned!',
+              `${workerName} has accepted your service request. Opening live tracking...`,
+              [
+                {
+                  text: 'Track Now',
+                  onPress: () => {
+                    router.push({
+                      pathname: '/live-tracking',
+                      params: { bookingId: String(bookingId) },
+                    });
+                  },
+                },
+                {
+                  text: 'View Later',
+                  style: 'cancel',
+                },
+              ]
+            );
+          }, 500);
+        }
+      });
+      
+      // Listen for booking updates
+      socketService.on('booking:updated', (updatedBooking: any) => {
+        console.log('📝 Booking updated event received in my-bookings:', updatedBooking);
+        // Check if this booking belongs to the current user
+        if (updatedBooking.userId === user.id || String(updatedBooking.userId) === String(user.id)) {
+          // Update the specific booking in state immediately
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === updatedBooking._id 
+                ? { ...b, status: updatedBooking.status, ...updatedBooking }
+                : b
+            )
+          );
+          // Also refresh from server to ensure consistency
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        } else {
+          // Refresh all bookings if it's not clear which booking was updated
+          fetchBookings();
+        }
+      });
+
+      // Listen for work started event
+      socketService.on('work:started', (data: any) => {
+        console.log('🔨 Work started event received in my-bookings:', data);
+        if (data.bookingId) {
+          // Update the booking status to in_progress
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { ...b, status: 'in_progress' }
+                : b
+            )
+          );
+          // Refresh to get latest data
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+
+      // Listen for work completed event
+      socketService.on('work:completed', (data: any) => {
+        console.log('✅ Work completed event received in my-bookings:', data);
+        if (data.bookingId) {
+          // Update the booking status to completed
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { ...b, status: 'completed' }
+                : b
+            )
+          );
+          // Refresh to get latest data
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+      
+      // Listen for booking cancellations/deletions
+      socketService.on('booking:cancelled', (data: any) => {
+        console.log('🚫 Booking cancelled event received in my-bookings:', data);
+        // Refresh bookings to remove cancelled booking
+        fetchBookings();
+      });
+      
+      socketService.on('booking:deleted', (data: any) => {
+        console.log('🗑️ Booking deleted event received in my-bookings:', data);
+        // Refresh bookings to remove deleted booking
+        fetchBookings();
+      });
     }
+    
+    return () => {
+      socketService.off('booking:accepted');
+      socketService.off('booking:updated');
+      socketService.off('booking:cancelled');
+      socketService.off('booking:deleted');
+      socketService.off('work:started');
+      socketService.off('work:completed');
+    };
   }, [user?.id]);
 
   const onRefresh = () => {
@@ -106,18 +236,18 @@ export default function MyBookingsScreen() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending':
-        return '#FFA500';
+        return theme.warning;
       case 'accepted':
-        return '#2196F3';
+        return theme.info;
       case 'in_progress':
-        return '#9C27B0';
+        return theme.primary;
       case 'completed':
-        return '#4CAF50';
+        return theme.success;
       case 'cancelled':
       case 'rejected':
-        return '#EF4444';
+        return theme.danger;
       default:
-        return '#666';
+        return theme.secondary;
     }
   };
 
@@ -199,9 +329,12 @@ export default function MyBookingsScreen() {
   };
 
   const handleViewTracking = (booking: Booking) => {
-    setSelectedBooking(booking);
-    setShowTracking(true);
-    fetchTrackingData(booking._id);
+    // Navigate directly to live-tracking page instead of showing modal
+    console.log('🚀 Navigating to live tracking for booking:', booking._id);
+    router.push({
+      pathname: '/live-tracking',
+      params: { bookingId: booking._id },
+    });
   };
 
   const fetchTrackingData = async (bookingId: string) => {
@@ -256,15 +389,46 @@ export default function MyBookingsScreen() {
     setTrackingData(null);
   };
 
+  const handleClearAllBookings = async () => {
+    if (!user?.id || bookings.length === 0) return;
+
+    try {
+      const apiUrl = getApiUrl();
+      const deletePromises = bookings.map(booking => 
+        fetch(`${apiUrl}/api/bookings/${booking._id}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id }),
+        })
+      );
+      
+      await Promise.allSettled(deletePromises);
+      fetchBookings(true);
+      Alert.alert('Success', 'All bookings have been cleared.');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to clear bookings.');
+    } finally {
+      setClearAllModalVisible(false);
+    }
+  };
+
   const handlePayment = (booking: Booking) => {
-    router.push({
-      pathname: '/payment',
-      params: {
-        bookingId: booking._id,
-        amount: booking.price.toString(),
-        serviceName: booking.serviceName,
-      },
-    });
+    // Navigate to payment screen or show payment modal
+    Alert.alert(
+      'Payment',
+      `Pay Rs. ${booking.price} for ${booking.serviceName}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Pay Now',
+          onPress: () => {
+            // TODO: Implement payment flow
+            console.log('Payment for booking:', booking._id);
+            Alert.alert('Payment', 'Payment functionality will be implemented soon.');
+          },
+        },
+      ]
+    );
   };
 
   const handleReview = (booking: Booking) => {
@@ -280,26 +444,56 @@ export default function MyBookingsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4A90E2" />
-        <Text style={styles.loadingText}>Loading bookings...</Text>
+      <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
+        <ActivityIndicator size="large" color={theme.tint} />
+        <Text style={[styles.loadingText, { color: theme.secondary }]}>Loading bookings...</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.push('/menu')} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>My Bookings</Text>
-          <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
-            <Ionicons name="refresh" size={24} color="#fff" />
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.push('/menu')} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>My Bookings</ThemedText>
+          <TouchableOpacity onPress={() => setClearAllModalVisible(true)} style={styles.refreshButton}>
+            <Ionicons name="trash-outline" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
+
+        {/* Confirmation Modal */}
+        <Modal
+          transparent={true}
+          visible={clearAllModalVisible}
+          onRequestClose={() => setClearAllModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.card }]}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Clear All Bookings?</Text>
+              <Text style={[styles.modalMessage, { color: theme.secondary }]}>
+                Are you sure you want to delete all bookings? This action cannot be undone.
+              </Text>
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: theme.inputBackground }]}
+                  onPress={() => setClearAllModalVisible(false)}
+                >
+                  <Text style={[styles.modalButtonText, { color: theme.text }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, { backgroundColor: theme.danger }]}
+                  onPress={handleClearAllBookings}
+                >
+                  <Text style={[styles.modalButtonText, { color: '#fff' }]}>Clear All</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         <ScrollView
           style={styles.content}
@@ -308,10 +502,10 @@ export default function MyBookingsScreen() {
         >
           {bookings.length === 0 ? (
             <View style={styles.emptyState}>
-              <Ionicons name="clipboard-outline" size={64} color="#ccc" />
+              <Ionicons name="clipboard-outline" size={64} color={theme.icon} />
               <Text style={styles.emptyTitle}>No bookings yet</Text>
               <Text style={styles.emptySubtitle}>Book a service to get started</Text>
-              <TouchableOpacity style={styles.browseButton} onPress={() => router.replace('/home')}>
+              <TouchableOpacity style={[styles.browseButton, { backgroundColor: theme.tint }]} onPress={() => router.replace('/home')}>
                 <Text style={styles.browseButtonText}>Browse Services</Text>
               </TouchableOpacity>
             </View>
@@ -427,10 +621,15 @@ export default function MyBookingsScreen() {
                               ) : (
                                 <TouchableOpacity
                                   style={styles.trackButton}
-                                  onPress={() => handleViewTracking(booking)}
+                                  onPress={() => {
+                                    console.log('📍 Track button clicked for booking:', booking._id);
+                                    handleViewTracking(booking);
+                                  }}
                                 >
-                                  <Ionicons name="location" size={16} color="#fff" />
-                                  <Text style={styles.trackButtonText}>Live Tracking</Text>
+                                  <Ionicons name="navigate" size={16} color="#fff" />
+                                  <Text style={styles.trackButtonText}>
+                                    {booking.status === 'pending' ? 'View Request' : 'Track Worker'}
+                                  </Text>
                                 </TouchableOpacity>
                               )}
                             </View>
@@ -628,35 +827,36 @@ export default function MyBookingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
   },
   safe: {
     flex: 1,
   },
   header: {
-    backgroundColor: '#4A90E2',
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
   },
   backButton: {
-    padding: 4,
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#fff',
-    flex: 1,
-    textAlign: 'center',
-  },
-  placeholder: {
-    width: 32,
   },
   refreshButton: {
     padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   content: {
     flex: 1,
@@ -665,12 +865,10 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F8F9FA',
   },
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: '#666',
   },
   section: {
     paddingTop: 20,
@@ -701,7 +899,6 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   pendingCount: {
-    backgroundColor: '#FFA500',
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
@@ -712,7 +909,6 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   bookingCard: {
-    backgroundColor: '#fff',
     marginHorizontal: 20,
     marginBottom: 16,
     borderRadius: 12,
@@ -722,6 +918,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+    borderWidth: 1,
   },
   bookingHeader: {
     flexDirection: 'row',
@@ -787,7 +984,6 @@ const styles = StyleSheet.create({
   },
   trackButton: {
     flex: 1,
-    backgroundColor: '#4A90E2',
     paddingVertical: 12,
     borderRadius: 8,
     flexDirection: 'row',
@@ -802,7 +998,6 @@ const styles = StyleSheet.create({
   },
   payButton: {
     flex: 1,
-    backgroundColor: '#4CAF50',
     paddingVertical: 12,
     borderRadius: 8,
     flexDirection: 'row',
@@ -817,7 +1012,6 @@ const styles = StyleSheet.create({
   },
   reviewButton: {
     flex: 1,
-    backgroundColor: '#FF9800',
     paddingVertical: 12,
     borderRadius: 8,
     flexDirection: 'row',
@@ -853,18 +1047,15 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#666',
     marginTop: 16,
     marginBottom: 8,
   },
   emptySubtitle: {
     fontSize: 14,
-    color: '#999',
     textAlign: 'center',
     marginBottom: 24,
   },
   browseButton: {
-    backgroundColor: '#4A90E2',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,
@@ -1042,6 +1233,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#4CAF50',
+  },
+  modalContent: {
+    width: '80%',
+    padding: 20,
+    borderRadius: 12,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 12,
+  },
+  modalMessage: {
+    fontSize: 14,
+    marginBottom: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  modalButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  modalButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 

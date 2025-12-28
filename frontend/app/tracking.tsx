@@ -6,15 +6,18 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   SafeAreaView,
   ScrollView,
   ActivityIndicator,
   RefreshControl,
   Alert,
 } from 'react-native';
+import { ThemedText } from '@/components/ThemedText';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import { getApiUrl } from '@/lib/config';
 
@@ -51,6 +54,7 @@ interface Booking {
 }
 
 export default function TrackingScreen() {
+  const { theme } = useTheme();
   const { user } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,17 +103,17 @@ export default function TrackingScreen() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending':
-        return '#FF9800';
+        return theme.warning;
       case 'accepted':
-        return '#2196F3';
+        return theme.primary;
       case 'in_progress':
-        return '#9C27B0';
+        return theme.info;
       case 'completed':
-        return '#4CAF50';
+        return theme.success;
       case 'cancelled':
-        return '#F44336';
+        return theme.danger;
       default:
-        return '#666';
+        return theme.secondary;
     }
   };
 
@@ -141,15 +145,15 @@ export default function TrackingScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4A90E2" />
-        <Text style={styles.loadingText}>Loading your bookings...</Text>
+      <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
+        <ActivityIndicator size="large" color={theme.primary} />
+        <Text style={[styles.loadingText, { color: theme.secondary }]}>Loading your bookings...</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <SafeAreaView style={styles.safe}>
         <ScrollView
           style={styles.scrollView}
@@ -160,25 +164,25 @@ export default function TrackingScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Header with Back Button */}
-          <View style={styles.header}>
-            <TouchableOpacity 
+          <View style={[styles.header, { backgroundColor: theme.tint }]}>
+            <Pressable 
               style={styles.backButton} 
               onPress={handleBack}
             >
-              <Ionicons name="arrow-back" size={24} color="#fff" />
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>Track Services</Text>
-            <View style={styles.placeholder} />
+              <Ionicons name="arrow-back" size={28} color="#fff" />
+            </Pressable>
+            <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Track Services</ThemedText>
+            <View style={{ width: 40 }} />
           </View>
           {bookings.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="location-outline" size={64} color="#ccc" />
-              <Text style={styles.emptyTitle}>No Active Bookings</Text>
-              <Text style={styles.emptySubtitle}>
+              <Ionicons name="location-outline" size={64} color={theme.icon} />
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>No Active Bookings</Text>
+              <Text style={[styles.emptySubtitle, { color: theme.secondary }]}>
                 You don't have any services to track at the moment
               </Text>
               <TouchableOpacity 
-                style={styles.exploreButton}
+                style={[styles.exploreButton, { backgroundColor: theme.tint }]}
                 onPress={() => router.push('/home')}
               >
                 <Text style={styles.exploreButtonText}>Explore Services</Text>
@@ -187,23 +191,23 @@ export default function TrackingScreen() {
           ) : (
             <View style={styles.bookingsList}>
               {bookings.map((booking) => (
-                <View key={booking._id} style={styles.bookingCard}>
+                <View key={booking._id} style={[styles.bookingCard, { backgroundColor: theme.card }]}>
                   {/* Status Header */}
                   <View style={styles.statusHeader}>
                     <View style={[styles.statusIndicator, { backgroundColor: getStatusColor(booking.status) }]} />
-                    <Text style={styles.statusText}>{getStatusText(booking.status)}</Text>
+                    <Text style={[styles.statusText, { color: theme.text }]}>{getStatusText(booking.status)}</Text>
                   </View>
 
                   {/* Service Details */}
                   <View style={styles.serviceInfo}>
                     {/* Service Header */}
                     <View style={styles.serviceHeader}>
-                      <Text style={styles.serviceTitle}>
+                      <Text style={[styles.serviceTitle, { color: theme.text }]}>
                         {booking.serviceName || booking.serviceTitle || 'Service Title Not Available'}
                       </Text>
-                      <View style={styles.serviceIdContainer}>
-                        <Text style={styles.serviceIdLabel}>ID:</Text>
-                        <Text style={styles.serviceIdValue}>
+                      <View style={[styles.serviceIdContainer, { backgroundColor: theme.card }]}>
+                        <Text style={[styles.serviceIdLabel, { color: theme.secondary }]}>ID:</Text>
+                        <Text style={[styles.serviceIdValue, { color: theme.text }]}>
                           {booking._id?.substring(0, 8).toUpperCase() || 'N/A'}
                         </Text>
                       </View>
@@ -211,8 +215,8 @@ export default function TrackingScreen() {
 
                     {/* Service Category */}
                     <View style={styles.detailRow}>
-                      <Ionicons name="construct-outline" size={16} color="#666" />
-                      <Text style={styles.detailText}>
+                      <Ionicons name="construct-outline" size={16} color={theme.icon} />
+                      <Text style={[styles.detailText, { color: theme.secondary }]}>
                         {booking.serviceCategory === 'plumber' ? 'Plumbing Service' :
                          booking.serviceCategory === 'electrician' ? 'Electrical Service' :
                          booking.serviceCategory === 'mechanic' ? 'Mechanical Service' :
@@ -235,17 +239,17 @@ export default function TrackingScreen() {
                     {/* Service Description */}
                     {booking.description && (
                       <View style={styles.detailRow}>
-                        <Ionicons name="document-text-outline" size={16} color="#666" />
-                        <Text style={styles.detailText}>{booking.description}</Text>
+                        <Ionicons name="document-text-outline" size={16} color={theme.icon} />
+                        <Text style={[styles.detailText, { color: theme.secondary }]}>{booking.description}</Text>
                       </View>
                     )}
 
                     {/* Location Details */}
                     <View style={styles.detailRow}>
-                      <Ionicons name="location-outline" size={16} color="#666" />
+                      <Ionicons name="location-outline" size={16} color={theme.icon} />
                       <View style={styles.locationDetails}>
-                        <Text style={styles.detailText}>{booking.location?.address || 'Address not provided'}</Text>
-                        <Text style={styles.cityText}>
+                        <Text style={[styles.detailText, { color: theme.secondary }]}>{booking.location?.address || 'Address not provided'}</Text>
+                        <Text style={[styles.cityText, { color: theme.icon }]}>
                           {booking.location?.city || 
                            (booking.location?.address?.includes('Kathmandu') ? 'Kathmandu' :
                             booking.location?.address?.includes('Pokhara') ? 'Pokhara' :
@@ -258,10 +262,10 @@ export default function TrackingScreen() {
                     {/* Worker Information */}
                     {booking.worker && (
                       <View style={styles.detailRow}>
-                        <Ionicons name="person-outline" size={16} color="#666" />
+                        <Ionicons name="person-outline" size={16} color={theme.icon} />
                         <View style={styles.workerDetails}>
-                          <Text style={styles.detailText}>{booking.worker.name || 'Worker name not available'}</Text>
-                          <Text style={styles.workerPhone}>{booking.worker.phone || 'Contact not available'}</Text>
+                          <Text style={[styles.detailText, { color: theme.secondary }]}>{booking.worker.name || 'Worker name not available'}</Text>
+                          <Text style={[styles.workerPhone, { color: theme.icon }]}>{booking.worker.phone || 'Contact not available'}</Text>
                         </View>
                       </View>
                     )}
@@ -269,9 +273,9 @@ export default function TrackingScreen() {
                     {/* Scheduling Information */}
                     {booking.scheduledDate && (
                       <View style={styles.detailRow}>
-                        <Ionicons name="calendar-outline" size={16} color="#666" />
+                        <Ionicons name="calendar-outline" size={16} color={theme.icon} />
                         <View style={styles.scheduleDetails}>
-                          <Text style={styles.detailText}>
+                          <Text style={[styles.detailText, { color: theme.secondary }]}>
                             {new Date(booking.scheduledDate).toLocaleDateString('en-US', {
                               weekday: 'long',
                               year: 'numeric',
@@ -280,7 +284,7 @@ export default function TrackingScreen() {
                             })}
                           </Text>
                           {booking.scheduledTime && (
-                            <Text style={styles.timeText}>at {booking.scheduledTime}</Text>
+                            <Text style={[styles.timeText, { color: theme.icon }]}>at {booking.scheduledTime}</Text>
                           )}
                         </View>
                       </View>
@@ -289,8 +293,8 @@ export default function TrackingScreen() {
                     {/* Work Start Time */}
                     {booking.startTime && (
                       <View style={styles.detailRow}>
-                        <Ionicons name="play-circle-outline" size={16} color="#4CAF50" />
-                        <Text style={styles.detailText}>
+                        <Ionicons name="play-circle-outline" size={16} color={theme.success} />
+                        <Text style={[styles.detailText, { color: theme.secondary }]}>
                           Work started: {new Date(booking.startTime).toLocaleString('en-US', {
                             weekday: 'short',
                             month: 'short',
@@ -303,26 +307,26 @@ export default function TrackingScreen() {
                     )}
 
                     {/* Pricing Information */}
-                    <View style={styles.pricingContainer}>
+                    <View style={[styles.pricingContainer, { backgroundColor: theme.inputBackground }]}>
                       <View style={styles.detailRow}>
-                        <Ionicons name="cash-outline" size={16} color="#666" />
-                        <Text style={styles.detailText}>Service Fee Breakdown:</Text>
+                        <Ionicons name="cash-outline" size={16} color={theme.icon} />
+                        <Text style={[styles.detailText, { color: theme.secondary }]}>Service Fee Breakdown:</Text>
                       </View>
                       <View style={styles.priceRow}>
-                        <Text style={styles.priceLabel}>Base Price:</Text>
-                        <Text style={styles.priceValue}>
+                        <Text style={[styles.priceLabel, { color: theme.secondary }]}>Base Price:</Text>
+                        <Text style={[styles.priceValue, { color: theme.text }]}>
                           Rs. {booking.basePrice || (booking.price ? (booking.price * 0.8).toFixed(0) : '0')}
                         </Text>
                       </View>
                       <View style={styles.priceRow}>
-                        <Text style={styles.priceLabel}>Service Charge:</Text>
-                        <Text style={styles.priceValue}>
+                        <Text style={[styles.priceLabel, { color: theme.secondary }]}>Service Charge:</Text>
+                        <Text style={[styles.priceValue, { color: theme.text }]}>
                           Rs. {booking.serviceCharge || (booking.price ? (booking.price * 0.2).toFixed(0) : '0')}
                         </Text>
                       </View>
-                      <View style={[styles.priceRow, styles.totalPriceRow]}>
-                        <Text style={styles.totalPriceLabel}>Total Amount:</Text>
-                        <Text style={styles.totalPriceValue}>
+                      <View style={[styles.priceRow, styles.totalPriceRow, { borderTopColor: theme.border }]}>
+                        <Text style={[styles.totalPriceLabel, { color: theme.text }]}>Total Amount:</Text>
+                        <Text style={[styles.totalPriceValue, { color: theme.success }]}>
                           Rs. {booking.totalAmount || booking.price || '0'}
                         </Text>
                       </View>
@@ -331,7 +335,7 @@ export default function TrackingScreen() {
                           <Text style={styles.priceLabel}>Payment Status:</Text>
                           <Text style={[
                             styles.paymentStatus,
-                            { color: booking.paymentStatus === 'paid' ? '#4CAF50' : '#FF9800' }
+                            { color: booking.paymentStatus === 'paid' ? theme.success : theme.warning }
                           ]}>
                             {booking.paymentStatus.charAt(0).toUpperCase() + booking.paymentStatus.slice(1)}
                           </Text>
@@ -342,18 +346,18 @@ export default function TrackingScreen() {
                     {/* Estimated Duration */}
                     {booking.estimatedDuration && (
                       <View style={styles.detailRow}>
-                        <Ionicons name="hourglass-outline" size={16} color="#666" />
-                        <Text style={styles.detailText}>
+                        <Ionicons name="hourglass-outline" size={16} color={theme.icon} />
+                        <Text style={[styles.detailText, { color: theme.secondary }]}>
                           Estimated Duration: {booking.estimatedDuration} hours
                         </Text>
                       </View>
                     )}
 
                     {/* Booking Information */}
-                    <View style={styles.bookingInfo}>
+                    <View style={[styles.bookingInfo, { borderTopColor: theme.border }]}>
                       <View style={styles.detailRow}>
-                        <Ionicons name="time-outline" size={16} color="#666" />
-                        <Text style={styles.detailText}>
+                        <Ionicons name="time-outline" size={16} color={theme.icon} />
+                        <Text style={[styles.detailText, { color: theme.secondary }]}>
                           Booked on {new Date(booking.createdAt).toLocaleDateString('en-US', {
                             weekday: 'short',
                             month: 'short',
@@ -370,7 +374,7 @@ export default function TrackingScreen() {
                   <TouchableOpacity
                     style={[
                       styles.trackButton,
-                      booking.status === 'completed' && styles.completedButton
+                      { backgroundColor: booking.status === 'completed' ? theme.success + '20' : theme.primary },
                     ]}
                     onPress={() => handleTrackBooking(booking._id)}
                     disabled={booking.status === 'completed'}
@@ -378,11 +382,11 @@ export default function TrackingScreen() {
                     <Ionicons 
                       name={booking.status === 'completed' ? 'checkmark-circle' : 'navigate'} 
                       size={20} 
-                      color={booking.status === 'completed' ? '#4CAF50' : '#fff'} 
+                      color={booking.status === 'completed' ? theme.success : '#fff'} 
                     />
                     <Text style={[
                       styles.trackButtonText,
-                      booking.status === 'completed' && styles.completedButtonText
+                      { color: booking.status === 'completed' ? theme.success : '#fff' }
                     ]}>
                       {booking.status === 'completed' ? 'Completed' : 'Track Service'}
                     </Text>
@@ -401,7 +405,6 @@ export default function TrackingScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
   },
   safe: {
     flex: 1,
@@ -417,21 +420,17 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#F8F9FA',
   },
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    color: '#666',
   },
   header: {
-    backgroundColor: '#4A90E2',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
     marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -441,17 +440,12 @@ const styles = StyleSheet.create({
   },
   backButton: {
     padding: 8,
-    marginLeft: -8,
-    marginRight: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
-    flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#fff',
-  },
-  placeholder: {
-    width: 40,
   },
   emptyContainer: {
     justifyContent: 'center',
@@ -463,19 +457,16 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
     marginTop: 16,
     marginBottom: 8,
   },
   emptySubtitle: {
     fontSize: 16,
-    color: '#666',
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 24,
   },
   exploreButton: {
-    backgroundColor: '#4A90E2',
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,
@@ -489,7 +480,6 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   bookingCard: {
-    backgroundColor: '#fff',
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
@@ -513,7 +503,6 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
   },
   serviceInfo: {
     marginBottom: 16,
@@ -527,13 +516,11 @@ const styles = StyleSheet.create({
   serviceTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
     flex: 1,
   },
   serviceIdContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
@@ -542,13 +529,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     opacity: 0.6,
     marginRight: 4,
-    color: '#666',
   },
   serviceIdValue: {
     fontSize: 10,
     fontWeight: '600',
     fontFamily: 'monospace',
-    color: '#333',
   },
   detailRow: {
     flexDirection: 'row',
@@ -558,7 +543,6 @@ const styles = StyleSheet.create({
   },
   detailText: {
     fontSize: 14,
-    color: '#666',
     flex: 1,
   },
   locationDetails: {
@@ -569,7 +553,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     opacity: 0.6,
     marginTop: 2,
-    color: '#666',
   },
   workerDetails: {
     flex: 1,
@@ -579,7 +562,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     opacity: 0.6,
     marginTop: 2,
-    color: '#666',
   },
   scheduleDetails: {
     flex: 1,
@@ -589,10 +571,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     opacity: 0.6,
     marginTop: 2,
-    color: '#666',
   },
   pricingContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
     borderRadius: 8,
     padding: 12,
     marginVertical: 8,
@@ -606,16 +586,13 @@ const styles = StyleSheet.create({
   priceLabel: {
     fontSize: 13,
     opacity: 0.7,
-    color: '#666',
   },
   priceValue: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#333',
   },
   totalPriceRow: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
     paddingTop: 8,
     marginTop: 4,
     marginBottom: 0,
@@ -623,12 +600,10 @@ const styles = StyleSheet.create({
   totalPriceLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
   },
   totalPriceValue: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#4CAF50',
   },
   paymentStatus: {
     fontSize: 13,
@@ -638,7 +613,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
   },
   locationRow: {
     flexDirection: 'row',
@@ -663,21 +637,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#4A90E2',
     paddingVertical: 12,
     borderRadius: 8,
     gap: 8,
   },
-  completedButton: {
-    backgroundColor: '#E8F5E9',
-  },
   trackButtonText: {
-    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
-  },
-  completedButtonText: {
-    color: '#4CAF50',
   },
 });
 

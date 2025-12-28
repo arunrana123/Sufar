@@ -3,16 +3,14 @@ import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { Colors } from '@/constants/Colors';
-import { useColorScheme } from '@/hooks/useColorScheme';
+import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import ServiceCard from '@/components/ServiceCard';
 import { getServicesByCategory, getCategoryInfo } from '@/lib/services';
 import { useState, useMemo } from 'react';
 
 export default function GardenerScreen() {
-  const colorScheme = useColorScheme() ?? 'light';
-  const theme = Colors[colorScheme];
+  const { theme } = useTheme();
   
   const categoryInfo = getCategoryInfo('gardener');
   const allServices = getServicesByCategory('gardener');
@@ -46,27 +44,23 @@ export default function GardenerScreen() {
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
-        {/* ScrollView wrapping all content */}
+        {/* Header */}
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Gardener</ThemedText>
+          <Pressable style={styles.searchBtn} onPress={() => setSearchVisible(true)}>
+            <Ionicons name="search" size={24} color="#fff" />
+          </Pressable>
+        </View>
+
+        {/* ScrollView wrapping content */}
         <ScrollView 
           style={styles.scrollContainer} 
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
-          {/* Header */}
-          <View style={styles.header}>
-            <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-              <Ionicons name="arrow-back" size={24} color="#fff" />
-            </Pressable>
-            <View style={styles.headerCenter}>
-              <Ionicons name="leaf-outline" size={24} color="#fff" style={styles.headerIcon} />
-              <ThemedText style={styles.headerTitle}>Gardener</ThemedText>
-            </View>
-            <Pressable style={styles.searchBtn} onPress={() => setSearchVisible(true)}>
-              <Ionicons name="search" size={20} color="#fff" />
-              <ThemedText style={styles.searchText}>Search</ThemedText>
-            </Pressable>
-          </View>
-
           {/* Services List */}
           <View style={styles.content}>
             <View style={styles.servicesContainer}>
@@ -79,7 +73,7 @@ export default function GardenerScreen() {
                 ))
               ) : (
                 <View style={styles.noResultsContainer}>
-                  <Ionicons name="search-outline" size={64} color="#ccc" />
+                  <Ionicons name="search-outline" size={64} color={theme.icon} />
                   <ThemedText style={styles.noResultsText}>No services found</ThemedText>
                   <ThemedText style={styles.noResultsSubtext}>
                     Try searching with different keywords
@@ -97,24 +91,25 @@ export default function GardenerScreen() {
           presentationStyle="pageSheet"
           onRequestClose={() => setSearchVisible(false)}
         >
-          <View style={styles.searchModal}>
+          <View style={[styles.searchModal, { backgroundColor: theme.background }]}>
             <SafeAreaView style={styles.searchSafe}>
               {/* Search Header */}
-              <View style={styles.searchHeader}>
+              <View style={[styles.searchHeader, { backgroundColor: theme.card, borderBottomColor: theme.border }]}>
                 <TouchableOpacity onPress={() => setSearchVisible(false)} style={styles.closeBtn}>
-                  <Ionicons name="close" size={24} color="#333" />
+                  <Ionicons name="close" size={24} color={theme.text} />
                 </TouchableOpacity>
-                <ThemedText style={styles.searchTitle}>Search Services</ThemedText>
+                <ThemedText style={[styles.searchTitle, { color: theme.text }]}>Search Services</ThemedText>
                 <TouchableOpacity onPress={clearSearch} style={styles.clearBtn}>
-                  <ThemedText style={styles.clearText}>Clear</ThemedText>
+                  <ThemedText style={[styles.clearText, { color: theme.tint }]}>Clear</ThemedText>
                 </TouchableOpacity>
               </View>
 
               {/* Search Input */}
-              <View style={styles.searchInputContainer}>
-                <Ionicons name="search" size={20} color="#666" style={styles.searchIcon} />
+              <View style={[styles.searchInputContainer, { backgroundColor: theme.inputBackground, borderColor: theme.inputBorder }]}>
+                <Ionicons name="search" size={20} color={theme.icon} style={styles.searchIcon} />
                 <TextInput
-                  style={styles.searchInput}
+                  style={[styles.searchInput, { color: theme.text }]}
+                  placeholderTextColor={theme.icon}
                   placeholder="Search gardener services..."
                   value={searchQuery}
                   onChangeText={handleSearch}
@@ -123,7 +118,7 @@ export default function GardenerScreen() {
                 />
                 {searchQuery.length > 0 && (
                   <TouchableOpacity onPress={clearSearch} style={styles.clearInputBtn}>
-                    <Ionicons name="close-circle" size={20} color="#666" />
+                    <Ionicons name="close-circle" size={20} color={theme.icon} />
                   </TouchableOpacity>
                 )}
               </View>
@@ -140,7 +135,7 @@ export default function GardenerScreen() {
                     ))
                   ) : searchQuery.length > 0 ? (
                     <View style={styles.noResultsContainer}>
-                      <Ionicons name="search-outline" size={64} color="#ccc" />
+                      <Ionicons name="search-outline" size={64} color={theme.icon} />
                       <ThemedText style={styles.noResultsText}>No services found</ThemedText>
                       <ThemedText style={styles.noResultsSubtext}>
                         Try searching with different keywords
@@ -148,7 +143,7 @@ export default function GardenerScreen() {
                     </View>
                   ) : (
                     <View style={styles.searchHintContainer}>
-                      <Ionicons name="search-outline" size={48} color="#ccc" />
+                      <Ionicons name="search-outline" size={48} color={theme.icon} />
                       <ThemedText style={styles.searchHintText}>
                         Start typing to search for gardener services
                       </ThemedText>
@@ -168,7 +163,6 @@ export default function GardenerScreen() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   safe: { 
     flex: 1 
@@ -187,7 +181,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 15,
     paddingTop: Platform.OS === 'ios' ? 50 : 15,
-    backgroundColor: '#3B82F6', // Highlighted blue background
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -196,36 +189,17 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     padding: 8,
-  },
-  headerCenter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    justifyContent: 'center',
-  },
-  headerIcon: {
-    marginRight: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 24,
     fontWeight: 'bold',
-    color: '#fff',
   },
   searchBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    padding: 8,
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  searchText: {
-    marginLeft: 4,
-    fontSize: 14,
-    color: '#fff',
-    fontWeight: '500',
   },
   content: {
     paddingHorizontal: 16,
@@ -234,30 +208,9 @@ const styles = StyleSheet.create({
   servicesContainer: {
     paddingVertical: 16,
   },
-  noResultsContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 40,
-  },
-  noResultsText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#666',
-    marginTop: 16,
-    textAlign: 'center',
-  },
-  noResultsSubtext: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
   // Search Modal Styles
   searchModal: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   searchSafe: {
     flex: 1,
@@ -269,9 +222,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 15,
     paddingTop: Platform.OS === 'ios' ? 50 : 15,
-    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
   },
   closeBtn: {
     padding: 8,
@@ -279,27 +230,23 @@ const styles = StyleSheet.create({
   searchTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#333',
   },
   clearBtn: {
     padding: 8,
   },
   clearText: {
     fontSize: 16,
-    color: '#3B82F6',
     fontWeight: '500',
   },
   searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
     marginHorizontal: 20,
     marginVertical: 15,
     paddingHorizontal: 15,
     paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
   },
   searchIcon: {
     marginRight: 10,
@@ -307,7 +254,6 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: '#333',
   },
   clearInputBtn: {
     padding: 4,
@@ -319,6 +265,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 20,
   },
+  noResultsContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 40,
+  },
+  noResultsText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+    textAlign: 'center',
+    opacity: 0.7,
+  },
+  noResultsSubtext: {
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+    lineHeight: 20,
+    opacity: 0.5,
+  },
   searchHintContainer: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -327,9 +293,9 @@ const styles = StyleSheet.create({
   },
   searchHintText: {
     fontSize: 16,
-    color: '#666',
     marginTop: 16,
     textAlign: 'center',
     lineHeight: 22,
+    opacity: 0.6,
   },
 });

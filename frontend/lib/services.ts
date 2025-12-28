@@ -764,6 +764,124 @@ export const serviceCategories: ServiceCategory[] = [
         category: 'workers'
       }
     ]
+  },
+  {
+    id: 'beautician',
+    name: 'Beautician',
+    icon: 'sparkles-outline',
+    color: '#E91E63',
+    services: [
+      {
+        id: 'haircut-styling',
+        title: 'Haircut and styling',
+        price: '500',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 45,
+        image: 'haircut-styling.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'facial-treatment',
+        title: 'Facial treatment',
+        price: '800',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 38,
+        image: 'facial-treatment.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'manicure-pedicure',
+        title: 'Manicure and pedicure',
+        price: '600',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 42,
+        image: 'manicure-pedicure.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'hair-coloring',
+        title: 'Hair coloring and highlights',
+        price: '1500',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 28,
+        image: 'hair-coloring.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'bridal-makeup',
+        title: 'Bridal makeup package',
+        price: '5000',
+        priceType: 'customize',
+        rating: 5,
+        reviewCount: 35,
+        image: 'bridal-makeup.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'party-makeup',
+        title: 'Party makeup',
+        price: '1200',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 40,
+        image: 'party-makeup.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'threading-waxing',
+        title: 'Threading and waxing',
+        price: '300',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 50,
+        image: 'threading-waxing.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'hair-spa',
+        title: 'Hair spa treatment',
+        price: '1000',
+        priceType: 'fixed',
+        rating: 5,
+        reviewCount: 32,
+        image: 'hair-spa.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'skin-care',
+        title: 'Skin care consultation',
+        price: '400',
+        priceType: 'hour',
+        rating: 5,
+        reviewCount: 25,
+        image: 'skin-care.jpg',
+        verified: true,
+        category: 'beautician'
+      },
+      {
+        id: 'mehendi-art',
+        title: 'Mehendi (Henna) art',
+        price: '800',
+        priceType: 'customize',
+        rating: 5,
+        reviewCount: 30,
+        image: 'mehendi-art.jpg',
+        verified: true,
+        category: 'beautician'
+      }
+    ]
   }
 ];
 

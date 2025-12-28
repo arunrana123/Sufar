@@ -35,12 +35,15 @@ export default function AllServicesScreen() {
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
-        <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={28} color={theme.text} />
-        </Pressable>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>All Services</ThemedText>
+          <View style={{ width: 40 }} />
+        </View>
         
         <View style={styles.content}>
-          <ThemedText style={styles.title}>All Services</ThemedText>
           <ThemedText style={styles.subtitle}>Choose from our wide range of professional services</ThemedText>
           
           <View style={styles.servicesGrid}>
@@ -67,18 +70,33 @@ export default function AllServicesScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safe: { flex: 1 },
-  backBtn: { position: 'absolute', top: 20, left: 12, padding: 6, zIndex: 10 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  backBtn: {
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
   content: { 
     flex: 1, 
     paddingHorizontal: 12, 
-    paddingTop: 60,
+    paddingTop: 20,
     alignItems: 'center' 
-  },
-  title: { 
-    fontSize: 24, 
-    fontWeight: '700', 
-    marginBottom: 8,
-    textAlign: 'center'
   },
   subtitle: { 
     fontSize: 16, 

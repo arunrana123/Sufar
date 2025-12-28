@@ -17,6 +17,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { getApiUrl } from '@/lib/config';
 
 export default function SignupScreen() {
@@ -33,6 +34,7 @@ export default function SignupScreen() {
   const [emailValid, setEmailValid] = useState<boolean | null>(null);
   const [passwordStrength, setPasswordStrength] = useState<'weak' | 'medium' | 'strong' | null>(null);
   const [passwordsMatch, setPasswordsMatch] = useState<boolean | null>(null);
+  const { theme } = useTheme();
   const { login } = useAuth();
 
   // Real-time email validation

@@ -431,3 +431,62 @@ body {
   animation: flame-orange 5s ease-in-out infinite;
 }
 
+/* Prevent layout shift and flickering during navigation */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Optimize rendering for sidebar persistence */
+.sidebar-persistent {
+  will-change: auto;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  position: relative;
+  isolation: isolate;
+}
+
+/* Smooth content transitions */
+.main-content {
+  will-change: contents;
+  contain: layout style paint;
+  animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Prevent flash of unstyled content */
+body {
+  opacity: 1;
+  transition: opacity 0.1s ease-in;
+}
+
+/* Prevent full page re-renders */
+#__next,
+[data-nextjs-scroll-focus-boundary] {
+  contain: layout style paint;
+}
+
+/* Smooth page transitions */
+.page-transition {
+  animation: pageFadeIn 0.15s ease-in;
+}
+
+@keyframes pageFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

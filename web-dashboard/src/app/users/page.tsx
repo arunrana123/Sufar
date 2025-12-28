@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import SidebarLayout from '../../components/SidebarLayout';
 
 type User = {
   _id: string;
@@ -118,15 +117,14 @@ export default function UsersPage() {
 
   if (loading || !admin) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Loading...</div>
       </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name}>
-      <div className="p-8">
+    <div className="p-8">
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">All Users ({users.length})</h3>
@@ -209,7 +207,6 @@ export default function UsersPage() {
             </table>
           </div>
         </div>
-      </div>
-    </SidebarLayout>
+    </div>
   );
 }

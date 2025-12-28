@@ -10,6 +10,8 @@ import {
   Platform,
   ScrollView,
   StatusBar,
+  Modal,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -29,21 +31,122 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const [forgotVisible, setForgotVisible] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'email' | 'otp' | 'reset'>('email');
+  const [forgotEmail, setForgotEmail] = useState(prefilledEmail || '');
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [verifiedOtp, setVerifiedOtp] = useState<string | null>(null);
 
-  const handleGoogleLogin = async () => {
-    setGoogleLoading(true);
-    
-    // For now, show setup message. To enable:
-    // 1. Get Google OAuth credentials from Google Cloud Console
-    // 2. Add EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID to .env
-    // 3. Uncomment the full implementation in GOOGLE_AUTH_IMPLEMENTATION.md
-    
-    Alert.alert(
-      'Google Sign-In Setup Required',
-      'To enable Google Sign-In:\n\n1. Get Google OAuth credentials\n2. Add to .env file\n3. Restart app\n\nSee GOOGLE_AUTH_SETUP.md for details',
-      [{ text: 'OK', onPress: () => setGoogleLoading(false) }]
-    );
+
+  const handleForgotPassword = async () => {
+    if (!forgotEmail || !isValidEmail(forgotEmail)) {
+      Alert.alert('Error', 'Please enter a valid registered email.');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/api/workers/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        Alert.alert(
+          'OTP Sent',
+          `We sent an OTP to ${forgotEmail}.${data.otp ? `\n\nTest OTP: ${data.otp}` : ''}`
+        );
+        setForgotStep('otp');
+      } else {
+        Alert.alert('Error', data.message || 'Failed to send OTP');
+      }
+    } catch (error) {
+      console.error('Forgot password error:', error);
+      Alert.alert('Error', 'Network error. Please try again.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otp) {
+      Alert.alert('Error', 'Please enter the OTP.');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/api/workers/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail, otp }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVerifiedOtp(otp);
+        setOtp('');
+        setForgotStep('reset');
+      } else {
+        Alert.alert('Error', data.message || 'Failed to verify OTP');
+      }
+    } catch (error) {
+      console.error('Verify OTP error:', error);
+      Alert.alert('Error', 'Network error. Please try again.');
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!newPassword || !confirmPassword) {
+      Alert.alert('Error', 'Please fill in all fields.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match.');
+      return;
+    }
+    if (!verifiedOtp) {
+      Alert.alert('Error', 'Please verify OTP first.');
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const apiUrl = getApiUrl();
+      const res = await fetch(`${apiUrl}/api/workers/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: forgotEmail, otp: verifiedOtp, newPassword }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        Alert.alert('Success', 'Password reset successfully. Please login.', [
+          { text: 'OK', onPress: () => setForgotVisible(false) },
+        ]);
+        // Prefill email and clear password
+        setEmail(forgotEmail);
+        setPassword('');
+      } else {
+        Alert.alert('Error', data.message || 'Failed to reset password');
+      }
+    } catch (error) {
+      console.error('Reset password error:', error);
+      Alert.alert('Error', 'Network error. Please try again.');
+    } finally {
+      setForgotLoading(false);
+      setForgotStep('email');
+      setVerifiedOtp(null);
+      setNewPassword('');
+      setConfirmPassword('');
+    }
   };
 
   const handleLogin = async () => {
@@ -61,49 +164,203 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
 
     try {
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/workers/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
+      console.log('🔐 Worker login attempt started');
+      console.log('API URL:', apiUrl);
+      console.log('Full login URL:', `${apiUrl}/api/workers/login`);
+      
+      // Validate API URL
+      if (!apiUrl || apiUrl === 'undefined' || apiUrl.includes('undefined')) {
+        Alert.alert(
+          'Configuration Error',
+          'API URL is not configured correctly. Please check your environment variables.',
+          [{ text: 'OK' }]
+        );
+        setLoading(false);
+        return;
+      }
+      
+      // Verify IP address is correct
+      if (!apiUrl.includes('192.168.1.96') && !apiUrl.includes('localhost') && !apiUrl.includes('10.0.2.2')) {
+        console.error('❌ ERROR: API URL does not contain expected IP (192.168.1.96):', apiUrl);
+        Alert.alert(
+          'Configuration Error',
+          `Wrong server IP detected: ${apiUrl}\n\nExpected: http://192.168.1.96:5001\n\nPlease check your configuration.`,
+          [{ text: 'OK' }]
+        );
+        setLoading(false);
+        return;
+      } else {
+        console.log('✅ API URL is correct:', apiUrl);
+      }
+      
+      // Proceed with login attempt (with timeout)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      try {
+        console.log('📡 Making login request...');
+        const response = await fetch(`${apiUrl}/api/workers/login`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ email, password }),
+          signal: controller.signal,
+          cache: 'no-cache',
+          credentials: 'omit',
+        });
 
-      const data = await response.json();
-
-      if (response.ok) {
-        // Try to load stored worker data to preserve profileImage and other local updates
-        let storedWorkerData = null;
-        try {
-          const stored = await AsyncStorage.getItem('workerData');
-          if (stored) {
-            storedWorkerData = JSON.parse(stored);
-          }
-        } catch (e) {
-          console.log('No stored worker data found');
+        clearTimeout(timeoutId);
+        console.log('Response status:', response.status);
+        
+        // Check if response is JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          console.error('Non-JSON response:', text);
+          Alert.alert('Error', 'Server returned an invalid response. Please try again.');
+          setLoading(false);
+          return;
         }
         
-        // Merge backend data with stored data (prefer stored profileImage if exists)
-        const workerData = {
-          id: data.worker._id,
-          name: data.worker.name,
-          email: data.worker.email,
-          phone: data.worker.phone,
-          skills: data.worker.skills,
-          token: data.token,
-          profileImage: storedWorkerData?.profileImage || data.worker.profileImage || data.worker.profilePhoto || null,
-          documents: storedWorkerData?.documents || data.worker.documents || null,
-          verificationStatus: storedWorkerData?.verificationStatus || data.worker.verificationStatus || null,
-          verificationSubmitted: storedWorkerData?.verificationSubmitted || data.worker.verificationSubmitted || false,
-        };
+        const data = await response.json();
+        console.log('Response data received');
+
+        if (response.ok) {
+          // Try to load stored worker data to preserve profileImage and other local updates
+          let storedWorkerData = null;
+          try {
+            const stored = await AsyncStorage.getItem('workerData');
+            if (stored) {
+              storedWorkerData = JSON.parse(stored);
+            }
+          } catch (e) {
+            console.log('No stored worker data found');
+          }
+          
+          // Merge backend data with stored data (prefer stored profileImage if exists)
+          const workerData = {
+            id: data.worker._id,
+            name: data.worker.name,
+            email: data.worker.email,
+            phone: data.worker.phone,
+            skills: data.worker.skills,
+            token: data.token,
+            profileImage: storedWorkerData?.profileImage || data.worker.profileImage || data.worker.profilePhoto || null,
+            documents: storedWorkerData?.documents || data.worker.documents || null,
+            verificationStatus: storedWorkerData?.verificationStatus || data.worker.verificationStatus || null,
+            verificationSubmitted: storedWorkerData?.verificationSubmitted || data.worker.verificationSubmitted || false,
+          };
+          
+          onLoginSuccess(workerData);
+        } else {
+          Alert.alert('Login Failed', data.message || 'Invalid credentials');
+        }
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
         
-        onLoginSuccess(workerData);
-      } else {
-        Alert.alert('Login Failed', data.message || 'Invalid credentials');
+        console.error('❌ Fetch error details:', {
+          name: fetchError.name,
+          message: fetchError.message,
+          stack: fetchError.stack,
+          apiUrl: apiUrl,
+        });
+        
+        if (fetchError.name === 'AbortError') {
+          // Timeout error
+          Alert.alert(
+            'Connection Timeout',
+            `Unable to connect to server at ${apiUrl}\n\nPlease check:\n• Backend server is running on port 5001\n• Your device is on the same network\n• Firewall is not blocking the connection\n\nTry restarting the backend server and try again.`,
+            [
+              { text: 'OK', style: 'default' },
+              { 
+                text: 'Retry', 
+                onPress: () => handleLogin(),
+                style: 'default'
+              }
+            ]
+          );
+          setLoading(false);
+          return;
+        } else if (fetchError.message?.includes('Network request failed') || fetchError.name === 'TypeError') {
+          // Network failure
+          const isAndroid = Platform.OS === 'android';
+          const serverIP = apiUrl.split('://')[1]?.split(':')[0] || 'unknown';
+          
+          Alert.alert(
+            'Network Connection Failed',
+            `Cannot reach server at:\n${apiUrl}\n\n🔴 FIRST: Check if backend is running!\n\nOpen terminal and run:\ncd backend\nbun run dev\n\nThen verify:\n• Server shows "Server running on port 5001"\n• No errors in backend terminal\n\n${isAndroid ? '🔧 Android Fix Required:' : '📱 iOS Checks:'}\n${isAndroid ? '1. Rebuild the app (network config was updated):\n   cd worker-app\n   bunx expo prebuild --clean\n   bunx expo run:android\n\n2. Verify network security config is applied\n3. Ensure device and computer are on same WiFi\n4. Test in phone browser: http://' + serverIP + ':5001' : '• Check iOS network permissions\n• Ensure device and computer are on same network\n• Try restarting the app'}\n\n✅ Network Checks:\n• Device and computer on same WiFi network\n• Computer IP is ${serverIP}\n• Firewall allows port 5001\n• Test URL in phone browser: http://${serverIP}:5001`,
+            [
+              { text: 'OK', style: 'default' },
+              { 
+                text: 'Retry Login', 
+                onPress: () => {
+                  console.log('🔄 Retrying login...');
+                  handleLogin();
+                },
+                style: 'default'
+              }
+            ]
+          );
+          setLoading(false);
+          return;
+        } else {
+          throw fetchError; // Re-throw to be caught by outer catch
+        }
       }
     } catch (error) {
       console.error('Login error:', error);
-      Alert.alert('Error', 'Network error. Please try again.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      const apiUrl = getApiUrl();
+      const serverIP = apiUrl.split('://')[1]?.split(':')[0] || 'unknown';
+      const isAndroid = Platform.OS === 'android';
+      
+      // Provide helpful error messages based on error type
+      if (errorMessage.includes('Network request failed') || errorMessage.includes('fetch')) {
+        const suggestions = isAndroid 
+          ? `🔴 FIRST: Start backend server!\n\ncd backend\nbun run dev\n\n🔧 Then rebuild app:\n\ncd worker-app\nbunx expo prebuild --clean\nbunx expo run:android\n\n✅ Verify:\n• Backend shows "Server running on port 5001"\n• Device and computer on same WiFi\n• Test in phone browser: http://${serverIP}:5001\n• Network security config is applied`
+          : `🔴 FIRST: Start backend server!\n\ncd backend\nbun run dev\n\n✅ Then verify:\n• Backend shows "Server running on port 5001"\n• Device is on the same network\n• Firewall allows connections\n• Test in phone browser: http://${serverIP}:5001`;
+        
+        Alert.alert(
+          'Connection Error',
+          `Cannot connect to server at:\n${apiUrl}\n\n${suggestions}\n\nPlatform: ${Platform.OS}`,
+          [
+            { text: 'OK', style: 'default' },
+            {
+              text: 'Retry',
+              onPress: () => handleLogin(),
+              style: 'default'
+            }
+          ]
+        );
+      } else if (errorMessage.includes('timeout') || errorMessage.includes('AbortError')) {
+        Alert.alert(
+          'Connection Timeout',
+          `Request timed out while connecting to:\n${apiUrl}\n\nPlease check:\n• Backend server is running\n• Network connection is stable`,
+          [
+            { text: 'OK', style: 'default' },
+            { 
+              text: 'Retry Login', 
+              onPress: () => handleLogin(),
+              style: 'default'
+            }
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Login Error', 
+          `An error occurred: ${errorMessage}\n\nAPI URL: ${apiUrl}\n\nPlease check your connection and try again.`,
+          [
+            { text: 'OK', style: 'default' },
+            { 
+              text: 'Retry', 
+              onPress: () => handleLogin(),
+              style: 'default'
+            }
+          ]
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -115,120 +372,228 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <StatusBar barStyle="light-content" backgroundColor="#FF7A2C" />
-      <LinearGradient
-        colors={['#FF7A2C', '#FF8C42', '#FF9F5A']}
-        style={styles.gradient}
+    <>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContainer}
-          showsVerticalScrollIndicator={false}
+        <StatusBar barStyle="light-content" backgroundColor="#FF7A2C" />
+        <LinearGradient
+          colors={['#FF7A2C', '#FF8C42', '#FF9F5A']}
+          style={styles.gradient}
         >
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.logoContainer}>
-              <View style={styles.logoCircle}>
-                <Text style={styles.logoText}>S</Text>
+          <ScrollView
+            contentContainerStyle={styles.scrollContainer}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Header */}
+            <View style={styles.header}>
+              <View style={styles.logoContainer}>
+                <View style={styles.logoCircle}>
+                  <Text style={styles.logoText}>S</Text>
+                </View>
               </View>
-            </View>
-            <Text style={styles.title}>Welcome Back</Text>
-            <Text style={styles.subtitle}>Sign in to your worker account</Text>
-          </View>
-
-          {/* Login Form */}
-          <View style={styles.formContainer}>
-            {/* Email Input */}
-            <View style={styles.inputContainer}>
-              <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Email Address"
-                placeholderTextColor="#999"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+              <Text style={styles.title}>Welcome Back</Text>
+              <Text style={styles.subtitle}>Sign in to your worker account</Text>
             </View>
 
-            {/* Password Input */}
-            <View style={styles.inputContainer}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Password"
-                placeholderTextColor="#999"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <TouchableOpacity
-                style={styles.eyeIcon}
-                onPress={() => setShowPassword(!showPassword)}
-              >
-                <Ionicons
-                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                  size={20}
-                  color="#666"
+            {/* Login Form */}
+            <View style={styles.formContainer}>
+              {/* Email Input */}
+              <View style={styles.inputContainer}>
+                <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Email Address"
+                  placeholderTextColor="#999"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
                 />
+              </View>
+
+              {/* Password Input */}
+              <View style={styles.inputContainer}>
+                <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Password"
+                  placeholderTextColor="#999"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  style={styles.eyeIcon}
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  <Ionicons
+                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                    size={20}
+                    color="#666"
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {/* Forgot Password */}
+              <TouchableOpacity
+                style={styles.forgotPassword}
+                onPress={() => {
+                  setForgotVisible(true);
+                  setForgotStep('email');
+                  setForgotEmail(email);
+                  setOtp('');
+                  setVerifiedOtp(null);
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }}
+              >
+                <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
               </TouchableOpacity>
-            </View>
 
-            {/* Forgot Password */}
-            <TouchableOpacity style={styles.forgotPassword}>
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-            </TouchableOpacity>
-
-            {/* Login Button */}
-            <TouchableOpacity
-              style={[styles.loginButton, loading && styles.loginButtonDisabled]}
-              onPress={handleLogin}
-              disabled={loading}
-            >
+              {/* Login Button */}
+              <TouchableOpacity
+                style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+                onPress={handleLogin}
+                disabled={loading}
+              >
               <Text style={styles.loginButtonText}>
                 {loading ? 'Signing In...' : 'Sign In'}
               </Text>
             </TouchableOpacity>
 
-            {/* Divider */}
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>OR</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* Google Login Button */}
-            <TouchableOpacity
-              style={styles.googleButton}
-              onPress={handleGoogleLogin}
-              disabled={googleLoading}
-            >
-              <View style={styles.googleIconWrap}>
-                <Ionicons name="logo-google" size={22} color="#DB4437" />
-              </View>
-              <Text style={styles.googleButtonText}>
-                {googleLoading ? 'Connecting...' : 'Continue with Google'}
-              </Text>
-            </TouchableOpacity>
-
             {/* Switch to Signup */}
-            <View style={styles.switchContainer}>
-              <Text style={styles.switchText}>Don't have an account? </Text>
-              <TouchableOpacity onPress={onSwitchToSignup}>
-                <Text style={styles.switchLink}>Sign Up</Text>
+              <View style={styles.switchContainer}>
+                <Text style={styles.switchText}>Don't have an account? </Text>
+                <TouchableOpacity onPress={onSwitchToSignup}>
+                  <Text style={styles.switchLink}>Sign Up</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
+        </LinearGradient>
+      </KeyboardAvoidingView>
+
+      {/* Forgot Password Modal */}
+      <Modal
+        visible={forgotVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setForgotVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {forgotStep === 'email' && 'Forgot Password'}
+                {forgotStep === 'otp' && 'Verify OTP'}
+                {forgotStep === 'reset' && 'Set New Password'}
+              </Text>
+              <TouchableOpacity onPress={() => setForgotVisible(false)}>
+                <Ionicons name="close" size={22} color="#111" />
               </TouchableOpacity>
             </View>
+
+            {forgotStep === 'email' && (
+              <>
+                <Text style={styles.modalLabel}>Registered Email</Text>
+                <View style={styles.modalInputRow}>
+                  <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="Enter your email"
+                    placeholderTextColor="#999"
+                    value={forgotEmail}
+                    onChangeText={setForgotEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                  />
+                </View>
+                <TouchableOpacity
+                  style={[styles.loginButton, forgotLoading && styles.loginButtonDisabled]}
+                  onPress={handleForgotPassword}
+                  disabled={forgotLoading}
+                >
+                  <Text style={styles.loginButtonText}>
+                    {forgotLoading ? 'Sending...' : 'Send OTP'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {forgotStep === 'otp' && (
+              <>
+                <Text style={styles.modalLabel}>Enter OTP</Text>
+                <View style={styles.modalInputRow}>
+                  <Ionicons name="key-outline" size={20} color="#666" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="6-digit OTP"
+                    placeholderTextColor="#999"
+                    value={otp}
+                    onChangeText={setOtp}
+                    keyboardType="number-pad"
+                  />
+                </View>
+                <TouchableOpacity
+                  style={[styles.loginButton, forgotLoading && styles.loginButtonDisabled]}
+                  onPress={handleVerifyOtp}
+                  disabled={forgotLoading}
+                >
+                  <Text style={styles.loginButtonText}>
+                    {forgotLoading ? 'Verifying...' : 'Verify OTP'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {forgotStep === 'reset' && (
+              <>
+                <Text style={styles.modalLabel}>New Password</Text>
+                <View style={styles.modalInputRow}>
+                  <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="New password"
+                    placeholderTextColor="#999"
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                    secureTextEntry
+                  />
+                </View>
+                <Text style={styles.modalLabel}>Confirm Password</Text>
+                <View style={styles.modalInputRow}>
+                  <Ionicons name="shield-checkmark-outline" size={20} color="#666" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.modalInput}
+                    placeholder="Confirm password"
+                    placeholderTextColor="#999"
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    secureTextEntry
+                  />
+                </View>
+                <TouchableOpacity
+                  style={[styles.loginButton, forgotLoading && styles.loginButtonDisabled]}
+                  onPress={handleResetPassword}
+                  disabled={forgotLoading}
+                >
+                  {forgotLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.loginButtonText}>Reset Password</Text>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
           </View>
-        </ScrollView>
-      </LinearGradient>
-    </KeyboardAvoidingView>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -337,40 +702,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  googleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    height: 50,
-    borderWidth: 1,
-    borderColor: '#E9ECEF',
-    marginBottom: 16,
-  },
-  googleIconWrap: {
-    marginRight: 10,
-  },
-  googleButtonText: {
-    color: '#333',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#E9ECEF',
-  },
-  dividerText: {
-    marginHorizontal: 15,
-    color: '#666',
-    fontSize: 14,
-  },
   switchContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -384,5 +715,51 @@ const styles = StyleSheet.create({
     color: '#FF7A2C',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111',
+  },
+  modalLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#555',
+    marginBottom: 8,
+  },
+  modalInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#E9ECEF',
+    marginBottom: 16,
+  },
+  modalInput: {
+    flex: 1,
+    height: 48,
+    fontSize: 16,
+    color: '#333',
   },
 });

@@ -39,18 +39,37 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const loadStoredUser = async () => {
     try {
       console.log('Loading stored user...');
-      const storedUser = await AsyncStorage.getItem('userData');
+      
+      // Try to load user data with a reasonable timeout
+      const storagePromise = AsyncStorage.getItem('userData');
+      const timeoutPromise = new Promise<string | null>((resolve) => {
+        setTimeout(() => {
+          console.log('⚠️ AsyncStorage taking longer than expected, proceeding...');
+          resolve(null);
+        }, 5000); // Increased to 5 seconds
+      });
+
+      // Race between storage load and timeout
+      const storedUser = await Promise.race([storagePromise, timeoutPromise]);
+      
       if (storedUser) {
-        const userData = JSON.parse(storedUser);
-        console.log('Found stored user:', userData);
-        setUser(userData);
+        try {
+          const userData = JSON.parse(storedUser);
+          console.log('✅ Found stored user:', userData.email || userData.id);
+          setUser(userData);
+        } catch (parseError) {
+          console.error('Error parsing stored user data:', parseError);
+          // Clear corrupted data
+          await AsyncStorage.removeItem('userData');
+        }
       } else {
-        console.log('No stored user found');
+        console.log('ℹ️ No stored user found');
       }
     } catch (error) {
       console.error('Error loading stored user:', error);
+      // Don't block app load on storage errors
     } finally {
-      console.log('Finished loading user, setting isLoading to false');
+      console.log('✅ Finished loading user, setting isLoading to false');
       setIsLoading(false);
     }
   };
@@ -58,7 +77,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const login = async (userData: User) => {
     try {
       console.log('Storing user data:', userData);
-      await AsyncStorage.setItem('userData', JSON.stringify(userData));
+      
+      // Validate user data before storing
+      if (!userData.id) {
+        throw new Error('User data is missing required field: id');
+      }
+      
+      // Set timeout for AsyncStorage operation
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Storage operation timeout')), 5000);
+      });
+      
+      const storagePromise = AsyncStorage.setItem('userData', JSON.stringify(userData));
+      await Promise.race([storagePromise, timeoutPromise]);
+      
       console.log('User data stored successfully');
       setUser(userData);
       console.log('User state updated');

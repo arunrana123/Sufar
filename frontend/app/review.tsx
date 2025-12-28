@@ -17,8 +17,10 @@ import { getApiUrl } from '@/lib/config';
 export default function ReviewScreen() {
   const params = useLocalSearchParams();
   const bookingId = params.bookingId as string;
-  const serviceTitle = params.serviceTitle as string;
-  const workerName = params.workerName as string;
+  const serviceTitle = params.serviceTitle as string || 'Service';
+  const workerName = params.workerName as string || 'Worker';
+  const workerId = params.workerId as string;
+  const amount = params.amount as string;
   
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
@@ -49,12 +51,12 @@ export default function ReviewScreen() {
 
       if (response.ok) {
         Alert.alert(
-          'Thank You!',
-          'Your review has been submitted successfully.',
+          '🎉 Thank You!',
+          `Your ${rating}-star review has been submitted successfully!\n\nThis helps ${workerName} improve their service ranking.`,
           [
             {
-              text: 'OK',
-              onPress: () => router.replace('/my-bookings'),
+              text: 'Done',
+              onPress: () => router.replace('/home'),
             },
           ]
         );
@@ -87,6 +89,9 @@ export default function ReviewScreen() {
             <Ionicons name="construct" size={40} color="#FF9800" />
             <Text style={styles.serviceTitle}>{serviceTitle}</Text>
             <Text style={styles.workerName}>by {workerName}</Text>
+            {amount && (
+              <Text style={styles.amountText}>Amount Paid: Rs. {amount}</Text>
+            )}
           </View>
 
           {/* Rating */}
@@ -211,6 +216,12 @@ const styles = StyleSheet.create({
   workerName: {
     fontSize: 14,
     color: '#666',
+  },
+  amountText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#10B981',
+    marginTop: 8,
   },
   section: {
     marginBottom: 24,

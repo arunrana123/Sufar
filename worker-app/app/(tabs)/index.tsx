@@ -17,6 +17,7 @@ import ServiceRegistrationModal from '@/components/ServiceRegistrationModal';
 import ToastNotification from '@/components/ToastNotification';
 import { getApiUrl } from '@/lib/config';
 import { canGoOnline, getVerificationMessage, checkWorkerPermission } from '@/lib/permissions';
+import { detectLocation, AVAILABLE_LOCATIONS } from '@/lib/LocationDetector';
 
 export default function HomeScreen() {
   const { worker } = useAuth();
@@ -41,10 +42,25 @@ export default function HomeScreen() {
     message: '',
   });
 
-  const locations = ['Kathmandu', 'Kanchanpur', 'Kailali'];
+  const locations = AVAILABLE_LOCATIONS;
   const locationService = LocationService.getInstance();
   const mockLocationService = MockLocationService.getInstance();
   const socketService = SocketService.getInstance();
+
+  // Auto-detect location on mount
+  useEffect(() => {
+    const autoDetectLocation = async () => {
+      try {
+        const detectedLocation = await detectLocation();
+        console.log('📍 Auto-detected location:', detectedLocation);
+        setSelectedLocation(detectedLocation);
+      } catch (error) {
+        console.error('Error auto-detecting location:', error);
+      }
+    };
+
+    autoDetectLocation();
+  }, []);
 
   // Fetches worker's registered services from backend on login
   // Triggered by: Worker logs in, component mounts with worker ID
@@ -226,7 +242,7 @@ export default function HomeScreen() {
 
   // Update location state and send to listener
   useEffect(() => {
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       // Check both real and mock location services
       let location = locationService.getCurrentLocation();
       let isTracking = locationService.isLocationTracking();
@@ -243,6 +259,17 @@ export default function HomeScreen() {
         });
         setIsLocationTracking(isTracking);
         
+        // Auto-update selected location based on current coordinates
+        try {
+          const detectedLocation = await detectLocation();
+          if (detectedLocation && detectedLocation !== selectedLocation) {
+            console.log('📍 Location updated automatically:', detectedLocation);
+            setSelectedLocation(detectedLocation);
+          }
+        } catch (error) {
+          console.error('Error updating location:', error);
+        }
+        
         // Update location in booking listener
         if (isTracking && worker?.id) {
           bookingRequestListener.updateLocation({
@@ -258,10 +285,10 @@ export default function HomeScreen() {
         isListening: status.isListening,
         isConnected: status.isConnected,
       });
-    }, 5000); // Update every 5 seconds
+    }, 30000); // Update every 30 seconds (reduced frequency to avoid too many location checks)
 
     return () => clearInterval(interval);
-  }, [worker?.id]);
+  }, [worker?.id, selectedLocation]);
 
   const startLocationTracking = async () => {
     if (!worker?.id) {

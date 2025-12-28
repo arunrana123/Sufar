@@ -6,6 +6,7 @@ import User from "../models/User.model";
 import crypto from 'crypto';
 import { logAdminActivity } from "./dashboard.routes";
 import { OAuth2Client } from 'google-auth-library';
+import { sendUserOTPEmail } from '../utils/userEmailService';
 
 const router = Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -94,6 +95,7 @@ router.post('/login', async (req: Request, res: Response) => {
       email: user.email, 
       username: user.username, 
       firstName: user.firstName,
+      lastName: user.lastName || '',
       profilePhoto: user.profilePhoto,
       role: user.role 
     });
@@ -122,10 +124,29 @@ router.post('/forgot-password', async (req: Request, res: Response) => {
     user.set({ otpCode, otpExpires });
     await user.save();
 
-    // TODO: Send OTP via email service
-    console.log(`OTP for ${email}: ${otpCode}`); // For testing - remove in production
+    // Send OTP via email
+    try {
+      const emailResult = await sendUserOTPEmail(email, otpCode, user.firstName);
+      
+      if (emailResult.success) {
+        console.log(`✅ OTP email sent to ${email}`);
+      } else {
+        console.error(`❌ Failed to send OTP email: ${emailResult.error}`);
+      }
+    } catch (emailError) {
+      console.error('Email service error:', emailError);
+      // Continue even if email fails - OTP is still saved
+    }
+
+    // For testing - show OTP in console
+    console.log(`📧 OTP for ${email}: ${otpCode}`);
     
-    return res.json({ message: 'OTP sent to your email', email });
+    return res.json({ 
+      message: 'OTP sent to your email', 
+      email: email,
+      // For testing only - remove in production
+      otp: process.env.NODE_ENV === 'development' ? otpCode : undefined
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to send OTP' });
   }
@@ -171,6 +192,51 @@ router.post('/reset-password', async (req: Request, res: Response) => {
     return res.json({ message: 'Password reset successful' });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to reset password' });
+  }
+});
+
+// Update user profile
+router.patch('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { firstName, lastName, email, phone, address } = req.body;
+
+    // Build update object with only provided fields
+    const updateData: any = {};
+    if (firstName !== undefined) updateData.firstName = firstName.trim();
+    if (lastName !== undefined) updateData.lastName = lastName.trim();
+    if (email !== undefined) updateData.email = email.toLowerCase().trim();
+    if (phone !== undefined) updateData.phone = phone.trim() || undefined;
+    if (address !== undefined) updateData.address = address.trim() || undefined;
+
+    const user = await User.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    return res.json({
+      _id: user._id,
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      address: user.address,
+      profilePhoto: user.profilePhoto,
+      role: user.role,
+      createdAt: user.createdAt,
+    });
+  } catch (err: any) {
+    console.error('Profile update error:', err);
+    if (err.code === 11000) {
+      return res.status(409).json({ message: 'Email already exists' });
+    }
+    return res.status(500).json({ message: 'Failed to update profile', error: err.message });
   }
 });
 
@@ -272,6 +338,8 @@ router.post('/admin/login', async (req: Request, res: Response) => {
       id: admin.id,
       email: admin.email,
       name: `${admin.firstName} ${admin.lastName}`,
+      phone: admin.phone || null,
+      address: admin.address || null,
       role: admin.role,
       profileImage: admin.profilePhoto || null, // Include profile image in response
       createdAt: admin.createdAt,

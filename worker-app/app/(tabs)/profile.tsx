@@ -19,6 +19,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getApiUrl } from '@/lib/config';
 import { router } from 'expo-router';
 import { socketService } from '@/lib/SocketService';
+import { notificationSoundService } from '@/lib/NotificationSoundService';
+import { pushNotificationService } from '@/lib/PushNotificationService';
 import PasswordChangeModal from '@/components/PasswordChangeModal';
 import NotificationSettingsModal from '@/components/NotificationSettingsModal';
 import HelpSupportModal from '@/components/HelpSupportModal';
@@ -88,6 +90,7 @@ export default function ProfileScreen() {
   }>({});
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const [uploadingCategory, setUploadingCategory] = useState<string | null>(null);
+  const [newServiceSectionExpanded, setNewServiceSectionExpanded] = useState(false);
 
   // Initialize data from worker on mount only
   useEffect(() => {
@@ -111,6 +114,11 @@ export default function ProfileScreen() {
           license: worker.verificationStatus.license || 'pending',
           overall: worker.verificationStatus.overall || 'pending',
         });
+      }
+
+      // Load service categories and their verification status
+      if (worker.id) {
+        loadServiceCategories();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -283,39 +291,143 @@ export default function ProfileScreen() {
     setUploadingCategory(category);
     try {
       const apiUrl = getApiUrl();
+      
+      // Validate file URIs
+      if (!categoryDocs.skillProof || !categoryDocs.experience) {
+        Alert.alert('Error', 'Please upload both documents before submitting.');
+        setUploadingCategory(null);
+        return;
+      }
+
+      // Check if URIs are valid
+      const skillProofUri = categoryDocs.skillProof;
+      const experienceUri = categoryDocs.experience;
+      
+      console.log('📤 Submitting category verification:', {
+        apiUrl,
+        category,
+        workerId: worker.id,
+        skillProofUri: skillProofUri?.substring(0, 50) + '...',
+        experienceUri: experienceUri?.substring(0, 50) + '...',
+      });
+
+      // Test API connectivity first
+      try {
+        const testResponse = await fetch(`${apiUrl}/health`, {
+          method: 'GET',
+          timeout: 5000,
+        } as any);
+        console.log('✅ Backend health check:', testResponse.status);
+      } catch (testError) {
+        console.warn('⚠️ Backend health check failed, but continuing...', testError);
+      }
+
       const formData = new FormData();
       
       formData.append('workerId', worker.id);
       formData.append('category', category);
-      formData.append('skillProof', {
-        uri: categoryDocs.skillProof,
-        type: 'image/jpeg',
-        name: `skillProof-${category}.jpg`,
-      } as any);
-      formData.append('experience', {
-        uri: categoryDocs.experience,
-        type: 'image/jpeg',
-        name: `experience-${category}.jpg`,
-      } as any);
+      
+      // Handle file uploads differently for web vs native
+      if (Platform.OS === 'web') {
+        // For web platform, we need to fetch the file as blob and create File objects
+        try {
+          const skillProofResponse = await fetch(skillProofUri);
+          const skillProofBlob = await skillProofResponse.blob();
+          const skillProofFile = new File([skillProofBlob], `skillProof-${category}-${Date.now()}.jpg`, {
+            type: 'image/jpeg',
+          });
+          
+          const experienceResponse = await fetch(experienceUri);
+          const experienceBlob = await experienceResponse.blob();
+          const experienceFile = new File([experienceBlob], `experience-${category}-${Date.now()}.jpg`, {
+            type: 'image/jpeg',
+          });
+          
+          formData.append('skillProof', skillProofFile);
+          formData.append('experience', experienceFile);
+          
+          console.log('📎 Web platform: Files converted to Blob/File objects');
+        } catch (blobError) {
+          console.error('❌ Error converting files to blob for web:', blobError);
+          throw new Error('Failed to prepare files for upload on web platform');
+        }
+      } else {
+        // For native platforms (iOS/Android)
+        const normalizeUri = (uri: string) => {
+          if (Platform.OS === 'android' && !uri.startsWith('file://') && !uri.startsWith('http')) {
+            return `file://${uri}`;
+          }
+          return uri;
+        };
+        
+        const skillProofFile = {
+          uri: normalizeUri(skillProofUri),
+          type: 'image/jpeg',
+          name: `skillProof-${category}-${Date.now()}.jpg`,
+        };
+        
+        const experienceFile = {
+          uri: normalizeUri(experienceUri),
+          type: 'image/jpeg',
+          name: `experience-${category}-${Date.now()}.jpg`,
+        };
+        
+        console.log('📎 Native platform: File objects prepared:', {
+          skillProofUri: skillProofFile.uri.substring(0, 60) + '...',
+          experienceUri: experienceFile.uri.substring(0, 60) + '...',
+          platform: Platform.OS,
+        });
+        
+        formData.append('skillProof', skillProofFile as any);
+        formData.append('experience', experienceFile as any);
+      }
 
-      const response = await fetch(`${apiUrl}/api/workers/upload-category-documents`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        body: formData,
-      });
+      console.log('📦 FormData prepared, sending request to:', `${apiUrl}/api/workers/upload-category-documents`);
+
+      // Add timeout and better error handling
+      let response;
+      try {
+        // Use Promise.race for timeout (works in all platforms)
+        const fetchPromise = fetch(`${apiUrl}/api/workers/upload-category-documents`, {
+          method: 'POST',
+          // Don't set Content-Type header - let React Native set it automatically with boundary
+          body: formData,
+        });
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Request timeout: The server took too long to respond. Please check your connection.'));
+          }, 30000); // 30 second timeout
+        });
+
+        response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
+      } catch (fetchError: any) {
+        if (fetchError.message?.includes('timeout')) {
+          throw fetchError;
+        }
+        throw fetchError;
+      }
 
       if (response.ok) {
         const result = await response.json();
+        console.log('✅ Category verification submitted successfully:', result);
+        
+        // Update local status to 'pending' (documents submitted, awaiting admin review)
         setCategoryVerificationStatus(prev => ({
           ...prev,
           [category]: 'pending',
         }));
+        
+        // Close the dropdown after successful submission
+        setNewServiceSectionExpanded(false);
+        
+        // Show success message
         Alert.alert(
-          'Documents Submitted',
-          `Your ${category} verification documents have been submitted. Please wait for verification.`,
-          [{ text: 'OK' }]
+          '✅ Documents Submitted Successfully!',
+          `Your ${category} verification documents have been sent to admin for review.\n\n` +
+          `📋 Status: Pending Verification\n\n` +
+          `You will receive a notification once your documents are reviewed. This usually takes 1-2 business days.`,
+          [{ text: 'OK', style: 'default' }]
         );
         // Refresh category data - fetch worker data again to get updated categories
         try {
@@ -348,12 +460,52 @@ export default function ProfileScreen() {
         }
       } else {
         const errorText = await response.text();
-        console.error('Upload error:', errorText);
-        Alert.alert('Error', 'Failed to upload documents. Please try again.');
+        console.error('❌ Upload error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorText,
+        });
+        Alert.alert(
+          'Upload Failed',
+          `Failed to upload documents. ${errorText || 'Please check your connection and try again.'}`
+        );
       }
-    } catch (error) {
-      console.error('Error submitting category verification:', error);
-      Alert.alert('Error', 'Failed to submit documents. Please check your connection and try again.');
+    } catch (error: any) {
+      console.error('❌ Error submitting category verification:', error);
+      console.error('Error details:', {
+        message: error?.message,
+        stack: error?.stack,
+        name: error?.name,
+        apiUrl: getApiUrl(),
+      });
+      
+      // More specific error messages
+      let errorMessage = 'Failed to submit documents.';
+      let errorTitle = 'Submission Failed';
+      
+      if (error?.message?.includes('Network request failed')) {
+        errorTitle = 'Network Error';
+        errorMessage = `Cannot connect to server at ${getApiUrl()}. Please check:\n\n1. Backend server is running\n2. Your device and server are on the same network\n3. Firewall is not blocking the connection`;
+      } else if (error?.message?.includes('timeout')) {
+        errorTitle = 'Request Timeout';
+        errorMessage = 'The request took too long. Please check your connection and try again.';
+      } else if (error?.message) {
+        errorMessage = `Error: ${error.message}`;
+      } else {
+        errorMessage = 'An unexpected error occurred. Please try again.';
+      }
+      
+      Alert.alert(errorTitle, errorMessage, [
+        { text: 'OK', style: 'default' },
+        {
+          text: 'Retry',
+          style: 'default',
+          onPress: () => {
+            // Retry submission
+            setTimeout(() => submitCategoryVerification(category), 500);
+          },
+        },
+      ]);
     } finally {
       setUploadingCategory(null);
     }
@@ -435,9 +587,51 @@ export default function ProfileScreen() {
     }
   };
 
+  // Function to load service categories and their verification status
+  const loadServiceCategories = async () => {
+    if (!worker?.id) return;
+    
+    try {
+      const apiUrl = getApiUrl();
+      console.log('🔄 Loading service categories for worker:', worker.id);
+      const response = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const workerData = await response.json();
+        const categories = workerData.serviceCategories || [];
+        console.log('✅ Service categories loaded:', categories);
+        setServiceCategories(categories);
+        
+        const categoryDocs: { [key: string]: { skillProof: string | null; experience: string | null } } = {};
+        const categoryStatus: { [key: string]: 'pending' | 'verified' | 'rejected' } = {};
+        
+        categories.forEach((cat: string) => {
+          categoryDocs[cat] = {
+            skillProof: workerData.categoryDocuments?.[cat]?.skillProof || null,
+            experience: workerData.categoryDocuments?.[cat]?.experience || null,
+          };
+          categoryStatus[cat] = workerData.categoryVerificationStatus?.[cat] || 'pending';
+        });
+        
+        console.log('📋 Category verification status:', categoryStatus);
+        console.log('📄 Category documents:', categoryDocs);
+        
+        setCategoryVerificationDocs(categoryDocs);
+        setCategoryVerificationStatus(categoryStatus);
+      } else {
+        console.error('❌ Failed to load service categories:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Error loading service categories:', error);
+    }
+  };
+
   useEffect(() => {
     if (worker) {
       fetchNotifications();
+      loadServiceCategories(); // Refresh service categories when worker data changes
       
       // Connect to Socket.IO for real-time verification updates
       if (worker.id) {
@@ -448,6 +642,33 @@ export default function ProfileScreen() {
           console.log('📢 Document verification update received:', data);
           
           if (data.workerId === worker.id) {
+            // Play notification sound
+            notificationSoundService.playNotificationSound('document_verification', data.status);
+            
+            // Send push notification
+            let notificationTitle = 'Verification Update';
+            let notificationMessage = '';
+            
+            if (data.status === 'rejected') {
+              notificationMessage = `Your ${data.documentType.replace(/([A-Z])/g, ' $1').toLowerCase()} is not valid. Please resubmit it.`;
+              notificationTitle = 'Verification Rejected';
+            } else if (data.status === 'verified' && data.overallStatus === 'verified') {
+              notificationMessage = 'Your document is verified. Now you are ready to use your worker service.';
+              notificationTitle = 'Verification Complete';
+            } else if (data.status === 'verified') {
+              notificationMessage = `Your ${data.documentType.replace(/([A-Z])/g, ' $1').toLowerCase()} has been verified.`;
+              notificationTitle = 'Document Verified';
+            }
+            
+            if (notificationMessage) {
+              pushNotificationService.scheduleLocalNotification(
+                notificationTitle,
+                notificationMessage,
+                { type: 'document_verification', status: data.status, documentType: data.documentType },
+                true
+              );
+            }
+            
             // Update verification status
             setVerificationStatus((prev) => ({
               ...prev,
@@ -470,8 +691,9 @@ export default function ProfileScreen() {
               );
             }
             
-            // Refresh notifications
+            // Refresh notifications and service categories
             fetchNotifications();
+            loadServiceCategories();
           }
         };
         
@@ -487,6 +709,19 @@ export default function ProfileScreen() {
       }
     }
   }, [worker]);
+
+  // Refresh service categories when component becomes visible (e.g., when navigating to this tab)
+  useEffect(() => {
+    // Small delay to ensure worker context is ready
+    const timer = setTimeout(() => {
+      if (worker?.id) {
+        console.log('🔄 Refreshing service categories on component focus');
+        loadServiceCategories();
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, []); // Run once on mount
 
   const submitVerification = async () => {
     if (!worker) return;
@@ -1161,6 +1396,167 @@ export default function ProfileScreen() {
             </View>
           )}
 
+          {/* New Service Verification Section - Dropdown */}
+          {(() => {
+            // Always check for pending services
+            const pendingServices = serviceCategories.filter(category => {
+              const status = categoryVerificationStatus[category] || 'pending';
+              const docs = categoryVerificationDocs[category] || { skillProof: null, experience: null };
+              // A service is pending if status is pending OR if documents are missing
+              return status === 'pending' || !docs.skillProof || !docs.experience;
+            });
+
+            // Show section if there are pending services
+            if (pendingServices.length > 0) {
+              return (
+                <View style={styles.detailsSection}>
+                  {/* Dropdown Header */}
+                  <TouchableOpacity 
+                    style={styles.dropdownHeader}
+                    onPress={() => setNewServiceSectionExpanded(!newServiceSectionExpanded)}
+                  >
+                    <View style={styles.dropdownHeaderLeft}>
+                      <Ionicons name="add-circle-outline" size={24} color="#FF7A2C" />
+                      <Text style={styles.sectionTitle}>New Service Verification</Text>
+                    </View>
+                    <View style={styles.dropdownHeaderRight}>
+                      <View style={styles.pendingBadge}>
+                        <Text style={styles.pendingBadgeText}>{pendingServices.length}</Text>
+                      </View>
+                      <TouchableOpacity 
+                        style={styles.refreshButton}
+                        onPress={loadServiceCategories}
+                      >
+                        <Ionicons name="refresh" size={18} color="#FF7A2C" />
+                      </TouchableOpacity>
+                      <Ionicons 
+                        name={newServiceSectionExpanded ? 'chevron-up' : 'chevron-down'} 
+                        size={24} 
+                        color="#666" 
+                      />
+                    </View>
+                  </TouchableOpacity>
+                  
+                  {/* Dropdown Content */}
+                  {newServiceSectionExpanded && (
+                    <View style={styles.dropdownContent}>
+                      <Text style={styles.sectionSubtitle}>
+                        The following services require verification documents. Tap on a service to upload documents.
+                      </Text>
+                      
+                      {pendingServices.map((category) => {
+                        const status = categoryVerificationStatus[category] || 'pending';
+                        const docs = categoryVerificationDocs[category] || { skillProof: null, experience: null };
+                        const isUploading = uploadingCategory === category;
+                        const canSubmit = docs.skillProof && docs.experience && status !== 'verified';
+                        
+                        return (
+                          <View key={category} style={styles.newServiceCard}>
+                            <View style={styles.newServiceHeader}>
+                              <View style={styles.newServiceHeaderLeft}>
+                                <Ionicons 
+                                  name="time-outline" 
+                                  size={24} 
+                                  color="#FF9800" 
+                                />
+                                <Text style={styles.newServiceTitle}>{category}</Text>
+                              </View>
+                              <View style={styles.newServiceStatusBadge}>
+                                <Text style={styles.newServiceStatusText}>Verification Pending</Text>
+                              </View>
+                            </View>
+                            
+                            <View style={styles.newServiceContent}>
+                              <Text style={styles.newServiceMessage}>
+                                This service has been added and requires verification. Upload the required documents below.
+                              </Text>
+                              
+                              {/* Skill Proof Upload */}
+                              <View style={styles.newServiceDocUploadSection}>
+                                <Text style={styles.newServiceDocLabel}>Skill Proof Document *</Text>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.newServiceDocUploadButton,
+                                    docs.skillProof && styles.newServiceDocUploadButtonSuccess
+                                  ]}
+                                  onPress={() => pickCategoryDocument(category, 'skillProof')}
+                                  disabled={isUploading}
+                                >
+                                  <Ionicons
+                                    name={docs.skillProof ? 'checkmark-circle' : 'document-outline'}
+                                    size={20}
+                                    color={docs.skillProof ? '#4CAF50' : '#FF7A2C'}
+                                  />
+                                  <Text style={styles.newServiceDocUploadText}>
+                                    {docs.skillProof ? 'Document Selected' : 'Upload Skill Proof'}
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+
+                              {/* Experience Upload */}
+                              <View style={styles.newServiceDocUploadSection}>
+                                <Text style={styles.newServiceDocLabel}>Working Experience Document *</Text>
+                                <TouchableOpacity
+                                  style={[
+                                    styles.newServiceDocUploadButton,
+                                    docs.experience && styles.newServiceDocUploadButtonSuccess
+                                  ]}
+                                  onPress={() => pickCategoryDocument(category, 'experience')}
+                                  disabled={isUploading}
+                                >
+                                  <Ionicons
+                                    name={docs.experience ? 'checkmark-circle' : 'document-outline'}
+                                    size={20}
+                                    color={docs.experience ? '#4CAF50' : '#FF7A2C'}
+                                  />
+                                  <Text style={styles.newServiceDocUploadText}>
+                                    {docs.experience ? 'Document Selected' : 'Upload Experience'}
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                              
+                              {/* Submit Button */}
+                              {canSubmit && (
+                                <TouchableOpacity
+                                  style={[
+                                    styles.newServiceSubmitButton,
+                                    isUploading && styles.newServiceSubmitButtonDisabled
+                                  ]}
+                                  onPress={() => submitCategoryVerification(category)}
+                                  disabled={isUploading}
+                                >
+                                  <Ionicons
+                                    name={isUploading ? 'hourglass' : 'checkmark-circle'}
+                                    size={20}
+                                    color="#fff"
+                                  />
+                                  <Text style={styles.newServiceSubmitButtonText}>
+                                    {isUploading ? 'Submitting...' : 'Submit for Verification'}
+                                  </Text>
+                                </TouchableOpacity>
+                              )}
+
+                              {/* Status Message - Show appropriate message based on document state */}
+                              {docs.skillProof && docs.experience && !isUploading && (
+                                <View style={styles.statusMessageBox}>
+                                  <Ionicons name="information-circle" size={18} color="#FF9800" />
+                                  <Text style={styles.newServiceStatusMessage}>
+                                    Documents ready! Tap "Submit for Verification" to send to admin for review.
+                                  </Text>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              );
+            }
+            return null;
+          })()}
+
           {/* Service Category Verification Section */}
           {serviceCategories.length > 0 && (
             <View style={styles.detailsSection}>
@@ -1748,6 +2144,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  sectionHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   refreshButton: {
     padding: 8,
   },
@@ -2133,6 +2534,187 @@ const styles = StyleSheet.create({
   categoryStatusMessageError: {
     color: '#F44336',
     backgroundColor: '#FFEBEE',
+  },
+  // Dropdown styles
+  dropdownHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  dropdownHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  dropdownHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dropdownContent: {
+    paddingTop: 12,
+  },
+  // New Service Verification Styles
+  pendingBadge: {
+    backgroundColor: '#FF9800',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    minWidth: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  newServiceCard: {
+    backgroundColor: '#FFF3E0',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FFB74D',
+  },
+  newServiceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  newServiceHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 12,
+  },
+  newServiceTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  newServiceStatusBadge: {
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  newServiceStatusText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  newServiceContent: {
+    gap: 12,
+  },
+  newServiceMessage: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 18,
+  },
+  newServiceDocStatus: {
+    gap: 8,
+    marginTop: 4,
+  },
+  newServiceDocItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  newServiceDocText: {
+    fontSize: 13,
+    color: '#666',
+  },
+  newServiceDocTextMissing: {
+    color: '#FF9800',
+    fontWeight: '600',
+  },
+  newServiceActionHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#FFB74D',
+  },
+  newServiceActionText: {
+    fontSize: 12,
+    color: '#FF7A2C',
+    fontWeight: '600',
+  },
+  newServiceDocUploadSection: {
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  newServiceDocLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  newServiceDocUploadButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#FF7A2C',
+    borderStyle: 'dashed',
+  },
+  newServiceDocUploadButtonSuccess: {
+    borderColor: '#4CAF50',
+    borderStyle: 'solid',
+    backgroundColor: '#F1F8F4',
+  },
+  newServiceDocUploadText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    flex: 1,
+  },
+  newServiceSubmitButton: {
+    backgroundColor: '#FF7A2C',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 10,
+    marginTop: 16,
+    gap: 8,
+  },
+  newServiceSubmitButtonDisabled: {
+    backgroundColor: '#CCCCCC',
+    opacity: 0.6,
+  },
+  newServiceSubmitButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  newServiceStatusMessage: {
+    fontSize: 12,
+    color: '#666',
+    flex: 1,
+    marginLeft: 8,
+  },
+  statusMessageBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#FFF8E1',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFE082',
   },
 });
 

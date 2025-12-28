@@ -8,15 +8,57 @@ import {
   Alert,
   Dimensions,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useAuth } from '@/contexts/AuthContext';
 import { SocketService } from '@/lib/SocketService';
 import { getApiUrl } from '@/lib/config';
 import ToastNotification from '@/components/ToastNotification';
+
+// Lazy load Mapbox to avoid crashes when native modules aren't built
+let MapboxMap: any, Camera: any, ShapeSource: any, LineLayer: any, SymbolLayer: any;
+let DEFAULT_MAP_STYLE: string;
+let getDirections: any;
+let mapboxAvailable = false;
+let ReactNativeMaps: any = null;
+let RNMapView: any = null;
+let RNMarker: any = null;
+let RNPolyline: any = null;
+let useRNMaps = false;
+
+// Try to load Mapbox native modules
+try {
+  const MapboxComponents = require('@rnmapbox/maps');
+  MapboxMap = MapboxComponents.MapView;
+  Camera = MapboxComponents.Camera;
+  ShapeSource = MapboxComponents.ShapeSource;
+  LineLayer = MapboxComponents.LineLayer;
+  SymbolLayer = MapboxComponents.SymbolLayer;
+  
+  const MapboxConfig = require('@/lib/MapboxConfig');
+  DEFAULT_MAP_STYLE = MapboxConfig.DEFAULT_MAP_STYLE;
+  getDirections = MapboxConfig.getDirections;
+  mapboxAvailable = true;
+  console.log('✅ Mapbox native modules loaded successfully');
+} catch (error) {
+  console.log('⚠️ Mapbox native modules not available, trying react-native-maps fallback...');
+  
+  // Try react-native-maps as fallback
+  try {
+    const RNMaps = require('react-native-maps');
+    RNMapView = RNMaps.default || RNMaps;
+    RNMarker = RNMaps.Marker;
+    RNPolyline = RNMaps.Polyline;
+    useRNMaps = true;
+    console.log('✅ Using react-native-maps as fallback');
+  } catch (mapsError) {
+    console.log('⚠️ react-native-maps also not available:', mapsError);
+    useRNMaps = false;
+  }
+}
 
 const { width, height } = Dimensions.get('window');
 const socketService = SocketService.getInstance();
@@ -36,8 +78,16 @@ export default function JobNavigationScreen() {
   const [eta, setEta] = useState<number>(0);
   const [workStartTime, setWorkStartTime] = useState<Date | null>(null);
   const [workDuration, setWorkDuration] = useState<number>(0);
-  const mapRef = useRef<any>(null);
   const locationSubscription = useRef<any>(null);
+  const [routeData, setRouteData] = useState<any>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [cameraBounds, setCameraBounds] = useState<{
+    ne: [number, number];
+    sw: [number, number];
+  } | null>(null);
+  const [mapRegion, setMapRegionState] = useState<any>(null);
+  const destinationKeyRef = useRef<string | null>(null);
+  const mapRef = useRef<any>(null);
   
   // Toast notification state
   const [toast, setToast] = useState<{
@@ -57,6 +107,12 @@ export default function JobNavigationScreen() {
   };
 
   useEffect(() => {
+    // Initialize Mapbox if available
+    if (mapboxAvailable) {
+      const { initializeMapbox } = require('@/lib/MapboxConfig');
+      initializeMapbox();
+    }
+    
     fetchBookingDetails();
     startLocationTracking();
     
@@ -126,6 +182,13 @@ export default function JobNavigationScreen() {
       };
       setWorkerLocation(newLocation);
 
+      // Emit location tracking started event to user
+      socketService.emit('location:tracking:started', {
+        bookingId,
+        workerId: worker?.id,
+        timestamp: new Date().toISOString(),
+      });
+
       // Watch for location changes
       locationSubscription.current = await Location.watchPositionAsync(
         {
@@ -140,21 +203,19 @@ export default function JobNavigationScreen() {
           };
           setWorkerLocation(newLoc);
 
-          // Send location to user via socket
-          if (navStatus === 'navigating') {
-            socketService.emit('worker:location', {
-              bookingId,
-              latitude: newLoc.latitude,
-              longitude: newLoc.longitude,
-              timestamp: new Date().toISOString(),
-            });
-          }
+          // Send location to user via socket (always send when tracking, not just when navigating)
+          socketService.emit('worker:location', {
+            bookingId,
+            latitude: newLoc.latitude,
+            longitude: newLoc.longitude,
+            timestamp: new Date().toISOString(),
+          });
 
           // Calculate distance and ETA
           if (userLocation) {
             const dist = calculateDistance(newLoc, userLocation);
             setDistance(dist);
-            setEta(Math.ceil(dist * 2)); // Rough estimate: 2 min per km
+            setEta(Math.max(1, Math.ceil(dist * 2))); // Rough estimate: 2 min per km
           }
         }
       );
@@ -217,10 +278,14 @@ export default function JobNavigationScreen() {
     setWorkStartTime(startTime);
     setNavStatus('working');
     
+    const startTimeISO = startTime.toISOString();
+    
+    // Emit work started event with timestamp to user
     socketService.emit('work:started', {
       bookingId,
       workerId: worker?.id,
-      startTime: startTime.toISOString(),
+      startTime: startTimeISO,
+      timestamp: startTimeISO,
     });
 
     // Update booking status
@@ -229,7 +294,10 @@ export default function JobNavigationScreen() {
       await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'working', workStartTime: startTime }),
+        body: JSON.stringify({ 
+          status: 'in_progress', 
+          workStartTime: startTimeISO 
+        }),
       });
     } catch (error) {
       console.error('Error updating booking status:', error);
@@ -243,55 +311,97 @@ export default function JobNavigationScreen() {
   };
 
   const handleCompleteWork = () => {
+    // First ask for payment method
     Alert.alert(
-      'Complete Work',
-      'Are you sure you want to mark this job as completed?',
+      'Payment Method',
+      'How will the customer pay?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Complete',
-          onPress: async () => {
-            setNavStatus('completed');
-            
-            socketService.emit('work:completed', {
-              bookingId,
-              workerId: worker?.id,
-              endTime: new Date().toISOString(),
-              duration: workDuration,
-            });
-
-            // Update booking status
-            try {
-              const apiUrl = getApiUrl();
-              await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: 'completed' }),
-              });
-              
-              // Show toast notification
-              showToast(
-                'Great work! The customer will be notified.',
-                'Job Completed!',
-                'success'
-              );
-              
-              // Navigate back after a short delay
-              setTimeout(() => {
-                router.push('/(tabs)');
-              }, 1500);
-            } catch (error) {
-              console.error('Error updating booking status:', error);
-              showToast(
-                'Failed to update booking status. Please try again.',
-                'Error',
-                'error'
-              );
-            }
-          },
+          text: '💵 Cash',
+          onPress: () => handleCashPayment(),
+        },
+        {
+          text: '💳 Online',
+          onPress: () => handleOnlinePayment(),
         },
       ]
     );
+  };
+
+  const handleCashPayment = () => {
+    Alert.alert(
+      'Cash Payment',
+      'Please collect the cash payment from the customer. Confirm when payment is received.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Payment Received',
+          onPress: () => completeJobWithPayment('cash'),
+        },
+      ]
+    );
+  };
+
+  const handleOnlinePayment = () => {
+    Alert.alert(
+      'Online Payment',
+      'Customer will pay online. Waiting for payment confirmation...',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Payment Confirmed',
+          onPress: () => completeJobWithPayment('online'),
+        },
+      ]
+    );
+  };
+
+  const completeJobWithPayment = async (paymentMethod: 'cash' | 'online') => {
+    setNavStatus('completed');
+    
+    // Emit work completed event with payment info
+    socketService.emit('work:completed', {
+      bookingId,
+      workerId: worker?.id,
+      endTime: new Date().toISOString(),
+      duration: workDuration,
+      paymentMethod,
+      paymentStatus: 'paid',
+    });
+
+    // Update booking status
+    try {
+      const apiUrl = getApiUrl();
+      await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'completed',
+          paymentMethod,
+          paymentStatus: 'paid',
+        }),
+      });
+      
+      // Show success notification
+      showToast(
+        `Job completed! Payment received via ${paymentMethod}. Customer has been notified.`,
+        '✅ Job Completed!',
+        'success'
+      );
+      
+      // Navigate back after a short delay
+      setTimeout(() => {
+        router.push('/(tabs)');
+      }, 2000);
+    } catch (error) {
+      console.error('Error updating booking status:', error);
+      showToast(
+        'Failed to update booking status. Please try again.',
+        'Error',
+        'error'
+      );
+    }
   };
 
   const formatDuration = (seconds: number): string => {
@@ -308,21 +418,127 @@ export default function JobNavigationScreen() {
     }
   };
 
-  const fitMapToMarkers = () => {
-    if (mapRef.current && workerLocation && userLocation) {
-      mapRef.current.fitToCoordinates([workerLocation, userLocation], {
-        edgePadding: { top: 100, right: 50, bottom: 300, left: 50 },
-        animated: true,
-      });
+  const updateCameraBounds = () => {
+    if (!workerLocation || !userLocation) return;
+    const minLat = Math.min(workerLocation.latitude, userLocation.latitude);
+    const maxLat = Math.max(workerLocation.latitude, userLocation.latitude);
+    const minLon = Math.min(workerLocation.longitude, userLocation.longitude);
+    const maxLon = Math.max(workerLocation.longitude, userLocation.longitude);
+    setCameraBounds({
+      sw: [minLon, minLat],
+      ne: [maxLon, maxLat],
+    });
+  };
+
+  useEffect(() => {
+    if (workerLocation && userLocation) {
+      updateCameraBounds();
+    }
+  }, [workerLocation, userLocation]);
+
+  const fetchRoute = async (origin: { latitude: number; longitude: number }, destination: { latitude: number; longitude: number }) => {
+    if (!mapboxAvailable || !getDirections) {
+      // Fallback to simple distance calculation if Mapbox not available
+      const dist = calculateDistance(origin, destination);
+      setDistance(dist);
+      setEta(Math.max(1, Math.ceil(dist * 2)));
+      return;
+    }
+    
+    try {
+      const destinationKey = `${destination.latitude.toFixed(5)}-${destination.longitude.toFixed(5)}`;
+      if (destinationKeyRef.current === destinationKey && routeData) {
+        return;
+      }
+      destinationKeyRef.current = destinationKey;
+      const directions = await getDirections(
+        [origin.longitude, origin.latitude],
+        [destination.longitude, destination.latitude]
+      );
+      setRouteData(directions);
+      setRouteError(null);
+      if (directions?.distance) {
+        setDistance(directions.distance / 1000);
+      }
+      if (directions?.duration) {
+        setEta(Math.max(1, Math.ceil(directions.duration / 60)));
+      }
+    } catch (error) {
+      console.error('Error fetching directions:', error);
+      setRouteError('Unable to load directions right now.');
     }
   };
 
   useEffect(() => {
     if (workerLocation && userLocation) {
-      fitMapToMarkers();
+      fetchRoute(workerLocation, userLocation);
     }
   }, [workerLocation, userLocation]);
 
+  // Calculate region for map - Updates in real-time when locations change
+  // MUST be before conditional return to avoid hooks error
+  useEffect(() => {
+    if (workerLocation && userLocation) {
+      const newRegion = {
+        latitude: (workerLocation.latitude + userLocation.latitude) / 2,
+        longitude: (workerLocation.longitude + userLocation.longitude) / 2,
+        latitudeDelta: Math.max(
+          Math.abs(workerLocation.latitude - userLocation.latitude) * 2.5 + 0.01,
+          0.01
+        ),
+        longitudeDelta: Math.max(
+          Math.abs(workerLocation.longitude - userLocation.longitude) * 2.5 + 0.01,
+          0.01
+        ),
+      };
+      setMapRegionState(newRegion);
+    } else if (workerLocation) {
+      setMapRegionState({
+        latitude: workerLocation.latitude,
+        longitude: workerLocation.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      });
+    }
+  }, [workerLocation, userLocation]);
+
+  // Fit map to show both markers
+  // MUST be before conditional return to avoid hooks error
+  useEffect(() => {
+    if (mapRef.current && workerLocation && userLocation && Platform.OS !== 'web') {
+      try {
+        if (mapboxAvailable && mapRef.current.fitToCoordinates) {
+          // Mapbox fitToCoordinates
+          mapRef.current.fitToCoordinates(
+            [
+              { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
+              { latitude: userLocation.latitude, longitude: userLocation.longitude },
+            ],
+            {
+              edgePadding: { top: 80, right: 40, bottom: 320, left: 40 },
+              animated: true,
+            }
+          );
+        } else if (useRNMaps && mapRef.current.fitToCoordinates) {
+          // react-native-maps fitToCoordinates
+          mapRef.current.fitToCoordinates(
+            [
+              { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
+              { latitude: userLocation.latitude, longitude: userLocation.longitude },
+            ],
+            {
+              edgePadding: { top: 80, right: 40, bottom: 320, left: 40 },
+              animated: true,
+            }
+          );
+        }
+      } catch (error) {
+        console.log('Map fit error:', error);
+      }
+    }
+  }, [workerLocation, userLocation]);
+
+  // Early return check - must be after all hooks
   if (!booking || !workerLocation || !userLocation) {
     return (
       <View style={styles.loadingContainer}>
@@ -331,45 +547,155 @@ export default function JobNavigationScreen() {
     );
   }
 
+  // At this point, workerLocation and userLocation are guaranteed to be non-null
+  // Calculate features for Mapbox markers (only used if mapboxAvailable)
+  const workerFeature = pointFeatureCollection(workerLocation);
+  const userFeature = pointFeatureCollection(userLocation);
+
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
         {/* Map */}
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={{
-            latitude: workerLocation.latitude,
-            longitude: workerLocation.longitude,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
-          }}
-        >
-          {/* Worker Marker (You) */}
-          <Marker
-            coordinate={workerLocation}
-            title="You"
-            description="Your current location"
-          >
-            <View style={styles.workerMarker}>
-              <Ionicons name="person" size={24} color="#fff" />
-            </View>
-          </Marker>
+        {mapboxAvailable ? (
+          <MapboxMap styleURL={DEFAULT_MAP_STYLE} style={styles.map} ref={mapRef}>
+            {cameraBounds ? (
+              <Camera
+                bounds={{
+                  ne: cameraBounds.ne,
+                  sw: cameraBounds.sw,
+                  paddingTop: 80,
+                  paddingBottom: 320,
+                  paddingLeft: 40,
+                  paddingRight: 40,
+                }}
+                animationDuration={800}
+              />
+            ) : (
+              <Camera
+                zoomLevel={13}
+                centerCoordinate={[workerLocation.longitude, workerLocation.latitude]}
+              />
+            )}
 
-          {/* User Marker (Customer) */}
-          <Marker
-            coordinate={userLocation}
-            title="Customer"
-            description={booking.location?.address || 'Customer location'}
-          >
-            <View style={styles.userMarker}>
-              <Ionicons name="home" size={24} color="#fff" />
-            </View>
-          </Marker>
-        </MapView>
+            {/* Route between worker and customer */}
+            {routeData?.geometry && (
+              <ShapeSource id="routeSource" shape={routeData.geometry}>
+                <LineLayer
+                  id="routeLayer"
+                  style={{
+                    lineColor: '#FF7A2C',
+                    lineWidth: 4,
+                    lineCap: 'round',
+                    lineJoin: 'round',
+                  }}
+                />
+              </ShapeSource>
+            )}
 
-        {/* Status Card */}
+            {/* Worker marker */}
+            {workerFeature && (
+              <ShapeSource id="workerSource" shape={workerFeature}>
+                <SymbolLayer
+                  id="workerLayer"
+                  style={{
+                    iconImage: 'marker-15',
+                    iconColor: '#2563EB',
+                    iconSize: 1.5,
+                  }}
+                />
+              </ShapeSource>
+            )}
+
+            {/* Customer marker */}
+            {userFeature && (
+              <ShapeSource id="customerSource" shape={userFeature}>
+                <SymbolLayer
+                  id="customerLayer"
+                  style={{
+                    iconImage: 'marker-15',
+                    iconColor: '#DC2626',
+                    iconSize: 1.5,
+                  }}
+                />
+              </ShapeSource>
+            )}
+          </MapboxMap>
+        ) : useRNMaps && RNMapView && mapRegion ? (
+          <RNMapView
+            ref={mapRef}
+            style={styles.map}
+            region={mapRegion}
+            onRegionChangeComplete={(region: any) => setMapRegionState(region)}
+            showsUserLocation={false}
+            showsMyLocationButton={false}
+            provider={Platform.OS === 'android' ? 'google' : undefined}
+            mapType="standard"
+          >
+            {/* Worker Location Marker - Updates in real-time */}
+            {workerLocation && (
+              <RNMarker
+                key={`worker-${workerLocation.latitude}-${workerLocation.longitude}`}
+                coordinate={{
+                  latitude: workerLocation.latitude,
+                  longitude: workerLocation.longitude,
+                }}
+                title="Your Location"
+                description="Worker - Moving"
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={styles.workerMarkerContainer}>
+                  <Ionicons name="person" size={24} color="#fff" />
+                </View>
+              </RNMarker>
+            )}
+
+            {/* Customer Location Marker */}
+            {userLocation && (
+              <RNMarker
+                coordinate={{
+                  latitude: userLocation.latitude,
+                  longitude: userLocation.longitude,
+                }}
+                title="Customer Location"
+                description={booking.location?.address || 'Destination'}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={styles.customerMarkerContainer}>
+                  <Ionicons name="home" size={24} color="#fff" />
+                </View>
+              </RNMarker>
+            )}
+
+            {/* Route Line between worker and customer - Updates in real-time */}
+            {workerLocation && userLocation && RNPolyline && (
+              <RNPolyline
+                key={`route-${workerLocation.latitude}-${userLocation.latitude}`}
+                coordinates={[
+                  { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
+                  { latitude: userLocation.latitude, longitude: userLocation.longitude },
+                ]}
+                strokeColor="#FF7A2C"
+                strokeWidth={4}
+                lineDashPattern={[5, 5]}
+              />
+            )}
+          </RNMapView>
+        ) : (
+          <View style={styles.mapPlaceholder}>
+            <Ionicons name="map-outline" size={64} color="#ccc" />
+            <Text style={styles.mapPlaceholderTitle}>Maps Not Available</Text>
+            <Text style={styles.mapPlaceholderText}>
+              To enable maps, you need to build the native app:{'\n\n'}
+              For Android:{'\n'}
+              bunx expo run:android{'\n\n'}
+              For iOS:{'\n'}
+              bunx expo run:ios{'\n\n'}
+              Maps require native build and cannot run in Expo Go.
+            </Text>
+          </View>
+        )}
+
+        {/* Status Card - Scrollable when arrived to show all content */}
         <View style={styles.statusCard}>
           <View style={styles.statusHeader}>
             <Text style={styles.statusTitle}>
@@ -384,37 +710,82 @@ export default function JobNavigationScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={styles.infoRow}>
-            <View style={styles.infoItem}>
-              <Ionicons name="locate" size={20} color="#FF7A2C" />
-              <Text style={styles.infoText}>{distance.toFixed(2)} km</Text>
-            </View>
-            <View style={styles.infoItem}>
-              <Ionicons name="time" size={20} color="#FF7A2C" />
-              <Text style={styles.infoText}>{eta} min</Text>
-            </View>
-            <View style={styles.infoItem}>
-              <Ionicons name="briefcase" size={20} color="#FF7A2C" />
-              <Text style={styles.infoText}>{booking.serviceName}</Text>
-            </View>
-          </View>
-
-          {/* Customer Info */}
-          <View style={styles.customerInfo}>
-            <Text style={styles.customerLabel}>Customer:</Text>
-            <Text style={styles.customerName}>{booking.userName || 'Customer'}</Text>
-            <Text style={styles.customerAddress}>{booking.location?.address}</Text>
-          </View>
-
-          {/* Work Duration (when working) */}
-          {navStatus === 'working' && (
-            <View style={styles.workTimer}>
-              <Ionicons name="stopwatch" size={24} color="#4CAF50" />
-              <Text style={styles.workDuration}>{formatDuration(workDuration)}</Text>
+          {routeError && (
+            <View style={styles.routeAlert}>
+              <Ionicons name="warning" size={16} color="#EF4444" />
+              <Text style={styles.routeAlertText}>{routeError}</Text>
             </View>
           )}
 
-          {/* Action Buttons */}
+          {navStatus === 'arrived' ? (
+            <ScrollView 
+              style={styles.scrollableContent}
+              showsVerticalScrollIndicator={true}
+              contentContainerStyle={styles.scrollContentContainer}
+            >
+              <View style={styles.infoRow}>
+                <View style={styles.infoItem}>
+                  <Ionicons name="locate" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{distance.toFixed(2)} km</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="time" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{eta} min</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="briefcase" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{booking.serviceName}</Text>
+                </View>
+              </View>
+
+              {/* Customer Info */}
+              <View style={styles.customerInfo}>
+                <Text style={styles.customerLabel}>Customer:</Text>
+                <Text style={styles.customerName}>{booking.userName || 'Customer'}</Text>
+                <Text style={styles.customerAddress}>{booking.location?.address}</Text>
+              </View>
+
+              {/* Arrived Badge */}
+              <View style={styles.arrivedBadge}>
+                <Ionicons name="location" size={20} color="#4CAF50" />
+                <Text style={styles.arrivedText}>You've arrived at the destination!</Text>
+              </View>
+            </ScrollView>
+          ) : (
+            <>
+              <View style={styles.infoRow}>
+                <View style={styles.infoItem}>
+                  <Ionicons name="locate" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{distance.toFixed(2)} km</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="time" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{eta} min</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="briefcase" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{booking.serviceName}</Text>
+                </View>
+              </View>
+
+              {/* Customer Info */}
+              <View style={styles.customerInfo}>
+                <Text style={styles.customerLabel}>Customer:</Text>
+                <Text style={styles.customerName}>{booking.userName || 'Customer'}</Text>
+                <Text style={styles.customerAddress}>{booking.location?.address}</Text>
+              </View>
+
+              {/* Work Duration (when working) */}
+              {navStatus === 'working' && (
+                <View style={styles.workTimer}>
+                  <Ionicons name="stopwatch" size={24} color="#4CAF50" />
+                  <Text style={styles.workDuration}>{formatDuration(workDuration)}</Text>
+                </View>
+              )}
+            </>
+          )}
+
+          {/* Action Buttons - Always visible at bottom */}
           <View style={styles.actions}>
             {navStatus === 'idle' && (
               <TouchableOpacity style={styles.startButton} onPress={handleStartNavigation}>
@@ -438,10 +809,6 @@ export default function JobNavigationScreen() {
 
             {navStatus === 'arrived' && (
               <>
-                <View style={styles.arrivedBadge}>
-                  <Ionicons name="location" size={20} color="#4CAF50" />
-                  <Text style={styles.arrivedText}>You've arrived at the destination!</Text>
-                </View>
                 <TouchableOpacity style={styles.endNavButton} onPress={handleEndNavigation}>
                   <Text style={styles.endNavButtonText}>End Navigation</Text>
                 </TouchableOpacity>
@@ -475,6 +842,20 @@ export default function JobNavigationScreen() {
   );
 }
 
+const pointFeatureCollection = (coords: { latitude: number; longitude: number }) => ({
+  type: 'FeatureCollection',
+  features: [
+    {
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'Point',
+        coordinates: [coords.longitude, coords.latitude],
+      },
+    },
+  ],
+});
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -498,55 +879,111 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#666',
   },
-  workerMarker: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#FF7A2C',
+  mapPlaceholder: {
+    width,
+    height: height * 0.6,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 3,
-    borderColor: '#fff',
+    backgroundColor: '#F3F4F6',
+    padding: 30,
   },
-  userMarker: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#4A90E2',
+  mapPlaceholderTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  mapPlaceholderText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  workerMarkerContainer: {
+    backgroundColor: '#2563EB',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
     borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  customerMarkerContainer: {
+    backgroundColor: '#DC2626',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
   },
   statusCard: {
     flex: 1,
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    padding: 20,
+    padding: 16,
+    paddingBottom: 20,
     marginTop: -20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 10,
+    maxHeight: height * 0.65, // Limit height to ensure buttons are visible
+  },
+  scrollableContent: {
+    maxHeight: 200, // Limit scrollable area height
+    marginBottom: 12,
+  },
+  scrollContentContainer: {
+    paddingBottom: 8,
   },
   statusHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   statusTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
   },
+  routeAlert: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 10,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    marginBottom: 12,
+  },
+  routeAlertText: {
+    color: '#B91C1C',
+    fontSize: 12,
+    flex: 1,
+  },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginBottom: 20,
-    paddingVertical: 12,
+    marginBottom: 12,
+    paddingVertical: 10,
     backgroundColor: '#F8F9FA',
     borderRadius: 12,
   },
@@ -561,8 +998,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   customerInfo: {
-    marginBottom: 20,
-    padding: 16,
+    marginBottom: 12,
+    padding: 12,
     backgroundColor: '#FFF9F0',
     borderRadius: 12,
     borderLeftWidth: 4,
@@ -599,7 +1036,8 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
   },
   actions: {
-    gap: 12,
+    gap: 10,
+    marginTop: 'auto', // Push buttons to bottom
   },
   startButton: {
     flexDirection: 'row',
@@ -654,9 +1092,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
-    padding: 16,
+    padding: 12,
     backgroundColor: '#E8F5E9',
     borderRadius: 12,
+    marginBottom: 8,
   },
   arrivedText: {
     fontSize: 16,

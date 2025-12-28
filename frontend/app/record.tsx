@@ -17,8 +17,7 @@ import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { Colors } from '@/constants/Colors';
-import { useColorScheme } from '@/hooks/useColorScheme';
+import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import BottomNav from '@/components/BottomNav';
 import ToastNotification from '@/components/ToastNotification';
@@ -59,8 +58,7 @@ interface Booking {
 }
 
 export default function RecordScreen() {
-  const colorScheme = useColorScheme();
-  const theme = Colors[colorScheme ?? 'light'];
+  const { theme } = useTheme();
   const { user } = useAuth();
   
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -125,22 +123,18 @@ export default function RecordScreen() {
       fetchBookings();
       socketService.connect(user.id, 'user');
       
-      // Listen for booking cancellation from backend
-      socketService.on('booking:cancelled', (data: any) => {
-        console.log('📢 Booking cancelled notification received:', data);
+      // Listen for booking deletion from backend
+      socketService.on('booking:deleted', (data: any) => {
+        console.log('📢 Booking deleted notification received:', data);
         if (data.bookingId) {
           setBookings(prevBookings => 
-            prevBookings.map(booking => 
-              booking._id === data.bookingId 
-                ? { ...booking, status: 'cancelled' }
-                : booking
-            )
+            prevBookings.filter(booking => booking._id !== data.bookingId)
           );
           // Show toast notification
           showToast(
-            data.message || 'Your service booking has been cancelled',
-            'Booking Cancelled',
-            'error'
+            data.message || 'Your service booking has been deleted',
+            'Booking Deleted',
+            'info'
           );
         }
       });
@@ -194,7 +188,7 @@ export default function RecordScreen() {
     
     // Cleanup socket listeners on unmount
     return () => {
-      socketService.off('booking:cancelled');
+      socketService.off('booking:deleted');
       socketService.off('booking:updated');
       socketService.off('notification:new');
     };
@@ -235,12 +229,10 @@ export default function RecordScreen() {
       
       if (response.ok) {
         console.log('✅ Booking cancelled successfully:', data);
+        
+        // Remove the booking from UI immediately (no refetch needed)
         setBookings(prevBookings => 
-          prevBookings.map(booking => 
-            booking._id === bookingId 
-              ? { ...booking, status: 'cancelled' }
-              : booking
-          ).filter(booking => booking.status !== 'cancelled' || booking._id !== bookingId)
+          prevBookings.filter(booking => booking._id !== bookingId)
         );
         
         // Show toast notification
@@ -249,7 +241,6 @@ export default function RecordScreen() {
           'Booking Cancelled',
           'error'
         );
-        fetchBookings();
       } else {
         console.error('❌ Failed to cancel booking:', data);
         showToast(
@@ -302,7 +293,7 @@ export default function RecordScreen() {
     );
   };
 
-  // Deletes all bookings in parallel using Promise.allSettled()
+  // Deletes all bookings in parallel with proper response checking
   // Triggered by: User confirms "Clear All" in modal
   const handleClearAllBookings = async () => {
     if (!user?.id) {
@@ -320,39 +311,79 @@ export default function RecordScreen() {
     try {
       const apiUrl = getApiUrl();
       console.log('🗑️ Clearing all bookings for user:', user.id);
+      console.log('📝 Total bookings to delete:', bookings.length);
 
-      const deletePromises = bookings.map(booking => 
-        fetch(`${apiUrl}/api/bookings/${booking._id}`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            userId: user.id,
-          }),
-        })
-      );
+      // Delete all bookings and check actual HTTP responses
+      const deletePromises = bookings.map(async (booking) => {
+        try {
+          const response = await fetch(`${apiUrl}/api/bookings/${booking._id}`, {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              userId: user.id,
+            }),
+          });
+          
+          if (response.ok) {
+            console.log(`✅ Successfully deleted booking: ${booking._id}`);
+            return { success: true, bookingId: booking._id };
+          } else {
+            const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+            console.error(`❌ Failed to delete booking ${booking._id}:`, response.status, errorData);
+            return { success: false, bookingId: booking._id, error: errorData.message };
+          }
+        } catch (error) {
+          console.error(`❌ Network error deleting booking ${booking._id}:`, error);
+          return { success: false, bookingId: booking._id, error: 'Network error' };
+        }
+      });
 
       const results = await Promise.allSettled(deletePromises);
-      const successful = results.filter(r => r.status === 'fulfilled').length;
-      const failed = results.filter(r => r.status === 'rejected').length;
+      
+      // Count successful deletions from actual HTTP responses
+      const successfulResults = results.filter((r): r is PromiseFulfilledResult<{ success: boolean; bookingId: string; error?: string }> => 
+        r.status === 'fulfilled' && r.value.success
+      );
+      
+      const successfulDeletions = successfulResults.length;
+      const failedDeletions = results.length - successfulDeletions;
 
-      console.log(`✅ Cleared ${successful} bookings, ${failed} failed`);
-      setBookings([]);
+      console.log(`✅ Successfully deleted: ${successfulDeletions} bookings`);
+      console.log(`❌ Failed to delete: ${failedDeletions} bookings`);
 
-      if (failed > 0) {
-        showToast(
-          `${successful} bookings cleared successfully. ${failed} bookings could not be deleted.`,
-          'Partially Cleared',
-          'warning'
+      // Clear the UI state immediately for successful deletions
+      if (successfulDeletions > 0) {
+        const successfulBookingIds = successfulResults.map(r => r.value.bookingId);
+        
+        // Remove only successfully deleted bookings from UI
+        setBookings(prevBookings => 
+          prevBookings.filter(booking => !successfulBookingIds.includes(booking._id))
         );
-        fetchBookings();
-      } else {
+      }
+
+      // Show appropriate feedback
+      if (failedDeletions === 0) {
         showToast(
           'All service bookings have been cleared successfully.',
           'All Cleared',
           'success'
         );
+      } else if (successfulDeletions > 0) {
+        showToast(
+          `${successfulDeletions} bookings cleared successfully. ${failedDeletions} could not be deleted.`,
+          'Partially Cleared',
+          'warning'
+        );
+      } else {
+        showToast(
+          'Failed to clear any bookings. Please check your internet connection and try again.',
+          'Clear Failed',
+          'error'
+        );
+        // Only refetch if ALL deletions failed due to potential network issues
+        setTimeout(() => fetchBookings(), 1000);
       }
     } catch (error) {
       console.error('❌ Error clearing all bookings:', error);
@@ -361,6 +392,8 @@ export default function RecordScreen() {
         'Error',
         'error'
       );
+      // Only refetch on unexpected errors
+      setTimeout(() => fetchBookings(), 1000);
     } finally {
       setClearingAll(false);
       setClearAllModalVisible(false);
@@ -374,15 +407,15 @@ export default function RecordScreen() {
     setDeleteModalVisible(true);
   };
 
-  // Returns color for booking status (Orange, Blue, Purple, Green, Red)
+  // Returns color for booking status using theme colors
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'pending': return '#FF9800';
-      case 'accepted': return '#2196F3';
-      case 'in_progress': return '#9C27B0';
-      case 'completed': return '#4CAF50';
-      case 'cancelled': return '#F44336';
-      default: return '#666';
+      case 'pending': return theme.warning;
+      case 'accepted': return theme.primary;
+      case 'in_progress': return theme.info;
+      case 'completed': return theme.success;
+      case 'cancelled': return theme.danger;
+      default: return theme.secondary;
     }
   };
 
@@ -432,9 +465,9 @@ export default function RecordScreen() {
       <ThemedView style={styles.container}>
         <Stack.Screen options={{ headerShown: false }} />
         <SafeAreaView style={styles.safe}>
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.tint} />
-            <ThemedText style={styles.loadingText}>Loading your records...</ThemedText>
+          <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
+            <ActivityIndicator size="large" color={theme.primary} />
+            <ThemedText style={[styles.loadingText, { color: theme.secondary }]}>Loading your records...</ThemedText>
           </View>
         </SafeAreaView>
         <BottomNav />
@@ -455,45 +488,45 @@ export default function RecordScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Header */}
-          <View style={styles.header}>
+          <View style={[styles.header, { backgroundColor: theme.primary }]}>
             <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
               <Ionicons name="arrow-back" size={24} color="#fff" />
             </Pressable>
             <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Service Records</ThemedText>
-            <View style={styles.placeholder} />
+            <View style={{ width: 40 }} />
           </View>
           {bookings.length > 0 && (
-            <View style={styles.clearAllContainer}>
+            <View style={[styles.clearAllContainer, { backgroundColor: theme.danger + '10', borderColor: theme.danger + '20' }]}>
               <TouchableOpacity
-                style={styles.clearAllActionButton}
+                style={[styles.clearAllActionButton, { backgroundColor: theme.danger }]}
                 onPress={() => setClearAllModalVisible(true)}
                 activeOpacity={0.85}
               >
                 <Ionicons name="trash" size={20} color="#fff" />
                 <Text style={styles.clearAllActionTextPlain}>Clear All Bookings</Text>
               </TouchableOpacity>
-              <Text style={styles.clearAllHint}>Removes every record from this list</Text>
+              <Text style={[styles.clearAllHint, { color: theme.danger }]}>Removes every record from this list</Text>
             </View>
           )}
           {/* Stats Cards */}
           <View style={styles.statsContainer}>
-            <View style={[styles.statCard, { backgroundColor: theme.background }]}>
-              <Ionicons name="list-outline" size={24} color={theme.tint} />
+            <View style={[styles.statCard, { backgroundColor: theme.card }]}>
+              <Ionicons name="list-outline" size={24} color={theme.primary} />
               <ThemedText style={styles.statNumber}>{serviceCount}</ThemedText>
               <ThemedText style={styles.statLabel}>Total Services</ThemedText>
             </View>
-            <View style={[styles.statCard, { backgroundColor: theme.background }]}>
-              <Ionicons name="time-outline" size={24} color="#FF9800" />
+            <View style={[styles.statCard, { backgroundColor: theme.card }]}>
+              <Ionicons name="time-outline" size={24} color={theme.warning} />
               <ThemedText style={styles.statNumber}>{pendingCount}</ThemedText>
               <ThemedText style={styles.statLabel}>Pending</ThemedText>
             </View>
-            <View style={[styles.statCard, { backgroundColor: theme.background }]}>
-              <Ionicons name="construct-outline" size={24} color="#9C27B0" />
+            <View style={[styles.statCard, { backgroundColor: theme.card }]}>
+              <Ionicons name="construct-outline" size={24} color={theme.info} />
               <ThemedText style={styles.statNumber}>{activeCount}</ThemedText>
               <ThemedText style={styles.statLabel}>Active</ThemedText>
             </View>
-            <View style={[styles.statCard, { backgroundColor: theme.background }]}>
-              <Ionicons name="checkmark-done-outline" size={24} color="#4CAF50" />
+            <View style={[styles.statCard, { backgroundColor: theme.card }]}>
+              <Ionicons name="checkmark-done-outline" size={24} color={theme.success} />
               <ThemedText style={styles.statNumber}>{completedCount}</ThemedText>
               <ThemedText style={styles.statLabel}>Completed</ThemedText>
             </View>
@@ -502,13 +535,13 @@ export default function RecordScreen() {
           {/* Bookings List */}
           {bookings.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="document-outline" size={64} color="#ccc" />
-              <ThemedText style={styles.emptyTitle}>No Service Records</ThemedText>
-              <ThemedText style={styles.emptySubtitle}>
+              <Ionicons name="document-outline" size={64} color={theme.icon} />
+              <ThemedText style={[styles.emptyTitle, { color: theme.text }]}>No Service Records</ThemedText>
+              <ThemedText style={[styles.emptySubtitle, { color: theme.secondary }]}>
                 Your booked services will appear here
               </ThemedText>
               <TouchableOpacity 
-                style={[styles.exploreButton, { backgroundColor: theme.tint }]}
+                style={[styles.exploreButton, { backgroundColor: theme.primary }]}
                 onPress={() => router.push('/home')}
               >
                 <ThemedText style={styles.exploreButtonText}>Book a Service</ThemedText>
@@ -517,7 +550,7 @@ export default function RecordScreen() {
           ) : (
             <View style={styles.bookingsList}>
               {bookings.map((booking) => (
-                <View key={booking._id} style={[styles.bookingCard, { backgroundColor: theme.background }]}>
+                <View key={booking._id} style={[styles.bookingCard, { backgroundColor: theme.card }]}>
                   {/* Status Header */}
                   <View style={styles.statusHeader}>
                     <View style={styles.statusLeft}>
@@ -540,9 +573,9 @@ export default function RecordScreen() {
                       <ThemedText style={styles.serviceTitle}>
                         {booking.serviceName || booking.serviceTitle || 'Service Title Not Available'}
                       </ThemedText>
-                      <View style={styles.serviceIdContainer}>
-                        <ThemedText style={styles.serviceIdLabel}>ID:</ThemedText>
-                        <ThemedText style={styles.serviceIdValue}>
+                      <View style={[styles.serviceIdContainer, { backgroundColor: theme.inputBackground }]}>
+                        <ThemedText style={[styles.serviceIdLabel, { color: theme.secondary }]}>ID:</ThemedText>
+                        <ThemedText style={[styles.serviceIdValue, { color: theme.text }]}>
                           {booking._id?.substring(0, 8).toUpperCase() || 'N/A'}
                         </ThemedText>
                       </View>
@@ -641,35 +674,35 @@ export default function RecordScreen() {
                     )}
 
                     {/* Pricing Information */}
-                    <View style={styles.pricingContainer}>
+                    <View style={[styles.pricingContainer, { backgroundColor: theme.inputBackground }]}>
                       <View style={styles.detailRow}>
                         <Ionicons name="cash-outline" size={16} color={theme.icon} />
-                        <ThemedText style={styles.detailText}>Service Fee Breakdown:</ThemedText>
+                        <ThemedText style={[styles.detailText, { color: theme.secondary }]}>Service Fee Breakdown:</ThemedText>
                       </View>
                       <View style={styles.priceRow}>
-                        <ThemedText style={styles.priceLabel}>Base Price:</ThemedText>
-                        <ThemedText style={styles.priceValue}>
+                        <ThemedText style={[styles.priceLabel, { color: theme.secondary }]}>Base Price:</ThemedText>
+                        <ThemedText style={[styles.priceValue, { color: theme.text }]}>
                           Rs. {booking.basePrice || (booking.price ? (booking.price * 0.8).toFixed(0) : '0')}
                         </ThemedText>
                       </View>
                       <View style={styles.priceRow}>
-                        <ThemedText style={styles.priceLabel}>Service Charge:</ThemedText>
-                        <ThemedText style={styles.priceValue}>
+                        <ThemedText style={[styles.priceLabel, { color: theme.secondary }]}>Service Charge:</ThemedText>
+                        <ThemedText style={[styles.priceValue, { color: theme.text }]}>
                           Rs. {booking.serviceCharge || (booking.price ? (booking.price * 0.2).toFixed(0) : '0')}
                         </ThemedText>
                       </View>
-                      <View style={[styles.priceRow, styles.totalPriceRow]}>
-                        <ThemedText style={styles.totalPriceLabel}>Total Amount:</ThemedText>
-                        <ThemedText style={styles.totalPriceValue}>
+                      <View style={[styles.priceRow, styles.totalPriceRow, { borderTopColor: theme.border }]}>
+                        <ThemedText style={[styles.totalPriceLabel, { color: theme.text }]}>Total Amount:</ThemedText>
+                        <ThemedText style={[styles.totalPriceValue, { color: theme.success }]}>
                           Rs. {booking.totalAmount || booking.price || '0'}
                         </ThemedText>
                       </View>
                       {booking.paymentStatus && (
                         <View style={styles.priceRow}>
-                          <ThemedText style={styles.priceLabel}>Payment Status:</ThemedText>
+                          <ThemedText style={[styles.priceLabel, { color: theme.secondary }]}>Payment Status:</ThemedText>
                           <ThemedText style={[
                             styles.paymentStatus,
-                            { color: booking.paymentStatus === 'paid' ? '#4CAF50' : '#FF9800' }
+                            { color: booking.paymentStatus === 'paid' ? theme.success : theme.warning }
                           ]}>
                             {booking.paymentStatus.charAt(0).toUpperCase() + booking.paymentStatus.slice(1)}
                           </ThemedText>
@@ -678,10 +711,10 @@ export default function RecordScreen() {
                     </View>
 
                     {/* Booking Information */}
-                    <View style={styles.bookingInfo}>
+                    <View style={[styles.bookingInfo, { borderTopColor: theme.border }]}>
                       <View style={styles.detailRow}>
                         <Ionicons name="time-outline" size={16} color={theme.icon} />
-                        <ThemedText style={styles.detailText}>
+                        <ThemedText style={[styles.detailText, { color: theme.secondary }]}>
                           Booked on {new Date(booking.createdAt).toLocaleDateString('en-US', {
                             weekday: 'short',
                             month: 'short',
@@ -694,7 +727,7 @@ export default function RecordScreen() {
                       {booking.estimatedDuration && (
                         <View style={styles.detailRow}>
                           <Ionicons name="hourglass-outline" size={16} color={theme.icon} />
-                          <ThemedText style={styles.detailText}>
+                          <ThemedText style={[styles.detailText, { color: theme.secondary }]}>
                             Estimated Duration: {booking.estimatedDuration} hours
                           </ThemedText>
                         </View>
@@ -706,7 +739,7 @@ export default function RecordScreen() {
                   <View style={styles.actionButtons}>
                     {canTrack(booking.status) && (
                       <TouchableOpacity
-                        style={[styles.trackButton, { backgroundColor: theme.tint }]}
+                        style={[styles.trackButton, { backgroundColor: theme.primary }]}
                         onPress={() => router.push(`/live-tracking?bookingId=${booking._id}`)}
                       >
                         <Ionicons name="navigate" size={18} color="#fff" />
@@ -716,30 +749,30 @@ export default function RecordScreen() {
                     
                     {canDelete(booking.status) && (
                       <TouchableOpacity
-                        style={[styles.deleteButton, { borderColor: '#F44336' }]}
+                        style={[styles.deleteButton, { borderColor: theme.danger }]}
                         onPress={() => showDeleteConfirmation(booking)}
                       >
-                        <Ionicons name="trash-outline" size={18} color="#F44336" />
-                        <ThemedText style={[styles.deleteButtonText, { color: '#F44336' }]}>Cancel</ThemedText>
+                        <Ionicons name="trash-outline" size={18} color={theme.danger} />
+                        <ThemedText style={[styles.deleteButtonText, { color: theme.danger }]}>Cancel</ThemedText>
                       </TouchableOpacity>
                     )}
 
                     {booking.status === 'completed' && (
                       <TouchableOpacity
-                        style={[styles.reviewButton, { borderColor: '#4CAF50' }]}
+                        style={[styles.reviewButton, { borderColor: theme.success }]}
                         onPress={() => router.push(`/review?bookingId=${booking._id}&serviceTitle=${booking.serviceTitle}&workerName=${booking.worker?.name || 'Worker'}`)}
                       >
-                        <Ionicons name="star-outline" size={18} color="#4CAF50" />
-                        <ThemedText style={[styles.reviewButtonText, { color: '#4CAF50' }]}>Review</ThemedText>
+                        <Ionicons name="star-outline" size={18} color={theme.success} />
+                        <ThemedText style={[styles.reviewButtonText, { color: theme.success }]}>Review</ThemedText>
                       </TouchableOpacity>
                     )}
 
                     {booking.status === 'cancelled' && (
                       <TouchableOpacity
-                        style={styles.removeButton}
+                        style={[styles.removeButton, { backgroundColor: theme.danger + '15', borderColor: theme.danger }]}
                         onPress={() => handleRemoveCancelledBooking(booking._id)}
                       >
-                        <Ionicons name="trash" size={20} color="#F44336" />
+                        <Ionicons name="trash" size={20} color={theme.danger} />
                       </TouchableOpacity>
                     )}
                   </View>
@@ -758,18 +791,18 @@ export default function RecordScreen() {
         animationType="fade"
         onRequestClose={() => setDeleteModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: theme.modalOverlay }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
-            <Ionicons name="warning-outline" size={48} color="#F44336" />
-            <ThemedText style={styles.modalTitle}>Cancel Service?</ThemedText>
-            <ThemedText style={styles.modalMessage}>
+            <Ionicons name="warning-outline" size={48} color={theme.danger} />
+            <ThemedText style={[styles.modalTitle, { color: theme.text }]}>Cancel Service?</ThemedText>
+            <ThemedText style={[styles.modalMessage, { color: theme.secondary }]}>
               Are you sure you want to cancel this service booking? This action cannot be undone.
             </ThemedText>
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[
                   styles.modalButton, 
-                  styles.cancelButton,
+                  { backgroundColor: theme.card, borderColor: theme.border },
                   cancelling && { opacity: 0.6 }
                 ]}
                 disabled={cancelling}
@@ -778,12 +811,12 @@ export default function RecordScreen() {
                   setSelectedBooking(null);
                 }}
               >
-                <ThemedText style={styles.cancelButtonText}>Keep Booking</ThemedText>
+                <ThemedText style={[styles.cancelButtonText, { color: theme.text }]}>Keep Booking</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.modalButton, 
-                  styles.confirmButton,
+                  { backgroundColor: theme.danger },
                   cancelling && { opacity: 0.6 }
                 ]}
                 disabled={cancelling}
@@ -807,29 +840,29 @@ export default function RecordScreen() {
         animationType="fade"
         onRequestClose={() => setClearAllModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: theme.modalOverlay }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
-            <Ionicons name="alert-circle-outline" size={48} color="#FF9800" />
-            <ThemedText style={styles.modalTitle}>Clear All Bookings?</ThemedText>
-            <ThemedText style={styles.modalMessage}>
+            <Ionicons name="alert-circle-outline" size={48} color={theme.warning} />
+            <ThemedText style={[styles.modalTitle, { color: theme.text }]}>Clear All Bookings?</ThemedText>
+            <ThemedText style={[styles.modalMessage, { color: theme.secondary }]}>
               Are you sure you want to clear all {bookings.length} service booking{bookings.length > 1 ? 's' : ''}? This will cancel all pending and active bookings. This action cannot be undone.
             </ThemedText>
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[
                   styles.modalButton, 
-                  styles.cancelButton,
+                  { backgroundColor: theme.card, borderColor: theme.border },
                   clearingAll && { opacity: 0.6 }
                 ]}
                 disabled={clearingAll}
                 onPress={() => setClearAllModalVisible(false)}
               >
-                <ThemedText style={styles.cancelButtonText}>Cancel</ThemedText>
+                <ThemedText style={[styles.cancelButtonText, { color: theme.text }]}>Cancel</ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.modalButton, 
-                  styles.confirmButton,
+                  { backgroundColor: theme.danger },
                   clearingAll && { opacity: 0.6 }
                 ]}
                 disabled={clearingAll}
@@ -869,19 +902,17 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: 20,
   },
-  backBtn: { 
+  backBtn: {
     padding: 8,
-    marginLeft: -8,
-    marginRight: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   header: {
-    backgroundColor: '#4A90E2',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
+    paddingVertical: 20,
     marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -890,23 +921,16 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   headerTitle: {
-    flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  placeholder: {
-    width: 40,
   },
   clearAllContainer: {
     paddingHorizontal: 16,
     paddingVertical: 12,
     marginBottom: 16,
-    backgroundColor: '#FFEAEA',
     borderRadius: 12,
     marginHorizontal: 12,
     borderWidth: 1,
-    borderColor: 'rgba(244, 67, 54, 0.15)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -914,7 +938,6 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   clearAllActionButton: {
-    backgroundColor: '#F44336',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -931,7 +954,6 @@ const styles = StyleSheet.create({
   clearAllHint: {
     marginTop: 8,
     textAlign: 'center',
-    color: '#B71C1C',
     fontSize: 13,
     fontWeight: '500',
   },
@@ -1108,7 +1130,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   pricingContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.03)',
     borderRadius: 8,
     padding: 12,
     marginVertical: 8,
@@ -1129,7 +1150,6 @@ const styles = StyleSheet.create({
   },
   totalPriceRow: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
     paddingTop: 8,
     marginTop: 4,
     marginBottom: 0,
@@ -1141,7 +1161,6 @@ const styles = StyleSheet.create({
   totalPriceValue: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#4CAF50',
   },
   paymentStatus: {
     fontSize: 13,
@@ -1151,7 +1170,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
   },
   actionButtons: {
     flexDirection: 'row',

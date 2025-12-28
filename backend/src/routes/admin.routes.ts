@@ -268,21 +268,59 @@ router.post('/verify-document', async (req, res) => {
       [documentType]: status
     };
 
-    // Check overall status
-    const allStatuses = Object.values(updatedVerificationStatus).filter(s => s !== 'pending');
+    // Check overall status - improved logic
+    // Get all document statuses (excluding 'overall' key itself)
+    const documentStatuses = Object.entries(updatedVerificationStatus)
+      .filter(([key]) => key !== 'overall')
+      .map(([, value]) => value);
+    
     let overallStatus = 'pending';
-    if (allStatuses.length > 0) {
-      if (allStatuses.every(s => s === 'verified')) {
-        overallStatus = 'verified';
-      } else if (allStatuses.some(s => s === 'rejected')) {
-        overallStatus = 'rejected';
-      }
+    
+    // If all documents are verified, overall is verified
+    if (documentStatuses.length > 0 && documentStatuses.every(s => s === 'verified')) {
+      overallStatus = 'verified';
+    } 
+    // If any document is rejected, overall is rejected
+    else if (documentStatuses.some(s => s === 'rejected')) {
+      overallStatus = 'rejected';
+    }
+    // If all documents are pending, overall is pending
+    else if (documentStatuses.every(s => s === 'pending' || !s)) {
+      overallStatus = 'pending';
+    }
+    // If some are verified and some are pending, still pending (waiting for all to be verified)
+    else {
+      overallStatus = 'pending';
     }
 
     updatedVerificationStatus.overall = overallStatus;
+    
+    console.log('📊 Overall status calculation:', {
+      documentStatuses,
+      overallStatus,
+      updatedStatus: updatedVerificationStatus,
+      workerId: String(workerId),
+      workerName: worker.name,
+    });
 
-    await WorkerUser.findByIdAndUpdate(workerId, {
+    const updatedWorker = await WorkerUser.findByIdAndUpdate(workerId, {
       verificationStatus: updatedVerificationStatus
+    }, { new: true });
+    
+    // Safely get overall status for logging
+    let finalOverallStatus: string = 'unknown';
+    if (updatedWorker?.verificationStatus) {
+      if (typeof updatedWorker.verificationStatus === 'object' && updatedWorker.verificationStatus !== null) {
+        finalOverallStatus = (updatedWorker.verificationStatus as any).overall || 'unknown';
+      } else {
+        finalOverallStatus = String(updatedWorker.verificationStatus);
+      }
+    }
+    
+    console.log('✅ Worker verification status updated:', {
+      workerId: String(workerId),
+      overallStatus: finalOverallStatus,
+      verificationSubmitted: updatedWorker?.verificationSubmitted,
     });
 
     // Log admin activity

@@ -83,6 +83,7 @@ interface BookingDetails {
 
 export default function LiveTrackingScreen() {
   const params = useLocalSearchParams();
+  const { user } = useAuth();
   const bookingId = Array.isArray(params.bookingId)
     ? params.bookingId[0]
     : params.bookingId as string;
@@ -93,9 +94,12 @@ export default function LiveTrackingScreen() {
   const [workerLocation, setWorkerLocation] = useState<any>(null);
   const [navStatus, setNavStatus] = useState<string>('pending');
   const [workStatus, setWorkStatus] = useState<string>('not_started');
+  const [workStartTime, setWorkStartTime] = useState<Date | null>(null);
+  const [workDuration, setWorkDuration] = useState<number>(0);
   const [eta, setEta] = useState<number>(0);
   const [distance, setDistance] = useState<number>(0);
   const [workerData, setWorkerData] = useState<any>(null);
+  const [locationTrackingStarted, setLocationTrackingStarted] = useState<boolean>(false);
   const mapRef = useRef<any>(null);
 
   const fetchBookingDetails = async () => {
@@ -130,6 +134,18 @@ export default function LiveTrackingScreen() {
           workerName: data.worker?.name,
         });
         setBooking(data);
+        
+        // Set work status and start time if booking is in progress
+        if (data.status === 'in_progress') {
+          setWorkStatus('in_progress');
+          if (data.workStartTime) {
+            const startTime = new Date(data.workStartTime);
+            setWorkStartTime(startTime);
+            console.log('⏰ Work start time loaded from booking:', startTime.toISOString());
+          }
+        } else if (data.status === 'completed') {
+          setWorkStatus('completed');
+        }
         
         // Fetch worker details if workerId exists but worker data is incomplete or missing
         if (data.workerId && (!data.worker || !data.worker.name || !data.worker.phone || !data.worker.profileImage)) {
@@ -242,10 +258,33 @@ export default function LiveTrackingScreen() {
     fetchBookingDetails();
 
     // Connect to socket for real-time updates
-    socketService.connect(bookingId, 'user');
+    if (user?.id) {
+      socketService.connect(user.id, 'user');
+    }
+
+    // Listen for booking accepted
+    const handleBookingAccepted = (data: any) => {
+      if (data.bookingId === bookingId || data.booking?.id === bookingId) {
+        console.log('✅ Booking accepted:', data);
+        setNavStatus('accepted');
+        // Refresh booking details
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 500);
+      }
+    };
+
+    // Listen for location tracking started
+    const handleLocationTrackingStarted = (data: any) => {
+      if (data.bookingId === bookingId) {
+        console.log('📍 Location tracking started');
+        setLocationTrackingStarted(true);
+        setNavStatus('tracking');
+      }
+    };
 
     // Listen for worker location updates
-    socketService.on('worker:location', (data: any) => {
+    const handleWorkerLocation = (data: any) => {
       if (data.bookingId === bookingId) {
         console.log('📍 Worker location update:', data);
         setWorkerLocation({
@@ -265,64 +304,244 @@ export default function LiveTrackingScreen() {
           setEta(Math.ceil(dist * 2)); // 2 min per km
         }
       }
-    });
+    };
 
     // Listen for navigation status changes
-    socketService.on('navigation:started', (data: any) => {
+    const handleNavigationStarted = (data: any) => {
       if (data.bookingId === bookingId) {
         console.log('🚗 Worker started navigation');
         setNavStatus('navigating');
       }
-    });
+    };
 
-    socketService.on('navigation:arrived', (data: any) => {
+    const handleNavigationArrived = (data: any) => {
       if (data.bookingId === bookingId) {
         console.log('📍 Worker arrived');
         setNavStatus('arrived');
         Alert.alert('Worker Arrived!', 'The worker has arrived at your location');
       }
-    });
+    };
 
-    socketService.on('navigation:ended', (data: any) => {
+    const handleNavigationEnded = (data: any) => {
       if (data.bookingId === bookingId) {
         console.log('✅ Navigation ended');
         setNavStatus('ended');
       }
-    });
+    };
 
     // Listen for work status changes
-    socketService.on('work:started', (data: any) => {
+    const handleWorkStarted = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('🔨 Work started');
+        console.log('🔨 Work started at:', data.startTime || data.timestamp);
         setWorkStatus('in_progress');
-      }
-    });
-
-    socketService.on('work:completed', (data: any) => {
-      if (data.bookingId === bookingId) {
-        console.log('✅ Work completed');
-        setWorkStatus('completed');
+        // Set work start time from the event data
+        if (data.startTime || data.timestamp) {
+          const startTime = new Date(data.startTime || data.timestamp);
+          setWorkStartTime(startTime);
+          console.log('⏰ Work start time set to:', startTime.toISOString());
+        }
+        // Update booking status in UI
+        if (booking) {
+          setBooking({
+            ...booking,
+            status: 'in_progress',
+          });
+        }
+        // Show alert
         Alert.alert(
-          'Work Completed!',
-          'The worker has completed the job. Please proceed to payment.',
-          [{ text: 'OK', onPress: () => router.push('/home') }]
+          'Work Started!',
+          'The worker has started working on your service. Timer is running.',
+          [{ text: 'OK' }]
         );
       }
-    });
+    };
+
+    const handleWorkCompleted = (data: any) => {
+      if (data.bookingId === bookingId) {
+        console.log('✅ Work completed:', data);
+        setWorkStatus('completed');
+        // Update booking status in UI
+        if (booking) {
+          setBooking({
+            ...booking,
+            status: 'completed',
+          });
+        }
+        
+        const workerName = data.workerName || booking?.workerId?.firstName || 'Worker';
+        const serviceName = data.serviceName || booking?.serviceName || 'Service';
+        const totalAmount = booking?.price || data.price || 0;
+        const paymentMethod = data.paymentMethod;
+        
+        // Show payment confirmation dialog
+        if (paymentMethod === 'cash') {
+          // Cash payment - confirm and go to review
+          Alert.alert(
+            '✅ Service Completed!',
+            `${workerName} has completed your ${serviceName}!\n\n💵 Total Amount: Rs. ${totalAmount}\n\nPlease pay cash to the worker.`,
+            [
+              {
+                text: 'Payment Done',
+                onPress: () => {
+                  router.push({
+                    pathname: '/review',
+                    params: {
+                      bookingId: bookingId,
+                      serviceTitle: serviceName,
+                      workerName: workerName,
+                      workerId: booking?.workerId?._id || data.workerId,
+                      amount: totalAmount,
+                    },
+                  });
+                },
+              },
+            ]
+          );
+        } else if (paymentMethod === 'online') {
+          // Online payment - show payment options
+          Alert.alert(
+            '✅ Service Completed!',
+            `${workerName} has completed your ${serviceName}!\n\n💳 Total Amount: Rs. ${totalAmount}\n\nPlease complete online payment.`,
+            [
+              {
+                text: 'Pay Now',
+                onPress: () => {
+                  // For now, simulate online payment success
+                  Alert.alert(
+                    'Online Payment',
+                    'Payment options:\n\n• eSewa\n• Khalti\n• Bank Transfer',
+                    [
+                      {
+                        text: 'Payment Completed',
+                        onPress: () => {
+                          router.push({
+                            pathname: '/review',
+                            params: {
+                              bookingId: bookingId,
+                              serviceTitle: serviceName,
+                              workerName: workerName,
+                              workerId: booking?.workerId?._id || data.workerId,
+                              amount: totalAmount,
+                            },
+                          });
+                        },
+                      },
+                    ]
+                  );
+                },
+              },
+            ]
+          );
+        } else {
+          // No payment method specified - go directly to review
+          Alert.alert(
+            '✅ Service Completed!',
+            `${workerName} has completed your ${serviceName}!\n\nTotal Amount: Rs. ${totalAmount}`,
+            [
+              {
+                text: 'Rate & Review',
+                onPress: () => {
+                  router.push({
+                    pathname: '/review',
+                    params: {
+                      bookingId: bookingId,
+                      serviceTitle: serviceName,
+                      workerName: workerName,
+                      workerId: booking?.workerId?._id || data.workerId,
+                      amount: totalAmount,
+                    },
+                  });
+                },
+              },
+            ]
+          );
+        }
+      }
+    };
+
+    // Listen for booking status updates (from backend status endpoint)
+    const handleBookingUpdated = (updatedBooking: any) => {
+      if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
+        console.log('📝 Booking updated event received in live-tracking:', updatedBooking);
+        
+        // Update booking state
+        if (updatedBooking.status) {
+          setBooking(prev => prev ? { ...prev, status: updatedBooking.status } : prev);
+          
+          // Update work status based on booking status
+          if (updatedBooking.status === 'in_progress') {
+            setWorkStatus('in_progress');
+            // If workStartTime is provided, set it
+            if (updatedBooking.workStartTime) {
+              const startTime = new Date(updatedBooking.workStartTime);
+              setWorkStartTime(startTime);
+            }
+          } else if (updatedBooking.status === 'completed') {
+            setWorkStatus('completed');
+          }
+        }
+        
+        // Refresh booking details to get latest data
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 500);
+      }
+    };
+
+    // Register all socket listeners
+    socketService.on('booking:accepted', handleBookingAccepted);
+    socketService.on('location:tracking:started', handleLocationTrackingStarted);
+    socketService.on('worker:location', handleWorkerLocation);
+    socketService.on('navigation:started', handleNavigationStarted);
+    socketService.on('navigation:arrived', handleNavigationArrived);
+    socketService.on('navigation:ended', handleNavigationEnded);
+    socketService.on('work:started', handleWorkStarted);
+    socketService.on('work:completed', handleWorkCompleted);
+    socketService.on('booking:updated', handleBookingUpdated);
 
     // Poll for updates every 30 seconds (backup)
     const interval = setInterval(fetchBookingDetails, 30000);
 
     return () => {
       clearInterval(interval);
-      socketService.off('worker:location');
-      socketService.off('navigation:started');
-      socketService.off('navigation:arrived');
-      socketService.off('navigation:ended');
-      socketService.off('work:started');
-      socketService.off('work:completed');
+      socketService.off('booking:accepted', handleBookingAccepted);
+      socketService.off('location:tracking:started', handleLocationTrackingStarted);
+      socketService.off('worker:location', handleWorkerLocation);
+      socketService.off('navigation:started', handleNavigationStarted);
+      socketService.off('navigation:arrived', handleNavigationArrived);
+      socketService.off('navigation:ended', handleNavigationEnded);
+      socketService.off('work:started', handleWorkStarted);
+      socketService.off('work:completed', handleWorkCompleted);
+      socketService.off('booking:updated', handleBookingUpdated);
     };
-  }, [bookingId]);
+  }, [bookingId, booking, user?.id]);
+
+  // Update work duration timer
+  useEffect(() => {
+    if (workStatus === 'in_progress' && workStartTime) {
+      const interval = setInterval(() => {
+        const now = new Date();
+        const diff = Math.floor((now.getTime() - workStartTime.getTime()) / 1000);
+        setWorkDuration(diff);
+      }, 1000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [workStatus, workStartTime]);
+
+  const formatDuration = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${secs}s`;
+    } else {
+      return `${secs}s`;
+    }
+  };
 
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
     const R = 6371; // Earth's radius in km
@@ -576,18 +795,19 @@ export default function LiveTrackingScreen() {
           <View style={styles.statusHeader}>
             <View style={[styles.statusIndicator, { backgroundColor: getStatusColor(booking.status) }]} />
             <Text style={styles.statusTitle}>
+              {workStatus === 'completed' && 'Work Completed!'}
+              {workStatus === 'in_progress' && 'Work in Progress'}
               {navStatus === 'navigating' && `${workerName} is on the way...`}
               {navStatus === 'arrived' && `${workerName} has arrived!`}
               {navStatus === 'ended' && workStatus === 'not_started' && `Waiting for ${workerName} to start work...`}
-              {workStatus === 'in_progress' && 'Work in Progress'}
-              {workStatus === 'completed' && 'Work Completed!'}
-              {booking.status === 'accepted' && navStatus === 'pending' && `${workerName} accepted! Waiting to start navigation...`}
-              {booking.status === 'pending' && `Request sent to ${workerName}...`}
+              {navStatus === 'tracking' && `${workerName} started location tracking...`}
+              {navStatus === 'accepted' && `${workerName} accepted! Waiting to start location tracking...`}
+              {booking.status === 'pending' && navStatus === 'pending' && `Request sent to ${workerName}...`}
             </Text>
           </View>
 
           {/* Navigation Status Messages */}
-          {booking.status === 'pending' && !navStatus && (
+          {booking.status === 'pending' && navStatus === 'pending' && (
             <View style={styles.requestSentBadge}>
               <View style={styles.pulseDot} />
               <Text style={styles.requestSentText}>
@@ -596,10 +816,30 @@ export default function LiveTrackingScreen() {
             </View>
           )}
 
+          {navStatus === 'accepted' && (
+            <View style={styles.acceptedBadge}>
+              <Ionicons name="checkmark-circle" size={20} color="#2196F3" />
+              <Text style={styles.acceptedText}>
+                {workerName} accepted your request! Waiting for worker to start location tracking...
+              </Text>
+            </View>
+          )}
+
+          {navStatus === 'tracking' && !locationTrackingStarted && (
+            <View style={styles.trackingBadge}>
+              <View style={styles.pulseDot} />
+              <Text style={styles.trackingText}>
+                {workerName} is preparing to start navigation...
+              </Text>
+            </View>
+          )}
+
           {navStatus === 'navigating' && currentWorkerLocation && (
             <View style={styles.movingBadge}>
               <View style={styles.pulseDot} />
-              <Text style={styles.movingText}>{workerName} is on the way • Distance: {calculatedDistance.toFixed(2)} km • ETA: {eta} min</Text>
+              <Text style={styles.movingText}>
+                {workerName} is on the way • Distance: {calculatedDistance.toFixed(2)} km • ETA: {eta} min
+              </Text>
             </View>
           )}
 
@@ -620,7 +860,30 @@ export default function LiveTrackingScreen() {
           {workStatus === 'in_progress' && (
             <View style={styles.workingBadge}>
               <Ionicons name="hammer" size={20} color="#4CAF50" />
-              <Text style={styles.workingText}>{workerName} is working on your project</Text>
+              <View style={styles.workingContent}>
+                <Text style={styles.workingText}>
+                  {workerName} is working on your project
+                </Text>
+                {workStartTime && (
+                  <Text style={styles.workStartTimeText}>
+                    Started: {workStartTime.toLocaleTimeString()}
+                  </Text>
+                )}
+                {workStartTime && workDuration > 0 && (
+                  <Text style={styles.workDurationText}>
+                    Duration: {formatDuration(workDuration)}
+                  </Text>
+                )}
+              </View>
+            </View>
+          )}
+
+          {workStatus === 'completed' && (
+            <View style={styles.completedBadge}>
+              <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+              <Text style={styles.completedText}>
+                {workerName} has completed the work! Please proceed to payment.
+              </Text>
             </View>
           )}
 
@@ -948,6 +1211,35 @@ const styles = StyleSheet.create({
   },
   workingBadge: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#E8F5E9',
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  workingContent: {
+    flex: 1,
+  },
+  workingText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#4CAF50',
+    marginBottom: 4,
+  },
+  workStartTimeText: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  workDurationText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4CAF50',
+    marginTop: 4,
+  },
+  completedBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     padding: 14,
@@ -955,10 +1247,39 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 16,
   },
-  workingText: {
+  completedText: {
     fontSize: 15,
     fontWeight: '600',
     color: '#4CAF50',
+    flex: 1,
+  },
+  acceptedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  acceptedText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#2196F3',
+  },
+  trackingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#FFF3E0',
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  trackingText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FF9800',
   },
 });
 

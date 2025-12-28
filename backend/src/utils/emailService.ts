@@ -9,12 +9,12 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-export const sendOTPEmail = async (email: string, otp: string, workerName?: string) => {
+export const sendOTPEmail = async (email: string, otp: string, userName?: string) => {
   try {
     const mailOptions = {
       from: process.env.EMAIL_USER || 'Sufar Service <noreply@sufar.com>',
       to: email,
-      subject: 'Password Reset OTP - Sufar Worker App',
+      subject: 'Password Reset OTP - Sufar Service App',
       html: `
         <!DOCTYPE html>
         <html>
@@ -33,11 +33,11 @@ export const sendOTPEmail = async (email: string, otp: string, workerName?: stri
         <body>
           <div class="container">
             <div class="header">
-              <h1>Sufar Worker App</h1>
+              <h1>Sufar Service App</h1>
               <p>Password Reset Request</p>
             </div>
             <div class="content">
-              <p>Hello${workerName ? ` ${workerName}` : ''},</p>
+              <p>Hello${userName ? ` ${userName}` : ''},</p>
               <p>You have requested to reset your password. Use the OTP code below to complete the process:</p>
               
               <div class="otp-box">

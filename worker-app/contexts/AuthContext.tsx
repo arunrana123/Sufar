@@ -9,6 +9,10 @@ interface Worker {
   skills: string[];
   token: string;
   profileImage?: string;
+  serviceCategories?: string[];
+  categoryVerificationStatus?: {
+    [category: string]: 'pending' | 'verified' | 'rejected';
+  };
   documents?: {
     profilePhoto?: string | null;
     certificate?: string | null;
@@ -57,9 +61,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const loadStoredWorker = async () => {
     try {
-      // Just check if data exists, but don't auto-login
-      // User must always go through splash -> login -> home
-      const storedWorker = await AsyncStorage.getItem('workerData');
+      // Set a timeout to ensure loading doesn't hang forever (max 3 seconds)
+      const timeoutPromise = new Promise((resolve) => {
+        setTimeout(() => {
+          console.log('⚠️ AsyncStorage timeout - proceeding with app load');
+          resolve(null);
+        }, 3000);
+      });
+
+      const storagePromise = AsyncStorage.getItem('workerData');
+      
+      // Race between storage load and timeout
+      const storedWorker = await Promise.race([storagePromise, timeoutPromise]);
+      
       if (storedWorker) {
         console.log('Stored worker data exists, but user must login');
       }

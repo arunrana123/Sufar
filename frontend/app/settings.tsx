@@ -95,7 +95,7 @@ export default function SettingsScreen() {
   const handleLogout = () => {
     Alert.alert(
       'Logout',
-      'Are you sure you want to logout?',
+      'Are you sure you want to logout from your account?',
       [
         {
           text: 'Cancel',
@@ -107,6 +107,8 @@ export default function SettingsScreen() {
           onPress: async () => {
             try {
               await logout();
+              Alert.alert('Logged Out', 'You have been logged out successfully.');
+              router.replace('/login');
             } catch (error) {
               console.error('Logout error:', error);
               Alert.alert('Error', 'Failed to logout. Please try again.');

@@ -7,19 +7,23 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   Image,
   TextInput,
   Alert,
   SafeAreaView,
 } from 'react-native';
+import { ThemedText } from '@/components/ThemedText';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import BottomNav from '@/components/BottomNav';
 import { getApiUrl } from '@/lib/config';
 
 export default function ProfileScreen() {
+  const { theme } = useTheme();
   const { user, updateUser, logout } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [profileImage, setProfileImage] = useState<string | null>(user?.profilePhoto || null);
@@ -115,18 +119,43 @@ export default function ProfileScreen() {
     setIsEditing(false);
   };
 
+  const handleLogout = () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout from your account?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+              Alert.alert('Logged Out', 'You have been logged out successfully.');
+              router.replace('/login');
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Failed to logout. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.push('/menu')}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Profile</Text>
-          <TouchableOpacity onPress={logout} style={styles.logoutButton}>
-            <Ionicons name="log-out-outline" size={24} color="#fff" />
-          </TouchableOpacity>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.push('/menu')} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Profile</ThemedText>
+          <View style={{ width: 40 }} />
         </View>
 
         <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -134,33 +163,33 @@ export default function ProfileScreen() {
           <View style={styles.imageSection}>
             <View style={styles.imageContainer}>
               {profileImage ? (
-                <Image
-                  source={{ uri: profileImage }}
-                  style={styles.profileImage}
+              <Image
+                source={{ uri: profileImage }}
+                style={[styles.profileImage, { borderColor: theme.tint }]}
                 />
               ) : (
-                <View style={styles.placeholderImage}>
-                  <Ionicons name="person" size={70} color="#4A90E2" />
+                <View style={[styles.placeholderImage, { backgroundColor: theme.tint + '20', borderColor: theme.tint }]}>
+                  <Ionicons name="person" size={70} color={theme.tint} />
                 </View>
               )}
-              <TouchableOpacity style={styles.cameraButton} onPress={pickImage}>
+              <TouchableOpacity style={[styles.cameraButton, { backgroundColor: theme.tint }]} onPress={pickImage}>
                 <Ionicons name="camera" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.imageName}>
+            <Text style={[styles.imageName, { color: theme.text }]}>
               {user?.firstName} {user?.lastName}
             </Text>
-            <Text style={styles.imageEmail}>{user?.email || ''}</Text>
+            <Text style={[styles.imageEmail, { color: theme.secondary }]}>{user?.email || ''}</Text>
           </View>
 
           {/* Profile Details */}
-          <View style={styles.detailsSection}>
+          <View style={[styles.detailsSection, { backgroundColor: theme.card }]}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Personal Information</Text>
+              <Text style={[styles.sectionTitle, { color: theme.text }]}>Personal Information</Text>
               {!isEditing && (
-                <TouchableOpacity onPress={() => setIsEditing(true)} style={styles.editButton}>
-                  <Ionicons name="create-outline" size={20} color="#4A90E2" />
-                  <Text style={styles.editButtonText}>Edit</Text>
+                <TouchableOpacity onPress={() => setIsEditing(true)} style={[styles.editButton, { backgroundColor: theme.primary + '15' }]}>
+                  <Ionicons name="create-outline" size={20} color={theme.primary} />
+                  <Text style={[styles.editButtonText, { color: theme.primary }]}>Edit</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -241,38 +270,12 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Account Section */}
-          <View style={styles.detailsSection}>
-            <Text style={styles.sectionTitle}>Account</Text>
-            
-            <TouchableOpacity style={styles.accountOption} onPress={() => router.push('/settings')}>
-              <Ionicons name="settings-outline" size={20} color="#666" />
-              <Text style={styles.accountOptionText}>Settings</Text>
-              <Ionicons name="chevron-forward" size={20} color="#999" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.accountOption} onPress={() => router.push('/my-bookings')}>
-              <Ionicons name="clipboard-outline" size={20} color="#666" />
-              <Text style={styles.accountOptionText}>My Bookings</Text>
-              <Ionicons name="chevron-forward" size={20} color="#999" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.accountOption}>
-              <Ionicons name="lock-closed-outline" size={20} color="#666" />
-              <Text style={styles.accountOptionText}>Change Password</Text>
-              <Ionicons name="chevron-forward" size={20} color="#999" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.accountOption}>
-              <Ionicons name="help-circle-outline" size={20} color="#666" />
-              <Text style={styles.accountOptionText}>Help & Support</Text>
-              <Ionicons name="chevron-forward" size={20} color="#999" />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={[styles.accountOption, styles.dangerOption]} onPress={logout}>
-              <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-              <Text style={[styles.accountOptionText, styles.dangerText]}>Logout</Text>
-              <Ionicons name="chevron-forward" size={20} color="#EF4444" />
+          {/* Logout Section */}
+          <View style={[styles.detailsSection, { backgroundColor: theme.card }]}>
+            <TouchableOpacity style={[styles.accountOption, styles.dangerOption]} onPress={handleLogout}>
+              <Ionicons name="log-out-outline" size={20} color={theme.danger} />
+              <Text style={[styles.accountOptionText, { color: theme.danger }]}>Logout</Text>
+              <Ionicons name="chevron-forward" size={20} color={theme.danger} />
             </TouchableOpacity>
           </View>
 
@@ -293,21 +296,26 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    backgroundColor: '#4A90E2',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  backBtn: {
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#fff',
-  },
-  logoutButton: {
-    padding: 8,
   },
   scrollView: {
     flex: 1,
@@ -315,7 +323,6 @@ const styles = StyleSheet.create({
   imageSection: {
     alignItems: 'center',
     paddingVertical: 30,
-    backgroundColor: '#fff',
     marginBottom: 20,
   },
   imageContainer: {
@@ -327,23 +334,19 @@ const styles = StyleSheet.create({
     height: 140,
     borderRadius: 70,
     borderWidth: 4,
-    borderColor: '#4A90E2',
   },
   placeholderImage: {
     width: 140,
     height: 140,
     borderRadius: 70,
-    backgroundColor: '#E3F2FD',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 4,
-    borderColor: '#4A90E2',
   },
   cameraButton: {
     position: 'absolute',
     bottom: 5,
     right: 5,
-    backgroundColor: '#4A90E2',
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -371,7 +374,6 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   detailsSection: {
-    backgroundColor: '#fff',
     padding: 20,
     marginBottom: 20,
   },
@@ -392,7 +394,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   editButtonText: {
-    color: '#4A90E2',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -440,7 +441,6 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     flex: 1,
-    backgroundColor: '#4A90E2',
     paddingVertical: 14,
     borderRadius: 8,
     alignItems: 'center',

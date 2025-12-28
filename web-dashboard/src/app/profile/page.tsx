@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import SidebarLayout from '../../components/SidebarLayout';
 
 type AdminProfile = {
   id: string;
   name: string;
   email: string;
   phone?: string;
+  address?: string;
   role: string;
   profileImage?: string;
   createdAt: string;
@@ -26,6 +26,7 @@ export default function ProfilePage() {
     name: '',
     email: '',
     phone: '',
+    address: '',
   });
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export default function ProfilePage() {
           name: parsedAdmin.name || '',
           email: parsedAdmin.email || '',
           phone: parsedAdmin.phone || '',
+          address: parsedAdmin.address || '',
         });
         setProfileImage(parsedAdmin.profileImage || null);
         setLoading(false);
@@ -139,37 +141,50 @@ export default function ProfilePage() {
 
     setSaving(true);
     try {
-      // For now, we'll update the local storage directly since the backend API might not be ready
-      // This provides immediate feedback and works offline
-      const updateData = {
-        name: formData.name,
-        email: formData.email,
-        phone: formData.phone,
-        profileImage: profileImage,
-      };
-
-      // Update localStorage with new data
-      const updatedAdminData = {
-        ...admin,
-        ...updateData,
-        updatedAt: new Date().toISOString(),
-      };
-      localStorage.setItem('adminUser', JSON.stringify(updatedAdminData));
-      setAdmin(updatedAdminData);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
       
-      // Dispatch a custom event to notify other components (like SidebarLayout)
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('adminProfileUpdated', { 
-          detail: updatedAdminData 
-        }));
-      }
+      // Split name into firstName and lastName
+      const nameParts = formData.name.trim().split(/\s+/);
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || firstName;
 
-      // Try to sync with backend if available
+      // Update profile in database first
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-        
+        const updatePayload: any = {
+          firstName: firstName,
+          lastName: lastName,
+          email: formData.email,
+        };
+
+        // Add phone if provided
+        if (formData.phone) {
+          updatePayload.phone = formData.phone;
+        }
+
+        // Add address if provided (we'll store it in a custom field or use a workaround)
+        if (formData.address) {
+          // Store address in a custom field - backend will need to support this
+          updatePayload.address = formData.address;
+        }
+
+        const userRes = await fetch(`${apiUrl}/api/users/${admin.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updatePayload),
+        });
+
+        if (!userRes.ok) {
+          const errorData = await userRes.json();
+          throw new Error(errorData.message || 'Failed to update profile in database');
+        }
+
+        const updatedUser = await userRes.json();
+        console.log('✅ Profile updated in database:', updatedUser);
+
         // Update profile photo if image was changed
-        if (profileImage) {
+        if (profileImage && profileImage !== admin.profileImage) {
           const profilePhotoRes = await fetch(`${apiUrl}/api/users/profile-photo`, {
             method: 'PATCH',
             headers: {
@@ -177,48 +192,55 @@ export default function ProfilePage() {
             },
             body: JSON.stringify({
               userId: admin.id,
-              profilePhoto: profileImage, // Backend uses profilePhoto field
+              profilePhoto: profileImage,
             }),
           });
 
           if (profilePhotoRes.ok) {
-            console.log('Profile photo synced with backend successfully');
+            const photoData = await profilePhotoRes.json();
+            console.log('✅ Profile photo updated in database');
           } else {
-            console.warn('Backend profile photo sync failed, but profile saved locally');
+            console.warn('⚠️ Profile photo update failed, but profile data was saved');
           }
         }
 
-        // Try to update other profile fields (if endpoint exists)
-        try {
-          const userRes = await fetch(`${apiUrl}/api/users/${admin.id}`, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              firstName: formData.name.split(' ')[0],
-              lastName: formData.name.split(' ').slice(1).join(' ') || formData.name.split(' ')[0],
-              email: formData.email,
-              phone: formData.phone,
-            }),
-          });
+        // Update localStorage with new data from database
+        const updatedAdminData = {
+          id: updatedUser._id || updatedUser.id || admin.id,
+          name: `${updatedUser.firstName || firstName} ${updatedUser.lastName || lastName}`.trim(),
+          email: updatedUser.email || formData.email,
+          phone: updatedUser.phone || formData.phone || '',
+          address: updatedUser.address || formData.address || '',
+          role: updatedUser.role || admin.role,
+          profileImage: updatedUser.profilePhoto || profileImage || admin.profileImage,
+          createdAt: updatedUser.createdAt || admin.createdAt,
+          updatedAt: new Date().toISOString(),
+        };
 
-          if (userRes.ok) {
-            console.log('Profile data synced with backend successfully');
-          }
-        } catch (updateError) {
-          console.warn('Backend profile data sync failed, but profile saved locally');
+        localStorage.setItem('adminUser', JSON.stringify(updatedAdminData));
+        setAdmin(updatedAdminData);
+        
+        // Dispatch a custom event to notify other components (like SidebarLayout)
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('adminProfileUpdated', { 
+            detail: updatedAdminData 
+          }));
         }
-      } catch (backendError) {
-        console.warn('Backend not available, profile saved locally only:', backendError);
+
+        setMessage({ type: 'success', text: 'Profile updated successfully and saved to database!' });
+        setTimeout(() => setMessage(null), 3000);
+      } catch (backendError: any) {
+        console.error('❌ Backend update error:', backendError);
+        setMessage({ 
+          type: 'error', 
+          text: backendError.message || 'Failed to update profile in database. Please try again.' 
+        });
+        setTimeout(() => setMessage(null), 5000);
       }
-
-      setMessage({ type: 'success', text: 'Profile updated successfully!' });
-      setTimeout(() => setMessage(null), 3000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating profile:', error);
-      setMessage({ type: 'error', text: 'Failed to update profile. Please try again.' });
-      setTimeout(() => setMessage(null), 5001);
+      setMessage({ type: 'error', text: error.message || 'Failed to update profile. Please try again.' });
+      setTimeout(() => setMessage(null), 5000);
     } finally {
       setSaving(false);
     }
@@ -234,27 +256,22 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <SidebarLayout adminName="Admin">
-        <div className="p-8 flex items-center justify-center min-h-screen">
-          <div className="text-xl">Loading...</div>
-        </div>
-      </SidebarLayout>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Loading...</div>
+      </div>
     );
   }
 
   if (!admin) {
     return (
-      <SidebarLayout adminName="Admin">
-        <div className="p-8 flex items-center justify-center min-h-screen">
-          <div className="text-xl">Admin not found</div>
-        </div>
-      </SidebarLayout>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Admin not found</div>
+      </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name || 'Admin'}>
-      <div className="p-8">
+    <div className="p-8">
         <div className="max-w-4xl mx-auto">
           <div className="bg-white rounded-lg shadow">
             <div className="px-6 py-4 border-b border-gray-200">
@@ -309,7 +326,7 @@ export default function ProfilePage() {
                           </div>
                         )}
                       </div>
-                      <label className="absolute bottom-0 right-0 bg-blue-600 text-white rounded-full p-2 cursor-pointer hover:bg-blue-700 transition-colors">
+                      <label className="absolute bottom-0 right-0 bg-purple-600 text-white rounded-full p-2 cursor-pointer hover:bg-purple-700 transition-colors">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -344,7 +361,7 @@ export default function ProfilePage() {
                         name="name"
                         value={formData.name}
                         onChange={handleInputChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-purple-500 focus:border-purple-500"
                         placeholder="Enter your full name"
                       />
                     </div>
@@ -359,7 +376,7 @@ export default function ProfilePage() {
                         name="email"
                         value={formData.email}
                         onChange={handleInputChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-purple-500 focus:border-purple-500"
                         placeholder="Enter your email address"
                       />
                     </div>
@@ -374,8 +391,23 @@ export default function ProfilePage() {
                         name="phone"
                         value={formData.phone}
                         onChange={handleInputChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-purple-500 focus:border-purple-500"
                         placeholder="Enter your phone number"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="address" className="block text-sm font-medium text-gray-700">
+                        Address
+                      </label>
+                      <textarea
+                        id="address"
+                        name="address"
+                        value={formData.address}
+                        onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                        rows={3}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+                        placeholder="Enter your address"
                       />
                     </div>
 
@@ -411,10 +443,11 @@ export default function ProfilePage() {
                             name: admin.name || '',
                             email: admin.email || '',
                             phone: admin.phone || '',
+                            address: admin.address || '',
                           });
                           setProfileImage(admin.profileImage || null);
                         }}
-                        className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
                       >
                         Cancel
                       </button>
@@ -422,7 +455,7 @@ export default function ProfilePage() {
                         type="button"
                         onClick={handleSaveProfile}
                         disabled={saving}
-                        className="px-4 py-2 bg-blue-600 border border-transparent rounded-md text-sm font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-4 py-2 bg-purple-600 border border-transparent rounded-md text-sm font-medium text-white hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {saving ? 'Saving...' : 'Save Changes'}
                       </button>
@@ -434,6 +467,5 @@ export default function ProfilePage() {
           </div>
         </div>
       </div>
-    </SidebarLayout>
   );
 }

@@ -3,13 +3,11 @@ import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { Colors } from '@/constants/Colors';
-import { useColorScheme } from '@/hooks/useColorScheme';
+import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 
 export default function MenuScreen() {
-  const colorScheme = useColorScheme() ?? 'light';
-  const theme = Colors[colorScheme];
+  const { theme } = useTheme();
 
   const menuItems = [
     {
@@ -38,12 +36,12 @@ export default function MenuScreen() {
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
-        <View style={styles.header}>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
+            <Ionicons name="arrow-back" size={28} color="#fff" />
           </Pressable>
           <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Menu</ThemedText>
-          <View style={styles.placeholder} />
+          <View style={{ width: 40 }} />
         </View>
 
         <View style={styles.content}>
@@ -53,7 +51,7 @@ export default function MenuScreen() {
               style={[
                 styles.menuItem,
                 (item as any).isSmall ? styles.smallMenuItem : null,
-                { backgroundColor: theme.background, borderColor: theme.icon + '20' }
+                { backgroundColor: theme.card, borderColor: theme.border }
               ]}
               onPress={item.onPress}
             >
@@ -84,19 +82,17 @@ export default function MenuScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safe: { flex: 1 },
-  backBtn: { 
+  backBtn: {
     padding: 8,
-    marginLeft: -8,
-    marginRight: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   header: {
-    backgroundColor: '#4A90E2',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
+    paddingVertical: 20,
     marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -105,13 +101,8 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   headerTitle: {
-    flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  placeholder: {
-    width: 40,
   },
   content: {
     flex: 1,

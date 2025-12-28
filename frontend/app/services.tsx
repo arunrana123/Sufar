@@ -245,12 +245,15 @@ export default function ServicesScreen() {
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
-        <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={28} color={theme.text} />
-        </Pressable>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Available Services</ThemedText>
+          <View style={{ width: 40 }} />
+        </View>
         
-        <View style={styles.header}>
-          <ThemedText type="title" style={styles.title}>Available Services</ThemedText>
+        <View style={styles.content}>
           <ThemedText style={styles.subtitle}>
             {services.length} service{services.length !== 1 ? 's' : ''} available
           </ThemedText>
@@ -350,18 +353,32 @@ export default function ServicesScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safe: { flex: 1 },
-  backBtn: { position: 'absolute', top: 20, left: 12, padding: 6, zIndex: 10 },
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
     marginBottom: 8,
-    textAlign: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  backBtn: {
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  content: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    alignItems: 'center',
   },
   subtitle: {
     fontSize: 16,
@@ -373,6 +390,14 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     marginTop: 4,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 16,
   },
   scrollView: {
     flex: 1,

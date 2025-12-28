@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import SidebarLayout from '../../components/SidebarLayout';
 import FloatingActionButton from '../../components/FloatingActionButton';
 import ServiceFormModal from '../../components/ServiceFormModal';
 import EditServiceModal from '../../components/EditServiceModal';
@@ -667,15 +666,14 @@ export default function ServicesPage() {
 
   if (loading || !admin) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Loading...</div>
       </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name}>
-      <div className="p-8">
+    <div className="p-8">
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <div className="flex items-center space-x-4">
@@ -925,7 +923,6 @@ export default function ServicesPage() {
             </div>
           )}
         </div>
-      </div>
 
       {/* Floating Action Button */}
       <FloatingActionButton onAddService={handleAddService} />
@@ -947,6 +944,6 @@ export default function ServicesPage() {
         onSuccess={handleServiceUpdated}
         service={editingService}
       />
-    </SidebarLayout>
+    </div>
   );
 }

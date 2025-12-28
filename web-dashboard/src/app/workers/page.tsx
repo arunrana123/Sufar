@@ -4,7 +4,6 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import SidebarLayout from '../../components/SidebarLayout';
 import { socketService } from '../../lib/socketService';
 
 type ServiceCategory = {
@@ -160,37 +159,61 @@ export default function WorkersPage() {
     // Listen for document verification updates (when worker is approved/rejected)
     const handleVerificationUpdated = (data: any) => {
       console.log('📢 Worker verification updated:', data);
+      console.log('📢 Verification details:', {
+        workerId: data.workerId,
+        documentType: data.documentType,
+        status: data.status,
+        overallStatus: data.overallStatus,
+      });
       setIsUpdating(true);
       // Refresh stats immediately when verification status changes
+      // Use a shorter delay for better real-time feel
       setTimeout(() => {
         fetchServiceCategories().finally(() => {
           setIsUpdating(false);
+          console.log('✅ Worker stats refreshed after document verification');
         });
-      }, 500); // Small delay to ensure backend has saved the changes
+      }, 300);
     };
 
     // Listen for admin dashboard-specific worker stats updates
     const handleDashboardStatsUpdate = (data: any) => {
       console.log('📊 Admin dashboard worker stats update:', data);
+      console.log('📊 Update details:', {
+        workerId: data.workerId,
+        overallStatus: data.overallStatus,
+        action: data.action,
+      });
       setIsUpdating(true);
-      // Refresh stats immediately
+      // Refresh stats immediately - this is the main event for stats updates
+      // This event is emitted when a worker is verified, so stats need to update
+      // Use a slightly longer delay to ensure backend has fully saved the changes
       setTimeout(() => {
         fetchServiceCategories().finally(() => {
           setIsUpdating(false);
+          console.log('✅ Worker stats refreshed after verification update');
+          console.log('📊 Updated stats should now reflect correct pending/verified counts');
         });
-      }, 500);
+      }, 500); // Increased delay to ensure database is updated
     };
 
     // Listen for new document submissions
     const handleDocumentSubmitted = (worker: any) => {
       console.log('📢 New document submission received:', worker);
+      console.log('📢 Submission details:', {
+        workerId: worker._id || worker.id,
+        workerName: worker.name,
+        serviceCategories: worker.serviceCategories,
+      });
       setIsUpdating(true);
       // Refresh stats to show new pending request
+      // This will update the pending count in the relevant category cards
       setTimeout(() => {
         fetchServiceCategories().finally(() => {
           setIsUpdating(false);
+          console.log('✅ Worker stats refreshed after new document submission');
         });
-      }, 500);
+      }, 500); // Slightly longer delay for new submissions to ensure backend has processed
     };
 
     // Wait a bit for socket connection to establish
@@ -217,15 +240,14 @@ export default function WorkersPage() {
 
   if (loading || !admin) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
+      <div className="p-8 flex items-center justify-center min-h-[400px]">
+        <div className="text-xl text-gray-600">Loading...</div>
       </div>
     );
   }
 
   return (
-    <SidebarLayout adminName={admin.name}>
-      <div className="p-8">
+    <div className="p-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Worker Management</h1>
@@ -240,7 +262,7 @@ export default function WorkersPage() {
               <p className="text-sm text-gray-500 mt-1">
                 Live statistics for each service type
                 {isUpdating && (
-                  <span className="ml-2 inline-flex items-center gap-1 text-blue-600">
+                  <span className="ml-2 inline-flex items-center gap-1 text-purple-600">
                     <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
@@ -255,7 +277,7 @@ export default function WorkersPage() {
                 fetchServiceCategories();
               }}
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -300,7 +322,7 @@ export default function WorkersPage() {
                   setLoading(true);
                   fetchServiceCategories();
                 }}
-                className="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                className="px-4 py-2 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
               >
                 Refresh Data
               </button>
@@ -419,7 +441,6 @@ export default function WorkersPage() {
             </div>
           )}
         </div>
-      </div>
-    </SidebarLayout>
+    </div>
   );
 }

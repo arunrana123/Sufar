@@ -2,6 +2,7 @@
 // Endpoints: POST /create, GET /user/:userId, GET /:id, DELETE /:id, PUT /:id/status
 // Features: Create bookings, fetch user bookings, update status, cancel bookings, Socket.IO notifications
 import { Router, Request, Response } from 'express';
+import mongoose from 'mongoose';
 import Booking from '../models/Booking.model';
 import WorkerUser from '../models/WorkerUser.model';
 import User from '../models/User.model';
@@ -65,6 +66,9 @@ router.post('/', async (req: Request, res: Response) => {
       ? location.address.trim()
       : `Location at ${location.coordinates.latitude}, ${location.coordinates.longitude}`;
 
+    // Check if this is a scheduled booking (for future date/time)
+    const isScheduled = scheduledDate && new Date(scheduledDate) > new Date();
+    
     const booking = new Booking({
       userId,
       serviceId,
@@ -80,50 +84,152 @@ router.post('/', async (req: Request, res: Response) => {
         },
       },
       scheduledDate: scheduledDate ? new Date(scheduledDate) : undefined,
-      price: parseFloat(price) || 0
+      price: parseFloat(price) || 0,
+      isScheduled: isScheduled || false,
     });
 
     console.log('Creating booking with data:', booking.toObject());
-    console.log('Scheduled date:', scheduledDate ? new Date(scheduledDate) : 'Not scheduled');
+    console.log('Scheduled date:', scheduledDate ? new Date(scheduledDate) : 'Instant booking');
+    console.log('Is scheduled booking:', isScheduled);
     await booking.save();
     console.log('Booking saved successfully:', booking._id);
     console.log('Booking status:', booking.status);
 
-    // Emit real-time event to notify workers
+    // Emit real-time event to notify workers (only verified workers for this service category)
     const io = req.app.get('io');
     if (io) {
-      const bookingRequest = {
-        _id: booking._id,
-        userId: booking.userId,
-        serviceId: booking.serviceId,
-        serviceName: booking.serviceName,
-        serviceCategory: booking.serviceCategory,
-        price: booking.price,
-        location: booking.location,
-        createdAt: booking.createdAt,
-        workerId: booking.workerId, // Include assigned worker ID if present
+      // Find available workers with location for distance calculation
+      const userLat = location.coordinates.latitude;
+      const userLng = location.coordinates.longitude;
+      
+      // Helper function to calculate distance between two coordinates (Haversine formula)
+      const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+        const R = 6371; // Earth's radius in km
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c; // Distance in km
       };
       
-      console.log('📤 EMITTING booking:request to "worker" room');
-      console.log('📋 Booking details:', {
-        bookingId: booking._id,
-        serviceName: booking.serviceName,
-        serviceCategory: booking.serviceCategory,
-        assignedTo: booking.workerId || 'Not assigned yet',
-      });
-      
-      // Check how many sockets are in the worker room
-      const workerRoom = io.sockets.adapter.rooms.get('worker');
-      const workerCount = workerRoom ? workerRoom.size : 0;
-      console.log(`🎧 Currently ${workerCount} worker(s) listening in 'worker' room`);
-      
-      if (workerCount === 0) {
-        console.warn('⚠️ WARNING: No workers connected to receive this request!');
+      // Find all workers who:
+      // 1. Have this service category in their serviceCategories array
+      // 2. Are available (status === 'available' and isActive === true)
+      try {
+        const availableWorkers = await WorkerUser.find({
+          serviceCategories: { $elemMatch: { $regex: new RegExp(`^${booking.serviceCategory}$`, 'i') } },
+          isActive: true,
+          status: 'available',
+        }).select('_id name email phone serviceCategories categoryVerificationStatus location lastLocation');
+
+        console.log(`🔍 Found ${availableWorkers.length} available workers with service category "${booking.serviceCategory}"`);
+
+        // Filter workers who have this service category and calculate distance
+        const eligibleWorkers = availableWorkers
+          .filter((worker) => {
+            const hasCategory = worker.serviceCategories?.some(
+              (cat: string) => cat.toLowerCase() === booking.serviceCategory.toLowerCase()
+            );
+            return hasCategory;
+          })
+          .map((worker) => {
+            // Calculate distance if worker has location
+            let distance = Infinity;
+            const workerLoc = worker.lastLocation || worker.location;
+            if (workerLoc?.coordinates?.latitude && workerLoc?.coordinates?.longitude) {
+              distance = calculateDistance(
+                userLat, userLng,
+                workerLoc.coordinates.latitude,
+                workerLoc.coordinates.longitude
+              );
+            }
+            return { worker, distance };
+          })
+          .sort((a, b) => a.distance - b.distance); // Sort by distance (nearest first)
+
+        console.log(`✅ Found ${eligibleWorkers.length} eligible workers, sorted by distance`);
+        eligibleWorkers.slice(0, 5).forEach((w, i) => {
+          console.log(`  ${i+1}. ${w.worker.name} - ${w.distance === Infinity ? 'Unknown' : w.distance.toFixed(2) + ' km'}`);
+        });
+
+        const bookingRequest = {
+          _id: booking._id,
+          userId: booking.userId,
+          serviceId: booking.serviceId,
+          serviceName: booking.serviceName,
+          serviceCategory: booking.serviceCategory,
+          price: booking.price,
+          location: booking.location,
+          scheduledDate: booking.scheduledDate,
+          isScheduled: isScheduled,
+          createdAt: booking.createdAt,
+        };
+
+        if (eligibleWorkers.length === 0) {
+          console.warn(`⚠️ No available workers found for service category: "${booking.serviceCategory}"`);
+          // Still emit to worker room in case someone comes online
+          io.to('worker').emit('booking:request', {
+            ...bookingRequest,
+            requiresVerification: true,
+            serviceCategory: booking.serviceCategory,
+          });
+        } else {
+          // For instant bookings, send to nearest available worker first
+          // For scheduled bookings, send to all eligible workers
+          if (isScheduled) {
+            // Scheduled booking - send to all eligible workers
+            console.log(`📅 Scheduled booking - notifying all ${eligibleWorkers.length} eligible workers`);
+            io.to('worker').emit('booking:request', {
+              ...bookingRequest,
+              requiresVerification: true,
+              serviceCategory: booking.serviceCategory,
+              isScheduled: true,
+            });
+          } else {
+            // Instant booking - prioritize nearest workers
+            // Send to the nearest 3 workers (or all if less than 3)
+            const nearestWorkers = eligibleWorkers.slice(0, 3);
+            console.log(`🚀 Instant booking - notifying ${nearestWorkers.length} nearest workers`);
+            
+            nearestWorkers.forEach(({ worker, distance }) => {
+              const workerId = String(worker._id);
+              console.log(`  📤 Sending request to ${worker.name} (${distance === Infinity ? 'unknown distance' : distance.toFixed(2) + ' km'})`);
+              
+              // Send to specific worker by their ID room
+              io.to(workerId).emit('booking:request', {
+                ...bookingRequest,
+                requiresVerification: true,
+                serviceCategory: booking.serviceCategory,
+                distanceFromUser: distance,
+              });
+            });
+            
+            // Also emit to general worker room as fallback
+            io.to('worker').emit('booking:request', {
+              ...bookingRequest,
+              requiresVerification: true,
+              serviceCategory: booking.serviceCategory,
+            });
+          }
+          
+          console.log(`✅ Booking request sent to workers`);
+        }
+      } catch (workerQueryError) {
+        console.error('❌ Error querying workers:', workerQueryError);
+        // Fallback: Send to all workers
+        io.to('worker').emit('booking:request', {
+          _id: booking._id,
+          userId: booking.userId,
+          serviceId: booking.serviceId,
+          serviceName: booking.serviceName,
+          serviceCategory: booking.serviceCategory,
+          price: booking.price,
+          location: booking.location,
+          createdAt: booking.createdAt,
+        });
       }
-      
-      // Send booking request to all workers in the 'worker' room
-      io.to('worker').emit('booking:request', bookingRequest);
-      console.log('✅ Booking request emitted successfully');
       
       // Also emit general booking created event
       io.emit('booking:created', booking);
@@ -162,12 +268,38 @@ router.get('/user/:userId', async (req: Request, res: Response) => {
 });
 
 // Get worker's bookings
+// Returns: 1) Bookings assigned to this worker, 2) Pending bookings matching worker's service categories
 router.get('/worker/:workerId', async (req: Request, res: Response) => {
   try {
     const { workerId } = req.params;
     const { status } = req.query;
 
-    const filter: any = { workerId };
+    // Get worker's service categories
+    const worker = await WorkerUser.findById(workerId).select('serviceCategories');
+    const workerCategories = worker?.serviceCategories || [];
+
+    // Build filter: bookings assigned to this worker OR pending bookings matching worker's categories
+    const filter: any = {
+      $or: [
+        { workerId: workerId }, // Bookings assigned to this worker (any status)
+        {
+          // Pending bookings that match worker's service categories
+          status: 'pending',
+          $or: [
+            { workerId: null }, // No worker assigned yet
+            { workerId: { $exists: false } }, // workerId field doesn't exist
+            { workerId: '' }, // Empty string workerId
+          ],
+          // Match worker's categories OR if worker has no categories, show all pending
+          ...(workerCategories.length > 0 
+            ? { serviceCategory: { $in: workerCategories } }
+            : {}
+          ),
+        },
+      ],
+    };
+
+    // If status filter is provided, apply it
     if (status) {
       filter.status = status;
     }
@@ -177,6 +309,7 @@ router.get('/worker/:workerId', async (req: Request, res: Response) => {
       .populate('userId', 'firstName lastName profilePhoto')
       .exec();
 
+    console.log(`✅ Fetched ${bookings.length} bookings for worker ${workerId}`);
     res.json(bookings);
   } catch (error) {
     console.error('Get worker bookings error:', error);
@@ -188,11 +321,12 @@ router.get('/worker/:workerId', async (req: Request, res: Response) => {
 router.patch('/:id/status', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { status, workerId, notes } = req.body;
+    const { status, workerId, notes, workStartTime } = req.body;
 
     const updateData: any = { status };
     if (workerId) updateData.workerId = workerId;
     if (notes) updateData.workerNotes = notes;
+    if (workStartTime) updateData.workStartTime = new Date(workStartTime);
 
     if (status === 'completed') {
       updateData.completedAt = new Date();
@@ -209,10 +343,91 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Booking not found' });
     }
 
-    // Emit real-time event
+    // Create notification for user when work status changes
     const io = req.app.get('io');
+    let userNotification = null;
+    const userId = String(booking.userId);
+
+    try {
+      // Create notification for work started (in_progress)
+      if (status === 'in_progress') {
+        const userObjectId = typeof booking.userId === 'string' 
+          ? new mongoose.Types.ObjectId(booking.userId)
+          : booking.userId;
+
+        userNotification = await Notification.create({
+          userId: userObjectId,
+          title: 'Work Started',
+          message: `The worker has started working on your ${booking.serviceName} service.`,
+          type: 'booking',
+          isRead: false,
+          data: {
+            bookingId: booking._id,
+            serviceName: booking.serviceName,
+            workerId: booking.workerId,
+            status: 'in_progress',
+            workStartTime: workStartTime || booking.workStartTime,
+          },
+        });
+        console.log('✅ Work started notification created:', userNotification._id);
+      }
+      
+      // Create notification for work completed
+      if (status === 'completed') {
+        const userObjectId = typeof booking.userId === 'string' 
+          ? new mongoose.Types.ObjectId(booking.userId)
+          : booking.userId;
+
+        userNotification = await Notification.create({
+          userId: userObjectId,
+          title: 'Service Completed',
+          message: `Great news! Your ${booking.serviceName} service has been completed successfully.`,
+          type: 'booking',
+          isRead: false,
+          data: {
+            bookingId: booking._id,
+            serviceName: booking.serviceName,
+            workerId: booking.workerId,
+            status: 'completed',
+          },
+        });
+        console.log('✅ Work completed notification created:', userNotification._id);
+        
+        // Set worker status back to 'available' when job is completed
+        if (booking.workerId) {
+          try {
+            await WorkerUser.findByIdAndUpdate(booking.workerId, {
+              status: 'available',
+              currentBookingId: null,
+            });
+            console.log('✅ Worker status set back to available:', booking.workerId);
+          } catch (workerStatusError) {
+            console.error('⚠️ Error resetting worker status:', workerStatusError);
+          }
+        }
+      }
+    } catch (notifError) {
+      console.error('⚠️ Error creating status notification:', notifError);
+    }
+
+    // Emit real-time events
     if (io) {
-      io.emit('booking:updated', booking);
+      // Emit booking:updated to the specific user who made the booking
+      io.to(userId).emit('booking:updated', booking.toObject());
+      console.log('✅ booking:updated event sent to user:', userId);
+      
+      // Also emit to worker room so workers can see status updates
+      if (booking.workerId) {
+        io.to(String(booking.workerId)).emit('booking:updated', booking.toObject());
+        io.to('worker').emit('booking:updated', booking.toObject());
+      }
+      
+      // Emit notification:new to user if notification was created
+      if (userNotification) {
+        io.to(userId).emit('notification:new', userNotification.toObject());
+        io.to('user').emit('notification:new', userNotification.toObject());
+        console.log('✅ Status notification sent to user:', userId);
+      }
     }
 
     res.json(booking);
@@ -296,38 +511,81 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
   }
 });
 
-// Add review and rating
+// Add review and rating - updates worker profile and ranking
 router.patch('/:id/review', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { rating, review } = req.body;
+    const { rating, comment } = req.body;
+
+    console.log('📝 Adding review for booking:', id, { rating, comment });
 
     const booking = await Booking.findByIdAndUpdate(
       id,
-      { rating, review },
+      { rating, review: comment },
       { new: true }
     )
       .populate('userId', 'firstName lastName profilePhoto')
-      .populate('workerId', 'firstName lastName profileImage')
+      .populate('workerId', 'firstName lastName profileImage rating totalReviews')
       .exec();
 
     if (!booking) {
       return res.status(404).json({ message: 'Booking not found' });
     }
 
-    // Update worker's average rating
+    // Update worker's average rating and total reviews
     if (booking.workerId) {
+      const workerId = typeof booking.workerId === 'object' ? (booking.workerId as any)._id : booking.workerId;
+      
+      // Get all rated bookings for this worker
       const workerBookings = await Booking.find({ 
-        workerId: booking.workerId, 
-        rating: { $exists: true } 
+        workerId: workerId, 
+        rating: { $exists: true, $gt: 0 } 
       });
       
-      const avgRating = workerBookings.reduce((sum, b) => sum + (b.rating || 0), 0) / workerBookings.length;
+      const totalReviews = workerBookings.length;
+      const avgRating = totalReviews > 0 
+        ? workerBookings.reduce((sum, b) => sum + (b.rating || 0), 0) / totalReviews 
+        : 0;
       
-      await WorkerUser.findByIdAndUpdate(booking.workerId, { rating: avgRating });
+      // Calculate worker rank based on rating and total reviews
+      // Higher rating + more reviews = higher rank priority
+      const rankScore = (avgRating * 20) + (totalReviews * 2); // Max 100 from rating + bonus for reviews
+      
+      await WorkerUser.findByIdAndUpdate(workerId, { 
+        rating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
+        totalReviews: totalReviews,
+        rankScore: rankScore,
+      });
+      
+      console.log('✅ Worker profile updated:', {
+        workerId,
+        avgRating: Math.round(avgRating * 10) / 10,
+        totalReviews,
+        rankScore,
+      });
+
+      // Send notification to worker about new review
+      const io = req.app.get('io');
+      if (io) {
+        const userName = booking.userId 
+          ? `${(booking.userId as any).firstName || ''} ${(booking.userId as any).lastName || ''}`.trim() 
+          : 'Customer';
+        
+        io.to(String(workerId)).emit('notification:new', {
+          type: 'review',
+          title: '⭐ New Review!',
+          message: `${userName} gave you ${rating} stars${comment ? `: "${comment}"` : ''}`,
+          data: { bookingId: id, rating, comment },
+          createdAt: new Date(),
+        });
+      }
     }
 
-    res.json(booking);
+    res.json({ 
+      success: true, 
+      message: 'Review submitted successfully',
+      booking 
+    });
   } catch (error) {
     console.error('Add review error:', error);
     res.status(500).json({ message: 'Failed to add review' });
@@ -359,9 +617,10 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Booking already accepted by another worker' });
     }
 
-    // Save userId before populating
+    // Save userId before populating - ensure it's a string for socket rooms
     const userId = String(booking.userId);
     console.log('✅ User ID for notification:', userId);
+    console.log('✅ User ID type:', typeof userId);
 
     // Update booking
     booking.workerId = workerId;
@@ -373,6 +632,17 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
       workerId: booking.workerId,
     });
 
+    // Set worker status to 'busy' so they can't accept other bookings
+    try {
+      await WorkerUser.findByIdAndUpdate(workerId, {
+        status: 'busy',
+        currentBookingId: booking._id,
+      });
+      console.log('✅ Worker status set to busy:', workerId);
+    } catch (workerStatusError) {
+      console.error('⚠️ Error updating worker status:', workerStatusError);
+    }
+
     // Populate for response
     await booking.populate('userId', 'firstName lastName profilePhoto');
     await booking.populate('workerId', 'name phone email currentLocation.coordinates');
@@ -381,11 +651,17 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
     const io = req.app.get('io');
     let userNotification = null;
 
+    // IMPORTANT: Create notification FIRST before emitting socket events
     try {
+      // Ensure userId is in correct format (ObjectId)
+      const userObjectId = typeof booking.userId === 'string' 
+        ? new mongoose.Types.ObjectId(booking.userId)
+        : booking.userId;
+
       userNotification = await Notification.create({
-        userId: booking.userId, // This is the USER (customer), not worker
+        userId: userObjectId, // This is the USER (customer), not worker
         title: 'Booking Accepted',
-        message: `Your ${booking.serviceName} booking has been accepted! A worker is on their way.`,
+        message: `Great news! Your ${booking.serviceName} booking has been accepted by a worker. The worker will start location tracking shortly.`,
         type: 'booking',
         isRead: false,
         data: {
@@ -395,9 +671,14 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
           status: 'accepted',
         },
       });
-      console.log('✅ User notification created:', userNotification._id);
+      console.log('✅ User notification created successfully:', {
+        notificationId: userNotification._id,
+        userId: userObjectId,
+        message: userNotification.message,
+      });
     } catch (notifError) {
       console.error('⚠️ Error creating user notification:', notifError);
+      // Continue even if notification creation fails - still emit socket events
     }
 
     // Emit socket events - ONLY to user app for notifications
@@ -406,6 +687,7 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
         bookingId: booking._id,
         booking: booking.toObject(),
         workerId: booking.workerId,
+        serviceName: booking.serviceName,
       };
 
       console.log('📤 Emitting booking:accepted to USER:', userId);
@@ -413,25 +695,72 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
         bookingId: booking._id,
         serviceName: booking.serviceName,
         workerId: booking.workerId,
+        userId: userId,
       });
 
-      // Send booking:accepted ONLY to the specific user who made the booking
-      // This should only go to user app, not worker app
-      io.to(userId).emit('booking:accepted', bookingData);
-      
-      // Emit notification:new ONLY to the user (customer) - NOT to worker
+      // FIRST: Send notification:new event to user (this is the notification)
       if (userNotification) {
-        io.to(userId).emit('notification:new', userNotification.toObject());
-        console.log('📤 Emitted notification:new to USER only:', userId);
+        const notificationData = userNotification.toObject();
+        console.log('📬 Sending notification:new to user:', userId);
+        console.log('📬 Notification data:', {
+          id: notificationData._id,
+          title: notificationData.title,
+          message: notificationData.message,
+          userId: userId,
+        });
+        
+        // CRITICAL: Emit to user's specific room (userId)
+        // The user must be connected and authenticated to receive this
+        io.to(userId).emit('notification:new', notificationData);
+        console.log('✅ notification:new event emitted to user room:', userId);
+        
+        // Also emit to 'user' room as backup (all users in user room)
+        io.to('user').emit('notification:new', notificationData);
+        console.log('✅ notification:new event also emitted to user room (backup)');
+        
+        // Log active rooms for debugging
+        const userRoom = io.sockets.adapter.rooms.get(userId);
+        const userRoomCount = userRoom ? userRoom.size : 0;
+        const generalUserRoom = io.sockets.adapter.rooms.get('user');
+        const generalUserRoomCount = generalUserRoom ? generalUserRoom.size : 0;
+        console.log(`📊 Socket rooms: userId room (${userId}): ${userRoomCount} sockets, 'user' room: ${generalUserRoomCount} sockets`);
+        
+        if (userRoomCount === 0 && generalUserRoomCount === 0) {
+          console.warn('⚠️ WARNING: No users connected to receive notification! User may not be online.');
+        }
+      } else {
+        console.warn('⚠️ No notification object to send - notification creation may have failed');
+      }
+
+      // SECOND: Send booking:accepted event (for live tracking updates)
+      // Send to user for their tracking screen
+      io.to(userId).emit('booking:accepted', {
+        ...bookingData,
+        status: 'accepted',
+        message: 'Worker accepted your request. Waiting for worker to start location tracking...',
+        timestamp: new Date().toISOString(),
+      });
+      console.log('✅ booking:accepted event emitted to user:', userId);
+      
+      // ALSO send booking:accepted to the worker who accepted it (for their tracking page)
+      if (booking.workerId) {
+        io.to(String(booking.workerId)).emit('booking:accepted', {
+          ...bookingData,
+          status: 'accepted',
+          message: 'You have accepted this booking. It will appear in your tracking page.',
+          timestamp: new Date().toISOString(),
+        });
+        console.log('✅ booking:accepted event emitted to worker:', booking.workerId);
       }
       
       // Emit booking:updated to worker room so other workers know this booking is taken
       // But this is just an update event, NOT a notification
       io.to('worker').emit('booking:updated', booking.toObject());
+      console.log('✅ booking:updated event emitted to worker room');
 
-      console.log('✅ Socket events emitted correctly - user notification only to user app');
+      console.log('✅ All socket events emitted correctly - user notification sent');
     } else {
-      console.warn('⚠️ Socket.IO not available');
+      console.warn('⚠️ Socket.IO not available - cannot send real-time notifications');
     }
 
     res.json(booking);
@@ -490,23 +819,25 @@ router.delete('/:id', async (req: Request, res: Response) => {
       return res.status(403).json({ message: 'You do not have permission to cancel this booking' });
     }
 
-    // Only allow cancellation if booking is pending or accepted
-    if (!['pending', 'accepted'].includes(booking.status)) {
+    // Only allow deletion if booking is pending, accepted, or already cancelled
+    if (!['pending', 'accepted', 'cancelled'].includes(booking.status)) {
       return res.status(400).json({ 
-        message: `Cannot cancel booking with status: ${booking.status}` 
+        message: `Cannot delete booking with status: ${booking.status}` 
       });
     }
 
-    // Update booking status to cancelled
-    booking.status = 'cancelled';
-    booking.cancelledAt = new Date();
-    await booking.save();
+    // Get booking details before deletion for notifications
+    const bookingDetails = {
+      _id: booking._id,
+      userId: booking.userId,
+      workerId: booking.workerId,
+      serviceName: booking.serviceName,
+      status: booking.status
+    };
 
-    // Populate booking with user and worker details
-    await booking.populate('userId', 'firstName lastName email');
-    if (booking.workerId) {
-      await booking.populate('workerId', 'firstName lastName phone');
-    }
+    // Actually delete the booking from database
+    await Booking.findByIdAndDelete(id);
+    console.log(`✅ Booking ${id} permanently deleted from database`);
 
     // Create notification for the USER only (not worker)
     // Workers don't have User model IDs, so we use socket events for them
@@ -516,15 +847,15 @@ router.delete('/:id', async (req: Request, res: Response) => {
     // Create notification for the USER (customer) only
     try {
       userNotification = await Notification.create({
-        userId: booking.userId, // This is the USER (customer), not worker
-        title: 'Booking Cancelled',
-        message: `Your ${booking.serviceName} booking has been cancelled successfully. ${booking.workerId ? 'The assigned worker has been notified.' : ''}`,
+        userId: bookingDetails.userId, // This is the USER (customer), not worker
+        title: 'Booking Deleted',
+        message: `Your ${bookingDetails.serviceName} booking has been deleted successfully.`,
         type: 'booking',
         isRead: false,
         data: {
-          bookingId: booking._id,
-          serviceName: booking.serviceName,
-          status: 'cancelled',
+          bookingId: bookingDetails._id,
+          serviceName: bookingDetails.serviceName,
+          status: 'deleted',
         },
       });
       console.log('✅ User notification created:', userNotification._id);
@@ -571,16 +902,17 @@ router.delete('/:id', async (req: Request, res: Response) => {
       io.to('worker').emit('booking:updated', booking.toObject());
     }
 
-    console.log('✅ Booking cancelled successfully:', id);
+    console.log('✅ Booking deleted successfully:', id);
 
     res.json({ 
-      message: 'Booking cancelled successfully', 
-      booking: booking.toObject() 
+      message: 'Booking deleted successfully', 
+      deletedBookingId: bookingDetails._id,
+      notification: userNotification 
     });
   } catch (error) {
-    console.error('❌ Cancel booking error:', error);
+    console.error('❌ Delete booking error:', error);
     res.status(500).json({ 
-      message: 'Failed to cancel booking', 
+      message: 'Failed to delete booking', 
       error: String(error) 
     });
   }

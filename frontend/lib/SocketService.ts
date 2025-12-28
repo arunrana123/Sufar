@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import NetInfo from '@react-native-community/netinfo';
+import { getApiUrl } from './config';
 
 export interface SocketEvents {
   // Booking events
@@ -9,6 +10,7 @@ export interface SocketEvents {
   'booking:started': (booking: any) => void;
   'booking:completed': (booking: any) => void;
   'booking:cancelled': (booking: any) => void;
+  'booking:deleted': (data: any) => void;
   'booking:updated': (booking: any) => void;
 
   // Worker events
@@ -17,6 +19,9 @@ export interface SocketEvents {
   'worker:status_change': (data: { workerId: string; status: string }) => void;
   'worker:available': (workerId: string) => void;
   'worker:busy': (workerId: string) => void;
+
+  // Location tracking events
+  'location:tracking:started': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
 
   // Navigation events
   'navigation:started': (data: any) => void;
@@ -70,8 +75,10 @@ export class SocketService {
     if (this.initialized) return;
     
     try {
-      const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.92:5001';
-      console.log('Initializing socket connection to:', apiUrl);
+      // Use getApiUrl() from config to ensure correct IP (192.168.1.96)
+      const apiUrl = getApiUrl();
+      console.log('✅ Initializing socket connection to:', apiUrl);
+      console.log('   Using correct IP (192.168.1.96):', apiUrl.includes('192.168.1.96'));
       
       this.socket = io(apiUrl, {
         transports: ['websocket', 'polling'], // Fallback to polling if websocket fails
@@ -87,7 +94,7 @@ export class SocketService {
       this.setupEventListeners();
       this.initialized = true;
     } catch (error) {
-      console.error('Socket initialization error:', error);
+      console.error('❌ Socket initialization error:', error);
     }
   }
 

@@ -18,6 +18,24 @@ export interface SocketEvents {
   'worker:available': (workerId: string) => void;
   'worker:busy': (workerId: string) => void;
 
+  // User location events
+  'user:location': (data: { bookingId: string; latitude: number; longitude: number }) => void;
+
+  // Location tracking events
+  'location:tracking:started': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
+
+  // Navigation events
+  'navigation:started': (data: any) => void;
+  'navigation:arrived': (data: any) => void;
+  'navigation:ended': (data: any) => void;
+
+  // Work events
+  'work:started': (data: any) => void;
+  'work:completed': (data: any) => void;
+
+  // Worker location updates
+  'worker:location': (data: any) => void;
+
   // Notification events
   'notification:new': (notification: any) => void;
   'notification:read': (notificationId: string) => void;
@@ -62,8 +80,10 @@ export class SocketService {
     if (this.initialized) return;
     
     try {
+      // Use getApiUrl() from config to ensure correct IP (192.168.1.96)
       const apiUrl = getApiUrl();
-      console.log('Initializing socket connection to:', apiUrl);
+      console.log('✅ Initializing socket connection to:', apiUrl);
+      console.log('   Using correct IP (192.168.1.96):', apiUrl.includes('192.168.1.96'));
       
       this.socket = io(apiUrl, {
         transports: ['websocket', 'polling'], // Fallback to polling if websocket fails
@@ -87,17 +107,19 @@ export class SocketService {
     if (!this.socket) return;
 
     this.socket.on('connect', () => {
-      console.log('Socket connected');
+      console.log('✅ Socket connected:', this.socket?.id);
       this.isConnected = true;
       this.reconnectAttempts = 0;
       
-      // Re-authenticate if we have user credentials
+      // Authenticate immediately when connected
       if (this.currentUserId && this.currentUserType) {
-        console.log(`Re-authenticating as ${this.currentUserType}: ${this.currentUserId}`);
+        console.log(`🔐 Authenticating as ${this.currentUserType}: ${this.currentUserId}`);
         this.socket.emit('authenticate', { 
           userId: this.currentUserId, 
           userType: this.currentUserType 
         });
+      } else {
+        console.warn('⚠️ Socket connected but no user credentials available');
       }
     });
 
@@ -164,10 +186,17 @@ export class SocketService {
     if (this.socket) {
       // Only connect if not already connected
       if (!this.isConnected) {
+        console.log(`🔌 Connecting socket as ${userType}: ${userId}`);
         this.socket.connect();
+        
+        // Set up authentication when socket connects
+        this.socket.once('connect', () => {
+          console.log(`🔐 Socket connected, authenticating as ${userType}: ${userId}`);
+          this.socket?.emit('authenticate', { userId, userType });
+        });
       } else {
         // Already connected, authenticate immediately
-        console.log(`Authenticating as ${userType}: ${userId}`);
+        console.log(`🔐 Already connected, authenticating as ${userType}: ${userId}`);
         this.socket.emit('authenticate', { userId, userType });
       }
     }

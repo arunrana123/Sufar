@@ -7,24 +7,29 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   SafeAreaView,
   RefreshControl,
   Alert,
   Platform,
   Image,
 } from 'react-native';
+import { ThemedText } from '@/components/ThemedText';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { socketService } from '@/lib/SocketService';
 import { notificationService } from '@/lib/NotificationService';
+import { notificationSoundService } from '@/lib/NotificationSoundService';
+import { pushNotificationService } from '@/lib/PushNotificationService';
 import ToastNotification from '@/components/ToastNotification';
 
 interface Notification {
   _id: string;
   title: string;
   message: string;
-  type: 'general' | 'service' | 'booking' | 'payment' | 'worker' | 'system' | 'promotion';
+  type: 'general' | 'service' | 'booking' | 'payment' | 'worker' | 'system' | 'promotion' | 'document_verification' | 'verification_submitted' | 'verification_complete' | 'category_verification_submitted' | 'offer';
   isRead: boolean;
   createdAt: string;
   data?: any;
@@ -32,6 +37,7 @@ interface Notification {
 }
 
 export default function NotificationsScreen() {
+  const { theme } = useTheme();
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -84,6 +90,24 @@ export default function NotificationsScreen() {
       
       socketService.on('notification:new', (notification: Notification) => {
         console.log('📢 New notification received in notifications screen:', notification);
+        
+        // Play notification sound
+        const status = notification.data?.status;
+        notificationSoundService.playNotificationSound(notification.type, status);
+        
+        // Send push notification (works even when app is in background/closed)
+        pushNotificationService.scheduleLocalNotification(
+          notification.title || 'New Notification',
+          notification.message,
+          {
+            type: notification.type,
+            status: status,
+            notificationId: notification._id,
+            ...notification.data,
+          },
+          true // Play sound
+        );
+        
         // Check if notification already exists (avoid duplicates)
         setNotifications(prev => {
           const exists = prev.some(n => n._id === notification._id);
@@ -109,8 +133,18 @@ export default function NotificationsScreen() {
           } else {
             showToast(notification.message, notification.title || 'New Booking Update', 'info');
           }
+        } else if (notification.type === 'document_verification' || notification.type === 'verification_submitted' || notification.type === 'verification_complete') {
+          if (notification.data?.status === 'verified' || notification.type === 'verification_complete') {
+            showToast(notification.message, notification.title || 'Verification Complete', 'success');
+          } else if (notification.data?.status === 'rejected') {
+            showToast(notification.message, notification.title || 'Verification Rejected', 'error');
+          } else {
+            showToast(notification.message, notification.title || 'Verification Update', 'info');
+          }
         } else if (notification.type === 'payment') {
           showToast(notification.message, notification.title || 'Payment Update', 'success');
+        } else if (notification.type === 'promotion' || notification.type === 'service' || notification.type === 'offer') {
+          showToast(notification.message, notification.title || 'Special Offer', 'info');
         } else {
           showToast(notification.message, notification.title || 'New Notification', 'info');
         }
@@ -338,28 +372,28 @@ export default function NotificationsScreen() {
   };
 
   const getNotificationColor = (notification: Notification) => {
-    // Check if it's a cancelled booking - use red color
+    // Check if it's a cancelled booking - use danger color
     if (notification.type === 'booking' && notification.data?.status === 'cancelled') {
-      return '#EF4444';
+      return theme.danger;
     }
-    // Check if it's an accepted booking - use green color
+    // Check if it's an accepted booking - use success color
     if (notification.type === 'booking' && notification.data?.status === 'accepted') {
-      return '#10B981';
+      return theme.success;
     }
     
     switch (notification.type) {
       case 'booking':
-        return '#3B82F6';
+        return theme.primary;
       case 'payment':
-        return '#10B981';
+        return theme.success;
       case 'worker':
-        return '#F59E0B';
+        return theme.warning;
       case 'system':
-        return '#6B7280';
+        return theme.secondary;
       case 'promotion':
-        return '#8B5CF6';
+        return theme.info;
       default:
-        return '#3B82F6';
+        return theme.primary;
     }
   };
 
@@ -379,7 +413,8 @@ export default function NotificationsScreen() {
       key={notification._id}
       style={[
         styles.notificationCard,
-        !notification.isRead && styles.unreadCard
+        { backgroundColor: theme.card },
+        !notification.isRead && { borderLeftColor: theme.primary }
       ]}
       onPress={() => handleNotificationPress(notification)}
       activeOpacity={0.7}
@@ -400,30 +435,31 @@ export default function NotificationsScreen() {
           <View style={styles.titleRow}>
             <Text style={[
               styles.notificationTitle,
-              !notification.isRead && styles.unreadText
+              { color: theme.text },
+              !notification.isRead && { fontWeight: '700' }
             ]}>
               {notification.title}
             </Text>
             {notification.type === 'booking' && notification.data?.status === 'cancelled' && (
-              <View style={styles.statusBadge}>
+              <View style={[styles.statusBadge, { backgroundColor: theme.danger }]}>
                 <Text style={styles.statusBadgeText}>Cancelled</Text>
               </View>
             )}
             {notification.type === 'booking' && notification.data?.status === 'accepted' && (
-              <View style={[styles.statusBadge, { backgroundColor: '#10B981' }]}>
+              <View style={[styles.statusBadge, { backgroundColor: theme.success }]}>
                 <Text style={styles.statusBadgeText}>Accepted</Text>
               </View>
             )}
           </View>
-          <Text style={styles.notificationMessage} numberOfLines={3}>
+          <Text style={[styles.notificationMessage, { color: theme.secondary }]} numberOfLines={3}>
             {notification.message}
           </Text>
           {notification.data?.serviceName && (
-            <Text style={styles.serviceName}>
+            <Text style={[styles.serviceName, { color: theme.primary }]}>
               Service: {notification.data.serviceName}
             </Text>
           )}
-          <Text style={styles.notificationTime}>
+          <Text style={[styles.notificationTime, { color: theme.icon }]}>
             {formatTime(notification.createdAt)}
           </Text>
         </View>
@@ -433,60 +469,35 @@ export default function NotificationsScreen() {
           onPress={(e) => handleDeleteNotification(notification._id, e)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="trash-outline" size={18} color="#9CA3AF" />
+          <Ionicons name="trash-outline" size={18} color={theme.icon} />
         </TouchableOpacity>
         
         {!notification.isRead && (
-          <View style={styles.unreadDot} />
+          <View style={[styles.unreadDot, { backgroundColor: theme.primary }]} />
         )}
       </View>
     </TouchableOpacity>
   );
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.push('/home')} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
+          <Pressable onPress={() => router.push('/home')} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={28} color="#fff" />
+          </Pressable>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>
+            Notifications{unreadCount > 0 && ` (${unreadCount})`}
+          </ThemedText>
+          <TouchableOpacity 
+            onPress={clearAllNotifications} 
+            style={styles.clearButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="trash-outline" size={24} color="#fff" />
           </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>Notifications</Text>
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount}</Text>
-              </View>
-            )}
-          </View>
-          <View style={styles.headerActions}>
-            <TouchableOpacity 
-              onPress={markAllAsRead} 
-              style={[
-                styles.headerButton,
-                !notifications.some(n => !n.isRead) && styles.headerButtonDisabled
-              ]}
-              disabled={!notifications.some(n => !n.isRead)}
-              activeOpacity={0.7}
-            >
-              <Text style={[
-                styles.markAllText,
-                !notifications.some(n => !n.isRead) && styles.markAllTextDisabled
-              ]}>
-                Mark All
-              </Text>
-            </TouchableOpacity>
-            {notifications.length > 0 && (
-              <TouchableOpacity 
-                onPress={clearAllNotifications} 
-                style={styles.headerButton}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="trash-outline" size={20} color="#fff" />
-              </TouchableOpacity>
-            )}
-          </View>
         </View>
 
         {/* Content */}
@@ -497,16 +508,30 @@ export default function NotificationsScreen() {
           }
           showsVerticalScrollIndicator={false}
         >
+          {/* Mark All as Read Button */}
+          {notifications.length > 0 && notifications.some(n => !n.isRead) && (
+            <View style={styles.actionBar}>
+              <TouchableOpacity 
+                style={[styles.markAllButton, { backgroundColor: theme.tint }]}
+                onPress={markAllAsRead}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="checkmark-done-outline" size={20} color="#fff" />
+                <Text style={styles.markAllButtonText}>Mark All as Read</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {loading ? (
             <View style={styles.centerContent}>
-              <Ionicons name="notifications-outline" size={64} color="#D1D5DB" />
-              <Text style={styles.loadingText}>Loading notifications...</Text>
+              <Ionicons name="notifications-outline" size={64} color={theme.icon} />
+              <Text style={[styles.loadingText, { color: theme.secondary }]}>Loading notifications...</Text>
             </View>
           ) : notifications.length === 0 ? (
             <View style={styles.centerContent}>
-              <Ionicons name="notifications-outline" size={64} color="#D1D5DB" />
-              <Text style={styles.emptyTitle}>No notifications yet</Text>
-              <Text style={styles.emptySubtitle}>
+              <Ionicons name="notifications-outline" size={64} color={theme.icon} />
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>No notifications yet</Text>
+              <Text style={[styles.emptySubtitle, { color: theme.secondary }]}>
                 You'll see updates about your bookings and services here
               </Text>
             </View>
@@ -534,75 +559,55 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F9FAFB',
   },
   safe: {
     flex: 1,
   },
   header: {
-    backgroundColor: '#3B82F6',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingVertical: 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
   },
   backButton: {
     padding: 8,
-  },
-  headerCenter: {
-    flex: 1,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
   },
-  badge: {
-    backgroundColor: '#EF4444',
-    borderRadius: 10,
-    minWidth: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
+  clearButton: {
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
-  badgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
+  actionBar: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
   },
-  headerActions: {
+  markAllButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-  },
-  headerButton: {
-    padding: 8,
-    minWidth: 44,
-    minHeight: 44,
-    alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     borderRadius: 8,
+    gap: 8,
   },
-  headerButtonDisabled: {
-    opacity: 0.5,
-  },
-  markAllText: {
+  markAllButtonText: {
     color: '#fff',
     fontSize: 14,
-    fontWeight: '500',
-  },
-  markAllTextDisabled: {
-    opacity: 0.6,
-  },
-  deleteButton: {
-    padding: 8,
-    marginLeft: 8,
+    fontWeight: '600',
   },
   content: {
     flex: 1,
@@ -616,19 +621,16 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#6B7280',
     marginTop: 16,
   },
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#374151',
     marginTop: 16,
     textAlign: 'center',
   },
   emptySubtitle: {
     fontSize: 14,
-    color: '#6B7280',
     marginTop: 8,
     textAlign: 'center',
     lineHeight: 20,
@@ -637,7 +639,6 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   notificationCard: {
-    backgroundColor: '#fff',
     borderRadius: 12,
     marginBottom: 12,
     shadowColor: '#000',
@@ -645,10 +646,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
-  },
-  unreadCard: {
     borderLeftWidth: 4,
-    borderLeftColor: '#3B82F6',
+    borderLeftColor: 'transparent',
   },
   notificationContent: {
     flexDirection: 'row',
@@ -673,7 +672,6 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   statusBadge: {
-    backgroundColor: '#EF4444',
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 12,
@@ -686,7 +684,6 @@ const styles = StyleSheet.create({
   },
   serviceName: {
     fontSize: 13,
-    color: '#3B82F6',
     fontWeight: '500',
     marginTop: 4,
     marginBottom: 4,
@@ -694,27 +691,24 @@ const styles = StyleSheet.create({
   notificationTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1F2937',
     marginBottom: 4,
-  },
-  unreadText: {
-    fontWeight: '700',
   },
   notificationMessage: {
     fontSize: 14,
-    color: '#6B7280',
     lineHeight: 20,
     marginBottom: 8,
   },
   notificationTime: {
     fontSize: 12,
-    color: '#9CA3AF',
+  },
+  deleteButton: {
+    padding: 8,
+    marginLeft: 8,
   },
   unreadDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#3B82F6',
     marginTop: 8,
   },
 });

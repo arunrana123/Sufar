@@ -1,19 +1,17 @@
 // WORKERS SCREEN - Browse available workers by service category
 // Features: Worker list with profiles, ratings, availability status, navigate to worker-profile
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView } from 'react-native';
+import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Platform } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
-import { Colors } from '@/constants/Colors';
-import { useColorScheme } from '@/hooks/useColorScheme';
+import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import ServiceCard from '@/components/ServiceCard';
 import { getServicesByCategory, getCategoryInfo } from '@/lib/services';
 
 export default function WorkersScreen() {
-  const colorScheme = useColorScheme() ?? 'light';
-  const theme = Colors[colorScheme];
+  const { theme } = useTheme();
   
   const categoryInfo = getCategoryInfo('workers');
   const services = getServicesByCategory('workers');
@@ -28,14 +26,13 @@ export default function WorkersScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={24} color={theme.text} />
+            <Ionicons name="arrow-back" size={28} color="#fff" />
           </Pressable>
-          <ThemedText style={styles.headerTitle}>Workers</ThemedText>
+          <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Workers</ThemedText>
           <Pressable style={styles.searchBtn}>
-            <Ionicons name="search" size={20} color={theme.text} />
-            <ThemedText style={styles.searchText}>Search</ThemedText>
+            <Ionicons name="search" size={24} color="#fff" />
           </Pressable>
         </View>
 
@@ -60,7 +57,6 @@ export default function WorkersScreen() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   safe: { 
     flex: 1 
@@ -69,36 +65,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    paddingHorizontal: 20,
+    paddingVertical: 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 5,
   },
   backBtn: {
     padding: 8,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  searchBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 20,
   },
-  searchText: {
-    marginLeft: 4,
-    fontSize: 14,
-    color: '#666',
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  searchBtn: {
+    padding: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
   },
   content: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
   },
   servicesContainer: {
     paddingVertical: 16,

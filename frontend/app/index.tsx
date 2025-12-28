@@ -47,7 +47,8 @@ export default function Index() {
         const result = await BiometricAuth.authenticate();
         if (result.success) {
           // Biometric authentication successful, go to home
-          router.replace('/home');
+          // Use setTimeout to ensure navigation happens after render
+          setTimeout(() => router.replace('/home'), 100);
         } else {
           // Biometric failed, show options
           Alert.alert(
@@ -60,19 +61,21 @@ export default function Index() {
               },
               {
                 text: 'Use Password',
-                onPress: () => router.replace('/login'),
+                onPress: () => {
+                  setTimeout(() => router.replace('/login'), 100);
+                },
               },
             ]
           );
         }
       } else {
         // Biometric not enabled, go to login
-        router.replace('/login');
+        setTimeout(() => router.replace('/login'), 100);
       }
     } catch (error) {
       console.error('Biometric check error:', error);
       // On error, go to login
-      router.replace('/login');
+      setTimeout(() => router.replace('/login'), 100);
     } finally {
       setBiometricChecked(true);
     }
