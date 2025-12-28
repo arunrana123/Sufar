@@ -20,6 +20,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import { getApiUrl } from '@/lib/config';
+import { socketService } from '@/lib/SocketService';
 
 interface Booking {
   _id: string;
@@ -49,7 +50,9 @@ interface Booking {
   basePrice?: number;
   scheduledDate?: string;
   scheduledTime?: string;
-  paymentStatus?: string;
+  paymentStatus?: 'pending' | 'paid' | 'refunded';
+  userConfirmedPayment?: boolean;
+  workerConfirmedPayment?: boolean;
   images?: string[];
 }
 
@@ -76,9 +79,17 @@ export default function TrackingScreen() {
       
       if (response.ok) {
         const data = await response.json();
-        setBookings(data.filter((booking: Booking) => 
+        const filteredBookings = data.filter((booking: Booking) => 
           ['pending', 'accepted', 'in_progress', 'completed'].includes(booking.status)
-        ));
+        );
+        console.log('📊 Fetched bookings with payment status:', filteredBookings.map((b: Booking) => ({
+          id: b._id,
+          status: b.status,
+          paymentStatus: b.paymentStatus,
+          userConfirmed: b.userConfirmedPayment,
+          workerConfirmed: b.workerConfirmedPayment,
+        })));
+        setBookings(filteredBookings);
       } else {
         console.error('Failed to fetch bookings:', response.status);
         Alert.alert('Error', 'Failed to load bookings');
@@ -95,7 +106,82 @@ export default function TrackingScreen() {
   useEffect(() => {
     if (user?.id) {
       fetchBookings();
+      
+      // Connect to socket for real-time updates
+      socketService.connect(user.id, 'user');
+      
+      // Listen for booking updates
+      socketService.on('booking:updated', (updatedBooking: any) => {
+        console.log('📝 Booking updated event received in tracking:', updatedBooking);
+        if (updatedBooking._id) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === updatedBooking._id 
+                ? { 
+                    ...b, 
+                    ...updatedBooking,
+                    // Ensure payment status and confirmations are updated
+                    paymentStatus: updatedBooking.paymentStatus || b.paymentStatus,
+                    userConfirmedPayment: updatedBooking.userConfirmedPayment !== undefined ? updatedBooking.userConfirmedPayment : b.userConfirmedPayment,
+                    workerConfirmedPayment: updatedBooking.workerConfirmedPayment !== undefined ? updatedBooking.workerConfirmedPayment : b.workerConfirmedPayment,
+                  }
+                : b
+            )
+          );
+          // Refresh to get latest data including payment status
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+      
+      // Listen for payment status updates
+      socketService.on('payment:status_updated', (data: any) => {
+        console.log('💳 Payment status updated event received in tracking:', data);
+        if (data.bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { 
+                    ...b, 
+                    paymentStatus: data.paymentStatus,
+                    userConfirmedPayment: data.userConfirmed,
+                    workerConfirmedPayment: data.workerConfirmed,
+                  }
+                : b
+            )
+          );
+          // Refresh to get latest data from backend
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+      
+      // Listen for work completed
+      socketService.on('work:completed', (data: any) => {
+        console.log('✅ Work completed event received in tracking:', data);
+        if (data.bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { ...b, status: 'completed' }
+                : b
+            )
+          );
+          // Refresh to get latest data including payment status
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
     }
+    
+    return () => {
+      socketService.off('booking:updated');
+      socketService.off('payment:status_updated');
+      socketService.off('work:completed');
+    };
   }, [user?.id]);
 
   const onRefresh = () => {
@@ -473,17 +559,39 @@ export default function TrackingScreen() {
                           Rs. {booking.totalAmount || booking.price || '0'}
                         </Text>
                       </View>
-                      {booking.paymentStatus && (
-                        <View style={styles.priceRow}>
-                          <Text style={styles.priceLabel}>Payment Status:</Text>
-                          <Text style={[
-                            styles.paymentStatus,
-                            { color: booking.paymentStatus === 'paid' ? theme.success : theme.warning }
-                          ]}>
-                            {booking.paymentStatus.charAt(0).toUpperCase() + booking.paymentStatus.slice(1)}
-                          </Text>
-                        </View>
-                      )}
+                      <View style={styles.priceRow}>
+                        <Text style={styles.priceLabel}>Payment Status:</Text>
+                        <Text style={[
+                          styles.paymentStatus,
+                          { color: booking.paymentStatus === 'paid' ? theme.success : theme.warning }
+                        ]}>
+                          {booking.paymentStatus ? booking.paymentStatus.charAt(0).toUpperCase() + booking.paymentStatus.slice(1) : 'Pending'}
+                        </Text>
+                        {booking.status === 'completed' && booking.paymentStatus !== 'paid' && (
+                          <View style={styles.paymentConfirmationStatus}>
+                            {booking.userConfirmedPayment && (
+                              <Text style={[styles.confirmationText, { color: theme.success }]}>
+                                ✓ You confirmed
+                              </Text>
+                            )}
+                            {booking.workerConfirmedPayment && (
+                              <Text style={[styles.confirmationText, { color: theme.success }]}>
+                                ✓ Worker confirmed
+                              </Text>
+                            )}
+                            {!booking.userConfirmedPayment && (
+                              <Text style={[styles.confirmationText, { color: theme.warning }]}>
+                                ⏳ Waiting for your confirmation
+                              </Text>
+                            )}
+                            {!booking.workerConfirmedPayment && booking.userConfirmedPayment && (
+                              <Text style={[styles.confirmationText, { color: theme.warning }]}>
+                                ⏳ Waiting for worker confirmation
+                              </Text>
+                            )}
+                          </View>
+                        )}
+                      </View>
                     </View>
 
                     {/* Estimated Duration */}
@@ -751,6 +859,14 @@ const styles = StyleSheet.create({
   paymentStatus: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  paymentConfirmationStatus: {
+    marginTop: 4,
+    gap: 4,
+  },
+  confirmationText: {
+    fontSize: 12,
+    fontWeight: '500',
   },
   bookingInfo: {
     marginTop: 8,
