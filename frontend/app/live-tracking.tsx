@@ -269,9 +269,17 @@ export default function LiveTrackingScreen() {
 
     // Listen for booking accepted
     const handleBookingAccepted = (data: any) => {
-      if (data.bookingId === bookingId || data.booking?.id === bookingId) {
+      if (data.bookingId === bookingId || data.booking?._id === bookingId || data.booking?.id === bookingId) {
         console.log('✅ Booking accepted:', data);
         setNavStatus('accepted');
+        // Update booking state immediately
+        if (booking) {
+          setBooking({
+            ...booking,
+            status: 'accepted',
+            workerId: data.booking?.workerId || data.workerId || booking.workerId,
+          });
+        }
         // Refresh booking details
         setTimeout(() => {
           fetchBookingDetails();
@@ -282,9 +290,13 @@ export default function LiveTrackingScreen() {
     // Listen for location tracking started
     const handleLocationTrackingStarted = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('📍 Location tracking started');
+        console.log('📍 Location tracking started:', data);
         setLocationTrackingStarted(true);
         setNavStatus('tracking');
+        // Refresh booking details to get latest status
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 300);
       }
     };
 
@@ -321,16 +333,24 @@ export default function LiveTrackingScreen() {
 
     const handleNavigationArrived = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('📍 Worker arrived');
+        console.log('📍 Worker arrived:', data);
         setNavStatus('arrived');
+        // Refresh booking details
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 300);
         Alert.alert('Worker Arrived!', 'The worker has arrived at your location');
       }
     };
 
     const handleNavigationEnded = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('✅ Navigation ended');
+        console.log('✅ Navigation ended:', data);
         setNavStatus('ended');
+        // Refresh booking details
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 300);
       }
     };
 
@@ -339,19 +359,25 @@ export default function LiveTrackingScreen() {
       if (data.bookingId === bookingId) {
         console.log('🔨 Work started at:', data.startTime || data.timestamp);
         setWorkStatus('in_progress');
+        setNavStatus('ended'); // Navigation ended when work starts
         // Set work start time from the event data
         if (data.startTime || data.timestamp) {
           const startTime = new Date(data.startTime || data.timestamp);
           setWorkStartTime(startTime);
           console.log('⏰ Work start time set to:', startTime.toISOString());
         }
-        // Update booking status in UI
+        // Update booking status in UI immediately
         if (booking) {
           setBooking({
             ...booking,
             status: 'in_progress',
+            startTime: data.startTime || data.timestamp,
           });
         }
+        // Refresh booking details to get latest data
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 300);
         // Show alert
         Alert.alert(
           'Work Started!',
@@ -482,13 +508,20 @@ export default function LiveTrackingScreen() {
       if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
         console.log('📝 Booking updated event received in live-tracking:', updatedBooking);
         
-        // Update booking state
+        // Update booking state immediately
+        setBooking(prev => prev ? { 
+          ...prev, 
+          ...updatedBooking,
+          status: updatedBooking.status || prev.status,
+        } : null);
+        
+        // Update work status based on booking status
         if (updatedBooking.status) {
-          setBooking(prev => prev ? { ...prev, status: updatedBooking.status } : prev);
-          
-          // Update work status based on booking status
-          if (updatedBooking.status === 'in_progress') {
+          if (updatedBooking.status === 'accepted') {
+            setNavStatus('accepted');
+          } else if (updatedBooking.status === 'in_progress') {
             setWorkStatus('in_progress');
+            setNavStatus('ended');
             // If workStartTime is provided, set it
             if (updatedBooking.workStartTime) {
               const startTime = new Date(updatedBooking.workStartTime);
@@ -502,7 +535,7 @@ export default function LiveTrackingScreen() {
         // Refresh booking details to get latest data
         setTimeout(() => {
           fetchBookingDetails();
-        }, 500);
+        }, 300);
       }
     };
 
@@ -848,6 +881,119 @@ export default function LiveTrackingScreen() {
 
         {/* Booking Info Card */}
         <View style={styles.infoCard}>
+          {/* Status Flow Indicator */}
+          <View style={styles.statusFlowContainer}>
+            <View style={styles.statusFlowRow}>
+              {/* Step 1: Request Sent */}
+              <View style={styles.statusStep}>
+                <View style={[
+                  styles.statusStepCircle,
+                  { backgroundColor: booking.status === 'pending' ? '#4CAF50' : '#E0E0E0' }
+                ]}>
+                  <Ionicons 
+                    name="checkmark" 
+                    size={16} 
+                    color={booking.status === 'pending' ? '#fff' : '#9E9E9E'} 
+                  />
+                </View>
+                <Text style={[
+                  styles.statusStepText,
+                  { color: booking.status === 'pending' ? '#4CAF50' : '#9E9E9E' }
+                ]}>Request Sent</Text>
+              </View>
+
+              {/* Step 2: Accepted */}
+              <View style={styles.statusStep}>
+                <View style={[
+                  styles.statusStepCircle,
+                  { backgroundColor: (booking.status === 'accepted' || booking.status === 'in_progress' || booking.status === 'completed') ? '#4CAF50' : '#E0E0E0' }
+                ]}>
+                  <Ionicons 
+                    name="checkmark" 
+                    size={16} 
+                    color={(booking.status === 'accepted' || booking.status === 'in_progress' || booking.status === 'completed') ? '#fff' : '#9E9E9E'} 
+                  />
+                </View>
+                <Text style={[
+                  styles.statusStepText,
+                  { color: (booking.status === 'accepted' || booking.status === 'in_progress' || booking.status === 'completed') ? '#4CAF50' : '#9E9E9E' }
+                ]}>Accepted</Text>
+              </View>
+
+              {/* Step 3: Navigating */}
+              <View style={styles.statusStep}>
+                <View style={[
+                  styles.statusStepCircle,
+                  { backgroundColor: (navStatus === 'navigating' || navStatus === 'arrived' || navStatus === 'ended' || workStatus === 'in_progress' || workStatus === 'completed') ? '#4CAF50' : '#E0E0E0' }
+                ]}>
+                  <Ionicons 
+                    name={navStatus === 'navigating' ? "navigate" : "checkmark"} 
+                    size={16} 
+                    color={(navStatus === 'navigating' || navStatus === 'arrived' || navStatus === 'ended' || workStatus === 'in_progress' || workStatus === 'completed') ? '#fff' : '#9E9E9E'} 
+                  />
+                </View>
+                <Text style={[
+                  styles.statusStepText,
+                  { color: (navStatus === 'navigating' || navStatus === 'arrived' || navStatus === 'ended' || workStatus === 'in_progress' || workStatus === 'completed') ? '#4CAF50' : '#9E9E9E' }
+                ]}>Navigating</Text>
+              </View>
+
+              {/* Step 4: Arrived */}
+              <View style={styles.statusStep}>
+                <View style={[
+                  styles.statusStepCircle,
+                  { backgroundColor: (navStatus === 'arrived' || navStatus === 'ended' || workStatus === 'in_progress' || workStatus === 'completed') ? '#4CAF50' : '#E0E0E0' }
+                ]}>
+                  <Ionicons 
+                    name="checkmark" 
+                    size={16} 
+                    color={(navStatus === 'arrived' || navStatus === 'ended' || workStatus === 'in_progress' || workStatus === 'completed') ? '#fff' : '#9E9E9E'} 
+                  />
+                </View>
+                <Text style={[
+                  styles.statusStepText,
+                  { color: (navStatus === 'arrived' || navStatus === 'ended' || workStatus === 'in_progress' || workStatus === 'completed') ? '#4CAF50' : '#9E9E9E' }
+                ]}>Arrived</Text>
+              </View>
+
+              {/* Step 5: Working */}
+              <View style={styles.statusStep}>
+                <View style={[
+                  styles.statusStepCircle,
+                  { backgroundColor: (workStatus === 'in_progress' || workStatus === 'completed') ? '#4CAF50' : '#E0E0E0' }
+                ]}>
+                  <Ionicons 
+                    name={workStatus === 'in_progress' ? "hammer" : "checkmark"} 
+                    size={16} 
+                    color={(workStatus === 'in_progress' || workStatus === 'completed') ? '#fff' : '#9E9E9E'} 
+                  />
+                </View>
+                <Text style={[
+                  styles.statusStepText,
+                  { color: (workStatus === 'in_progress' || workStatus === 'completed') ? '#4CAF50' : '#9E9E9E' }
+                ]}>Working</Text>
+              </View>
+
+              {/* Step 6: Completed */}
+              <View style={styles.statusStep}>
+                <View style={[
+                  styles.statusStepCircle,
+                  { backgroundColor: workStatus === 'completed' ? '#4CAF50' : '#E0E0E0' }
+                ]}>
+                  <Ionicons 
+                    name="checkmark" 
+                    size={16} 
+                    color={workStatus === 'completed' ? '#fff' : '#9E9E9E'} 
+                  />
+                </View>
+                <Text style={[
+                  styles.statusStepText,
+                  { color: workStatus === 'completed' ? '#4CAF50' : '#9E9E9E' }
+                ]}>Completed</Text>
+              </View>
+            </View>
+          </View>
+
           {/* Status Header */}
           <View style={styles.statusHeader}>
             <View style={[styles.statusIndicator, { backgroundColor: getStatusColor(booking.status) }]} />
@@ -1123,6 +1269,38 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 10,
+  },
+  statusFlowContainer: {
+    marginBottom: 20,
+    paddingVertical: 12,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+  },
+  statusFlowRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  statusStep: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  statusStepCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+  },
+  statusStepText: {
+    fontSize: 10,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   statusHeader: {
     flexDirection: 'row',

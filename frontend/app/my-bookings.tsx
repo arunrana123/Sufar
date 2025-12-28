@@ -71,6 +71,7 @@ export default function MyBookingsScreen() {
   const [trackingData, setTrackingData] = useState<any>(null);
   const [clearAllModalVisible, setClearAllModalVisible] = useState(false);
   const mapRef = useRef<any>(null);
+  const [activeFilter, setActiveFilter] = useState<'all' | 'completed' | 'payment_pending' | 'payment_confirmed' | 'payment_paid'>('all');
 
   const fetchBookings = async (isRefresh = false) => {
     try {
@@ -195,7 +196,7 @@ export default function MyBookingsScreen() {
           setBookings(prev => 
             prev.map(b => 
               b._id === data.bookingId 
-                ? { ...b, status: 'completed' }
+                ? { ...b, status: 'completed', paymentStatus: data.paymentStatus || b.paymentStatus }
                 : b
             )
           );
@@ -203,6 +204,35 @@ export default function MyBookingsScreen() {
           setTimeout(() => {
             fetchBookings();
           }, 500);
+        }
+      });
+
+      // Listen for navigation events
+      socketService.on('navigation:started', (data: any) => {
+        console.log('🚗 Navigation started event received in my-bookings:', data);
+        if (data.bookingId) {
+          // Update booking to show worker is navigating
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { ...b, status: 'accepted' }
+                : b
+            )
+          );
+        }
+      });
+
+      socketService.on('navigation:arrived', (data: any) => {
+        console.log('📍 Navigation arrived event received in my-bookings:', data);
+        if (data.bookingId) {
+          // Worker has arrived
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { ...b, status: 'accepted' }
+                : b
+            )
+          );
         }
       });
       
@@ -247,6 +277,8 @@ export default function MyBookingsScreen() {
       socketService.off('work:started');
       socketService.off('work:completed');
       socketService.off('payment:status_updated');
+      socketService.off('navigation:started');
+      socketService.off('navigation:arrived');
     };
   }, [user?.id]);
 
@@ -290,6 +322,27 @@ export default function MyBookingsScreen() {
       default:
         return status;
     }
+  };
+
+  const getDetailedStatusText = (booking: Booking) => {
+    if (booking.status === 'completed') {
+      if (booking.paymentStatus === 'paid') {
+        return 'Completed & Paid';
+      } else if (booking.userConfirmedPayment && booking.workerConfirmedPayment) {
+        return 'Payment Confirmed';
+      } else if (booking.userConfirmedPayment || booking.workerConfirmedPayment) {
+        return 'Awaiting Payment Confirmation';
+      } else {
+        return 'Completed - Payment Pending';
+      }
+    } else if (booking.status === 'in_progress') {
+      return 'Work in Progress';
+    } else if (booking.status === 'accepted') {
+      return 'Worker on the Way';
+    } else if (booking.status === 'pending') {
+      return 'Finding Worker...';
+    }
+    return getStatusText(booking.status);
   };
 
   // Group bookings by date for daily reminders
@@ -506,6 +559,38 @@ export default function MyBookingsScreen() {
     });
   };
 
+  // Filter bookings based on active filter
+  const filteredBookings = bookings.filter((booking) => {
+    switch (activeFilter) {
+      case 'completed':
+        return booking.status === 'completed';
+      case 'payment_pending':
+        return booking.status === 'completed' && booking.paymentStatus !== 'paid';
+      case 'payment_confirmed':
+        return booking.status === 'completed' && 
+               (booking.userConfirmedPayment || booking.workerConfirmedPayment) && 
+               booking.paymentStatus !== 'paid';
+      case 'payment_paid':
+        return booking.paymentStatus === 'paid';
+      case 'all':
+      default:
+        return true;
+    }
+  });
+
+  // Get counts for each filter
+  const filterCounts = {
+    all: bookings.length,
+    completed: bookings.filter(b => b.status === 'completed').length,
+    payment_pending: bookings.filter(b => b.status === 'completed' && b.paymentStatus !== 'paid').length,
+    payment_confirmed: bookings.filter(b => 
+      b.status === 'completed' && 
+      (b.userConfirmedPayment || b.workerConfirmedPayment) && 
+      b.paymentStatus !== 'paid'
+    ).length,
+    payment_paid: bookings.filter(b => b.paymentStatus === 'paid').length,
+  };
+
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
@@ -527,6 +612,124 @@ export default function MyBookingsScreen() {
           <TouchableOpacity onPress={() => setClearAllModalVisible(true)} style={styles.refreshButton}>
             <Ionicons name="trash-outline" size={24} color="#fff" />
           </TouchableOpacity>
+        </View>
+
+        {/* Filter Buttons - Always Visible */}
+        <View style={[styles.filterContainer, { backgroundColor: theme.card || '#FFFFFF', borderBottomColor: theme.border || '#E5E7EB' }]}>
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filterScrollContent}
+          >
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  activeFilter === 'all' && styles.filterButtonActive,
+                  activeFilter === 'all' && { backgroundColor: theme.primary }
+                ]}
+                onPress={() => setActiveFilter('all')}
+              >
+                <Text style={[
+                  styles.filterButtonText,
+                  activeFilter === 'all' && styles.filterButtonTextActive,
+                  activeFilter === 'all' && { color: '#fff' }
+                ]}>
+                  All ({filterCounts.all})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  activeFilter === 'completed' && styles.filterButtonActive,
+                  activeFilter === 'completed' && { backgroundColor: theme.success }
+                ]}
+                onPress={() => setActiveFilter('completed')}
+              >
+                <Ionicons 
+                  name="checkmark-circle" 
+                  size={16} 
+                  color={activeFilter === 'completed' ? '#fff' : theme.success} 
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[
+                  styles.filterButtonText,
+                  activeFilter === 'completed' && styles.filterButtonTextActive,
+                  activeFilter === 'completed' && { color: '#fff' }
+                ]}>
+                  Completed ({filterCounts.completed})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  activeFilter === 'payment_pending' && styles.filterButtonActive,
+                  activeFilter === 'payment_pending' && { backgroundColor: theme.warning }
+                ]}
+                onPress={() => setActiveFilter('payment_pending')}
+              >
+                <Ionicons 
+                  name="time-outline" 
+                  size={16} 
+                  color={activeFilter === 'payment_pending' ? '#fff' : theme.warning} 
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[
+                  styles.filterButtonText,
+                  activeFilter === 'payment_pending' && styles.filterButtonTextActive,
+                  activeFilter === 'payment_pending' && { color: '#fff' }
+                ]}>
+                  Payment Pending ({filterCounts.payment_pending})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  activeFilter === 'payment_confirmed' && styles.filterButtonActive,
+                  activeFilter === 'payment_confirmed' && { backgroundColor: theme.info }
+                ]}
+                onPress={() => setActiveFilter('payment_confirmed')}
+              >
+                <Ionicons 
+                  name="checkmark-done" 
+                  size={16} 
+                  color={activeFilter === 'payment_confirmed' ? '#fff' : theme.info} 
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[
+                  styles.filterButtonText,
+                  activeFilter === 'payment_confirmed' && styles.filterButtonTextActive,
+                  activeFilter === 'payment_confirmed' && { color: '#fff' }
+                ]}>
+                  Confirmed ({filterCounts.payment_confirmed})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.filterButton,
+                  activeFilter === 'payment_paid' && styles.filterButtonActive,
+                  activeFilter === 'payment_paid' && { backgroundColor: theme.success }
+                ]}
+                onPress={() => setActiveFilter('payment_paid')}
+              >
+                <Ionicons 
+                  name="card" 
+                  size={16} 
+                  color={activeFilter === 'payment_paid' ? '#fff' : theme.success} 
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[
+                  styles.filterButtonText,
+                  activeFilter === 'payment_paid' && styles.filterButtonTextActive,
+                  activeFilter === 'payment_paid' && { color: '#fff' }
+                ]}>
+                  Paid ({filterCounts.payment_paid})
+                </Text>
+              </TouchableOpacity>
+          </ScrollView>
         </View>
 
         {/* Confirmation Modal */}
@@ -564,7 +767,26 @@ export default function MyBookingsScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           showsVerticalScrollIndicator={false}
         >
-          {bookings.length === 0 ? (
+          {filteredBookings.length === 0 && bookings.length > 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="filter-outline" size={64} color={theme.icon} />
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>
+                No {activeFilter === 'all' ? '' : activeFilter === 'completed' ? 'Completed' : activeFilter === 'payment_pending' ? 'Payment Pending' : activeFilter === 'payment_confirmed' ? 'Payment Confirmed' : 'Paid'} Bookings
+              </Text>
+              <Text style={[styles.emptySubtitle, { color: theme.secondary }]}>
+                {activeFilter === 'all' 
+                  ? 'You don\'t have any bookings at the moment'
+                  : `You don't have any ${activeFilter === 'completed' ? 'completed' : activeFilter === 'payment_pending' ? 'bookings with pending payment' : activeFilter === 'payment_confirmed' ? 'bookings with confirmed payment' : 'paid bookings'}`
+                }
+              </Text>
+              <TouchableOpacity 
+                style={[styles.exploreButton, { backgroundColor: theme.tint }]}
+                onPress={() => setActiveFilter('all')}
+              >
+                <Text style={styles.exploreButtonText}>Show All</Text>
+              </TouchableOpacity>
+            </View>
+          ) : bookings.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="clipboard-outline" size={64} color={theme.icon} />
               <Text style={styles.emptyTitle}>No bookings yet</Text>
@@ -577,7 +799,7 @@ export default function MyBookingsScreen() {
             <>
               {/* Daily Bookings Grouped by Date */}
               {(() => {
-                const groupedBookings = groupBookingsByDate(bookings);
+                const groupedBookings = groupBookingsByDate(filteredBookings);
                 const sortedDates = Object.keys(groupedBookings).sort((a, b) => {
                   return new Date(a).getTime() - new Date(b).getTime();
                 });
@@ -626,7 +848,7 @@ export default function MyBookingsScreen() {
                               </View>
                               <View style={[styles.statusBadge, { backgroundColor: getStatusColor(booking.status) + '20' }]}>
                                 <Text style={[styles.statusText, { color: getStatusColor(booking.status) }]}>
-                                  {getStatusText(booking.status)}
+                                  {getDetailedStatusText(booking)}
                                 </Text>
                               </View>
                             </View>
@@ -931,6 +1153,55 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  filterContainer: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 5,
+    minHeight: 60,
+    width: '100%',
+    zIndex: 10,
+  },
+  filterScrollContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+    alignItems: 'center',
+  },
+  filterButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 22,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    marginRight: 8,
+    minHeight: 40,
+  },
+  filterButtonActive: {
+    borderWidth: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  filterButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  filterButtonTextActive: {
+    fontWeight: '700',
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -1140,6 +1411,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 24,
+  },
+  exploreButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  exploreButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   browseButton: {
     paddingHorizontal: 24,

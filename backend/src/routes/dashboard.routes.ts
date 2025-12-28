@@ -10,46 +10,92 @@ const router = Router();
 // Get dashboard statistics
 router.get("/stats", async (req: Request, res: Response) => {
   try {
+    console.log('📊 Fetching dashboard stats...');
+    
     // Get user counts
-    const totalUsers = await User.countDocuments({ role: { $ne: 'admin' } });
-    const totalAdmins = await User.countDocuments({ role: 'admin' });
+    let totalUsers = 0;
+    let totalAdmins = 0;
+    try {
+      totalUsers = await User.countDocuments({ role: { $ne: 'admin' } });
+      totalAdmins = await User.countDocuments({ role: 'admin' });
+      console.log('✅ User counts:', { totalUsers, totalAdmins });
+    } catch (userError: any) {
+      console.error('❌ Error fetching user counts:', userError);
+      throw new Error(`Failed to fetch user counts: ${userError.message}`);
+    }
 
     // Get worker counts (from WorkerUser model)
-    const totalWorkers = await WorkerUser.countDocuments();
-    const pendingWorkers = await WorkerUser.countDocuments({ 
-      verificationStatus: { $in: ['pending', 'submitted'] } 
-    });
-    const approvedWorkers = await WorkerUser.countDocuments({ 
-      verificationStatus: 'verified' 
-    });
-    const deniedWorkers = await WorkerUser.countDocuments({ 
-      verificationStatus: 'rejected' 
-    });
+    let totalWorkers = 0;
+    let pendingWorkers = 0;
+    let approvedWorkers = 0;
+    let deniedWorkers = 0;
+    try {
+      totalWorkers = await WorkerUser.countDocuments();
+      pendingWorkers = await WorkerUser.countDocuments({ 
+        verificationStatus: { $in: ['pending', 'submitted'] } 
+      });
+      approvedWorkers = await WorkerUser.countDocuments({ 
+        verificationStatus: 'verified' 
+      });
+      deniedWorkers = await WorkerUser.countDocuments({ 
+        verificationStatus: 'rejected' 
+      });
+      console.log('✅ Worker counts:', { totalWorkers, pendingWorkers, approvedWorkers, deniedWorkers });
+    } catch (workerError: any) {
+      console.error('❌ Error fetching worker counts:', workerError);
+      throw new Error(`Failed to fetch worker counts: ${workerError.message}`);
+    }
 
     // Get booking counts
-    const totalBookings = await Booking.countDocuments();
-    const recentBookings = await Booking.countDocuments({
-      createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
-    });
+    let totalBookings = 0;
+    let recentBookings = 0;
+    try {
+      totalBookings = await Booking.countDocuments();
+      recentBookings = await Booking.countDocuments({
+        createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      });
+      console.log('✅ Booking counts:', { totalBookings, recentBookings });
+    } catch (bookingError: any) {
+      console.error('❌ Error fetching booking counts:', bookingError);
+      throw new Error(`Failed to fetch booking counts: ${bookingError.message}`);
+    }
 
     // Get service counts
-    const activeServices = await Service.countDocuments({ isActive: true });
-    const totalServices = await Service.countDocuments();
+    let activeServices = 0;
+    let totalServices = 0;
+    try {
+      activeServices = await Service.countDocuments({ isActive: true });
+      totalServices = await Service.countDocuments();
+      console.log('✅ Service counts:', { activeServices, totalServices });
+    } catch (serviceError: any) {
+      console.error('❌ Error fetching service counts:', serviceError);
+      throw new Error(`Failed to fetch service counts: ${serviceError.message}`);
+    }
 
     // Get recent registrations (last 7 days)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const recentUsers = await User.countDocuments({ 
-      role: { $ne: 'admin' },
-      createdAt: { $gte: sevenDaysAgo } 
-    });
-    const recentWorkers = await WorkerUser.countDocuments({ 
-      createdAt: { $gte: sevenDaysAgo } 
-    });
+    let recentUsers = 0;
+    let recentWorkers = 0;
+    try {
+      recentUsers = await User.countDocuments({ 
+        role: { $ne: 'admin' },
+        createdAt: { $gte: sevenDaysAgo } 
+      });
+      recentWorkers = await WorkerUser.countDocuments({ 
+        createdAt: { $gte: sevenDaysAgo } 
+      });
+      console.log('✅ Recent registrations:', { recentUsers, recentWorkers });
+    } catch (recentError: any) {
+      console.error('❌ Error fetching recent registrations:', recentError);
+      // Don't throw here, just use 0 as default
+      recentUsers = 0;
+      recentWorkers = 0;
+    }
 
     // Calculate total users (users + workers)
     const totalAllUsers = totalUsers + totalWorkers;
 
-    return res.json({
+    const stats = {
       users: {
         total: totalAllUsers, // Combined users + workers
         regularUsers: totalUsers,
@@ -74,10 +120,22 @@ router.get("/stats", async (req: Request, res: Response) => {
         active: activeServices,
         total: totalServices,
       },
+    };
+
+    console.log('✅ Dashboard stats fetched successfully');
+    return res.json(stats);
+  } catch (err: any) {
+    console.error('❌ Dashboard stats error:', err);
+    console.error('Error details:', {
+      message: err?.message,
+      stack: err?.stack,
+      name: err?.name
     });
-  } catch (err) {
-    console.error('Dashboard stats error:', err);
-    return res.status(500).json({ message: "Failed to fetch dashboard stats" });
+    return res.status(500).json({ 
+      message: "Failed to fetch dashboard stats",
+      error: err?.message || String(err),
+      details: process.env.NODE_ENV === 'development' ? err?.stack : undefined
+    });
   }
 });
 

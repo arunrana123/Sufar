@@ -43,6 +43,9 @@ export interface SocketEvents {
   // Booking status events
   'booking:status_updated': (data: any) => void;
 
+  // Payment events
+  'payment:status_updated': (data: { bookingId: string; paymentStatus: string; userConfirmed: boolean; workerConfirmed: boolean; booking?: any }) => void;
+
   // Worker stats events
   'worker:stats_updated': (data: { workerId: string; message?: string }) => void;
 

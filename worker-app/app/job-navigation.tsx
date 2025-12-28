@@ -126,9 +126,44 @@ export default function JobNavigationScreen() {
       }
     });
 
+    // Listen for booking updates
+    socketService.on('booking:updated', (updatedBooking: any) => {
+      if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
+        console.log('📝 Booking updated in job-navigation:', updatedBooking);
+        setBooking(updatedBooking);
+        
+        // Update nav status based on booking status
+        if (updatedBooking.status === 'accepted') {
+          setNavStatus('idle');
+        } else if (updatedBooking.status === 'in_progress') {
+          setNavStatus('working');
+          if (updatedBooking.workStartTime) {
+            setWorkStartTime(new Date(updatedBooking.workStartTime));
+          }
+        } else if (updatedBooking.status === 'completed') {
+          setNavStatus('completed');
+        }
+      }
+    });
+
+    // Listen for payment status updates
+    socketService.on('payment:status_updated', (data: any) => {
+      if (data.bookingId === bookingId) {
+        console.log('💳 Payment status updated in job-navigation:', data);
+        setBooking((prev: any) => prev ? {
+          ...prev,
+          paymentStatus: data.paymentStatus,
+          userConfirmedPayment: data.userConfirmed,
+          workerConfirmedPayment: data.workerConfirmed,
+        } : null);
+      }
+    });
+
     return () => {
       stopLocationTracking();
       socketService.off('user:location');
+      socketService.off('booking:updated');
+      socketService.off('payment:status_updated');
     };
   }, [bookingId]);
 
@@ -242,35 +277,109 @@ export default function JobNavigationScreen() {
     return R * c;
   };
 
-  const handleStartNavigation = () => {
+  const handleStartNavigation = async () => {
     setNavStatus('navigating');
-    socketService.emit('navigation:started', { bookingId, workerId: worker?.id });
-    Alert.alert('Navigation Started', 'Your live location is now being shared with the customer');
+    
+    // Emit navigation started event to user
+    socketService.emit('navigation:started', { 
+      bookingId, 
+      workerId: worker?.id,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // Update booking status to accepted (if not already)
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'accepted' }),
+      });
+      
+      if (response.ok) {
+        const updatedBooking = await response.json();
+        setBooking(updatedBooking);
+        console.log('✅ Booking status updated to accepted');
+      }
+    } catch (error) {
+      console.error('Error updating booking status:', error);
+    }
+    
+    showToast(
+      'Navigation started! Your live location is being shared with the customer.',
+      'Navigation Started',
+      'success'
+    );
   };
 
   const handleArrived = async () => {
     setNavStatus('arrived');
-    socketService.emit('navigation:arrived', { bookingId, workerId: worker?.id });
     
-    // Update booking status
+    // Emit navigation arrived event to user
+    socketService.emit('navigation:arrived', { 
+      bookingId, 
+      workerId: worker?.id,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // Update booking status (keep as accepted, arrival is just a navigation event)
     try {
       const apiUrl = getApiUrl();
-      await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
+      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'arrived' }),
+        body: JSON.stringify({ status: 'accepted' }),
       });
+      
+      if (response.ok) {
+        const updatedBooking = await response.json();
+        setBooking(updatedBooking);
+        console.log('✅ Booking updated after arrival');
+      }
     } catch (error) {
       console.error('Error updating booking status:', error);
     }
 
-    Alert.alert('Arrived!', 'You have marked yourself as arrived at the destination');
+    showToast(
+      'You have arrived at the destination! Customer has been notified.',
+      'Arrived!',
+      'success'
+    );
   };
 
-  const handleEndNavigation = () => {
+  const handleEndNavigation = async () => {
     setNavStatus('idle');
-    socketService.emit('navigation:ended', { bookingId, workerId: worker?.id });
-    Alert.alert('Navigation Ended', 'You can now start the work');
+    
+    // Emit navigation ended event to user
+    socketService.emit('navigation:ended', { 
+      bookingId, 
+      workerId: worker?.id,
+      timestamp: new Date().toISOString(),
+    });
+    
+    // Update booking status
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'accepted' }),
+      });
+      
+      if (response.ok) {
+        const updatedBooking = await response.json();
+        setBooking(updatedBooking);
+        console.log('✅ Booking updated after navigation ended');
+      }
+    } catch (error) {
+      console.error('Error updating booking status:', error);
+    }
+    
+    showToast(
+      'Navigation ended. You can now start the work.',
+      'Navigation Ended',
+      'info'
+    );
   };
 
   const handleStartWork = async () => {
@@ -280,18 +389,19 @@ export default function JobNavigationScreen() {
     
     const startTimeISO = startTime.toISOString();
     
-    // Emit work started event with timestamp to user
+    // Emit work started event with timestamp to user FIRST
     socketService.emit('work:started', {
       bookingId,
       workerId: worker?.id,
       startTime: startTimeISO,
       timestamp: startTimeISO,
     });
+    console.log('✅ Work started event emitted to user');
 
-    // Update booking status
+    // Update booking status to in_progress
     try {
       const apiUrl = getApiUrl();
-      await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
+      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -299,12 +409,18 @@ export default function JobNavigationScreen() {
           workStartTime: startTimeISO 
         }),
       });
+      
+      if (response.ok) {
+        const updatedBooking = await response.json();
+        setBooking((prev: any) => prev ? { ...prev, ...updatedBooking, status: 'in_progress' } : updatedBooking);
+        console.log('✅ Booking status updated to in_progress');
+      }
     } catch (error) {
       console.error('Error updating booking status:', error);
     }
 
     showToast(
-      'Timer is now running. Complete the work and mark as done.',
+      'Work started! Timer is running. Customer has been notified.',
       'Work Started',
       'success'
     );
