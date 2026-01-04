@@ -1645,161 +1645,198 @@ export default function ProfileScreen() {
             </View>
           )}
 
-          {/* New Service Verification Section - Dropdown */}
+          {/* 1. Document Verification Section - Upload area for pending and rejected services */}
           {(() => {
-            // Always check for pending services
-            const pendingServices = serviceCategories.filter(category => {
+            // Services that need document uploads: either have no docs or were rejected
+            const needsDocuments = serviceCategories.filter(category => {
               const status = categoryVerificationStatus[category] || 'pending';
               const docs = categoryVerificationDocs[category] || { skillProof: null, experience: null };
-              // A service is pending if status is pending OR if documents are missing
-              return status === 'pending' || !docs.skillProof || !docs.experience;
+              // Show if: no documents uploaded yet OR status is rejected (needs resubmission)
+              return (!docs.skillProof || !docs.experience) || status === 'rejected';
             });
 
-            // Show section if there are pending services
-            if (pendingServices.length > 0) {
+            if (needsDocuments.length > 0) {
               return (
                 <View style={styles.detailsSection}>
-                  {/* Dropdown Header */}
-                  <TouchableOpacity 
-                    style={styles.dropdownHeader}
-                    onPress={() => setNewServiceSectionExpanded(!newServiceSectionExpanded)}
-                  >
-                    <View style={styles.dropdownHeaderLeft}>
-                      <Ionicons name="add-circle-outline" size={24} color="#FF7A2C" />
-                      <Text style={styles.sectionTitle}>New Service Verification</Text>
+                  <View style={styles.sectionHeaderWithIcon}>
+                    <View style={styles.sectionHeaderLeft}>
+                      <Ionicons name="document-outline" size={24} color="#FF7A2C" />
+                      <Text style={styles.sectionTitle}>Document Verification</Text>
                     </View>
-                    <View style={styles.dropdownHeaderRight}>
-                      <View style={styles.pendingBadge}>
-                        <Text style={styles.pendingBadgeText}>{pendingServices.length}</Text>
-                      </View>
-                      <TouchableOpacity 
-                        style={styles.refreshButton}
-                        onPress={loadServiceCategories}
-                      >
-                        <Ionicons name="refresh" size={18} color="#FF7A2C" />
-                      </TouchableOpacity>
-                      <Ionicons 
-                        name={newServiceSectionExpanded ? 'chevron-up' : 'chevron-down'} 
-                        size={24} 
-                        color="#666" 
-                      />
+                    <View style={styles.verificationBadge}>
+                      <Text style={styles.verificationBadgeText}>{needsDocuments.length}</Text>
                     </View>
-                  </TouchableOpacity>
+                  </View>
+                  <Text style={styles.sectionSubtitle}>
+                    Upload documents for verification or resubmit rejected documents
+                  </Text>
                   
-                  {/* Dropdown Content */}
-                  {newServiceSectionExpanded && (
-                    <View style={styles.dropdownContent}>
-                      <Text style={styles.sectionSubtitle}>
-                        The following services require verification documents. Tap on a service to upload documents.
-                      </Text>
-                      
-                      {pendingServices.map((category) => {
-                        const status = categoryVerificationStatus[category] || 'pending';
-                        const docs = categoryVerificationDocs[category] || { skillProof: null, experience: null };
-                        const isUploading = uploadingCategory === category;
-                        const canSubmit = docs.skillProof && docs.experience && status !== 'verified';
-                        
-                        return (
-                          <View key={category} style={styles.newServiceCard}>
-                            <View style={styles.newServiceHeader}>
-                              <View style={styles.newServiceHeaderLeft}>
-                                <Ionicons 
-                                  name="time-outline" 
-                                  size={24} 
-                                  color="#FF9800" 
-                                />
-                                <Text style={styles.newServiceTitle}>{category}</Text>
-                              </View>
-                              <View style={styles.newServiceStatusBadge}>
-                                <Text style={styles.newServiceStatusText}>Verification Pending</Text>
-                              </View>
-                            </View>
-                            
-                            <View style={styles.newServiceContent}>
-                              <Text style={styles.newServiceMessage}>
-                                This service has been added and requires verification. Upload the required documents below.
-                              </Text>
-                              
-                              {/* Skill Proof Upload */}
-                              <View style={styles.newServiceDocUploadSection}>
-                                <Text style={styles.newServiceDocLabel}>Skill Proof Document *</Text>
-                                <TouchableOpacity
-                                  style={[
-                                    styles.newServiceDocUploadButton,
-                                    docs.skillProof && styles.newServiceDocUploadButtonSuccess
-                                  ]}
-                                  onPress={() => pickCategoryDocument(category, 'skillProof')}
-                                  disabled={isUploading}
-                                >
-                                  <Ionicons
-                                    name={docs.skillProof ? 'checkmark-circle' : 'document-outline'}
-                                    size={20}
-                                    color={docs.skillProof ? '#4CAF50' : '#FF7A2C'}
-                                  />
-                                  <Text style={styles.newServiceDocUploadText}>
-                                    {docs.skillProof ? 'Document Selected' : 'Upload Skill Proof'}
-                                  </Text>
-                                </TouchableOpacity>
-                              </View>
-
-                              {/* Experience Upload */}
-                              <View style={styles.newServiceDocUploadSection}>
-                                <Text style={styles.newServiceDocLabel}>Working Experience Document *</Text>
-                                <TouchableOpacity
-                                  style={[
-                                    styles.newServiceDocUploadButton,
-                                    docs.experience && styles.newServiceDocUploadButtonSuccess
-                                  ]}
-                                  onPress={() => pickCategoryDocument(category, 'experience')}
-                                  disabled={isUploading}
-                                >
-                                  <Ionicons
-                                    name={docs.experience ? 'checkmark-circle' : 'document-outline'}
-                                    size={20}
-                                    color={docs.experience ? '#4CAF50' : '#FF7A2C'}
-                                  />
-                                  <Text style={styles.newServiceDocUploadText}>
-                                    {docs.experience ? 'Document Selected' : 'Upload Experience'}
-                                  </Text>
-                                </TouchableOpacity>
-                              </View>
-                              
-                              {/* Submit Button */}
-                              {canSubmit && (
-                                <TouchableOpacity
-                                  style={[
-                                    styles.newServiceSubmitButton,
-                                    isUploading && styles.newServiceSubmitButtonDisabled
-                                  ]}
-                                  onPress={() => submitCategoryVerification(category)}
-                                  disabled={isUploading}
-                                >
-                                  <Ionicons
-                                    name={isUploading ? 'hourglass' : 'checkmark-circle'}
-                                    size={20}
-                                    color="#fff"
-                                  />
-                                  <Text style={styles.newServiceSubmitButtonText}>
-                                    {isUploading ? 'Submitting...' : 'Submit for Verification'}
-                                  </Text>
-                                </TouchableOpacity>
-                              )}
-
-                              {/* Status Message - Show appropriate message based on document state */}
-                              {docs.skillProof && docs.experience && !isUploading && (
-                                <View style={styles.statusMessageBox}>
-                                  <Ionicons name="information-circle" size={18} color="#FF9800" />
-                                  <Text style={styles.newServiceStatusMessage}>
-                                    Documents ready! Tap "Submit for Verification" to send to admin for review.
-                                  </Text>
-                                </View>
-                              )}
-                            </View>
+                  {needsDocuments.map((category) => {
+                    const status = categoryVerificationStatus[category] || 'pending';
+                    const docs = categoryVerificationDocs[category] || { skillProof: null, experience: null };
+                    const isUploading = uploadingCategory === category;
+                    const isRejected = status === 'rejected';
+                    
+                    return (
+                      <View key={`verify-${category}`} style={[
+                        styles.verificationCard,
+                        isRejected && styles.verificationCardError
+                      ]}>
+                        <View style={styles.verificationCardHeader}>
+                          <View style={styles.verificationCardLeft}>
+                            <Ionicons name={isRejected ? "close-circle" : "document-text-outline"} size={20} color={isRejected ? "#F44336" : "#FF9800"} />
+                            <Text style={[styles.verificationCardTitle, isRejected && styles.verificationCardTitleError]}>{category}</Text>
                           </View>
-                        );
-                      })}
+                          <View style={[styles.verificationCardBadge, isRejected && styles.verificationCardBadgeError]}>
+                            <Text style={[styles.verificationCardBadgeText, isRejected && styles.verificationCardBadgeTextError]}>
+                              {isRejected ? "❌ Resubmit" : "📝 Upload"}
+                            </Text>
+                          </View>
+                        </View>
+                        
+                        {/* Upload Section */}
+                        <View style={styles.uploadSection}>
+                          <TouchableOpacity
+                            style={[styles.docUploadButton, docs.skillProof && styles.docUploadButtonSuccess]}
+                            onPress={() => pickCategoryDocument(category, 'skillProof')}
+                            disabled={isUploading}
+                          >
+                            <Ionicons name={docs.skillProof ? "checkmark-circle" : "cloud-upload-outline"} size={18} color={docs.skillProof ? "#4CAF50" : "#FF7A2C"} />
+                            <Text style={styles.docUploadButtonText}>{docs.skillProof ? "✓ Skill Proof" : "+ Skill Proof"}</Text>
+                          </TouchableOpacity>
+                          
+                          <TouchableOpacity
+                            style={[styles.docUploadButton, docs.experience && styles.docUploadButtonSuccess]}
+                            onPress={() => pickCategoryDocument(category, 'experience')}
+                            disabled={isUploading}
+                          >
+                            <Ionicons name={docs.experience ? "checkmark-circle" : "cloud-upload-outline"} size={18} color={docs.experience ? "#4CAF50" : "#FF7A2C"} />
+                            <Text style={styles.docUploadButtonText}>{docs.experience ? "✓ Experience" : "+ Experience"}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        
+                        {/* Submit Button */}
+                        {docs.skillProof && docs.experience && (
+                          <TouchableOpacity
+                            style={[styles.submitDocButton, isUploading && styles.submitDocButtonDisabled]}
+                            onPress={() => submitCategoryVerification(category)}
+                            disabled={isUploading}
+                          >
+                            <Ionicons name={isUploading ? "hourglass" : "checkmark-circle"} size={16} color="#fff" />
+                            <Text style={styles.submitDocButtonText}>
+                              {isUploading ? "Submitting..." : isRejected ? "Resubmit for Review" : "Submit for Verification"}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              );
+            }
+            return null;
+          })()}
+
+          {/* 2. Document Updates Section - Status of submitted documents */}
+          {(() => {
+            // Services with documents submitted (pending or rejected)
+            const submittedOrRejected = serviceCategories.filter(category => {
+              const status = categoryVerificationStatus[category] || 'pending';
+              const docs = categoryVerificationDocs[category] || { skillProof: null, experience: null };
+              // Show if: has documents AND (pending review OR rejected)
+              return (docs.skillProof || docs.experience) && (status === 'pending' || status === 'rejected');
+            });
+
+            if (submittedOrRejected.length > 0) {
+              return (
+                <View style={styles.detailsSection}>
+                  <View style={styles.sectionHeaderWithIcon}>
+                    <View style={styles.sectionHeaderLeft}>
+                      <Ionicons name="information-circle-outline" size={24} color="#2196F3" />
+                      <Text style={styles.sectionTitle}>Document Updates</Text>
                     </View>
-                  )}
+                    <View style={styles.verificationBadge}>
+                      <Text style={styles.verificationBadgeText}>{submittedOrRejected.length}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.sectionSubtitle}>
+                    Live status updates on your submitted documents
+                  </Text>
+                  
+                  {submittedOrRejected.map((category) => {
+                    const status = categoryVerificationStatus[category] || 'pending';
+                    const isRejected = status === 'rejected';
+                    
+                    return (
+                      <View key={`update-${category}`} style={[
+                        styles.verificationCard,
+                        isRejected && styles.verificationCardError
+                      ]}>
+                        <View style={styles.verificationCardHeader}>
+                          <View style={styles.verificationCardLeft}>
+                            <Ionicons name={isRejected ? "close-circle" : "time-outline"} size={20} color={isRejected ? "#F44336" : "#2196F3"} />
+                            <Text style={[styles.verificationCardTitle, isRejected && styles.verificationCardTitleError]}>{category}</Text>
+                          </View>
+                          <View style={[styles.verificationCardBadge, isRejected && styles.verificationCardBadgeError]}>
+                            <Text style={[styles.verificationCardBadgeText, isRejected && styles.verificationCardBadgeTextError]}>
+                              {isRejected ? "❌ Rejected" : "⏳ Pending"}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.verificationCardMessage}>
+                          {isRejected 
+                            ? "Your documents were rejected. Please review and resubmit in the Document Verification section above."
+                            : "Your documents are under review. Admin typically reviews within 1-2 business days."}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              );
+            }
+            return null;
+          })()}
+
+          {/* 3. Document Verified Section - Approved services */}
+          {(() => {
+            // Services that are verified and approved
+            const verifiedServices = serviceCategories.filter(category => {
+              const status = categoryVerificationStatus[category] || 'pending';
+              return status === 'verified';
+            });
+
+            if (verifiedServices.length > 0) {
+              return (
+                <View style={styles.detailsSection}>
+                  <View style={styles.sectionHeaderWithIcon}>
+                    <View style={styles.sectionHeaderLeft}>
+                      <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
+                      <Text style={[styles.sectionTitle, styles.sectionTitleSuccess]}>Document Verified</Text>
+                    </View>
+                    <View style={styles.verificationBadgeSuccess}>
+                      <Text style={styles.verificationBadgeTextSuccess}>{verifiedServices.length}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.sectionSubtitle}>
+                    Your verified services are active and ready to receive requests
+                  </Text>
+                  
+                  {verifiedServices.map((category) => (
+                    <View key={`verified-${category}`} style={styles.verificationCardSuccess}>
+                      <View style={styles.verificationCardHeader}>
+                        <View style={styles.verificationCardLeft}>
+                          <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
+                          <Text style={[styles.verificationCardTitle, styles.verificationCardTitleSuccess]}>{category}</Text>
+                        </View>
+                        <View style={styles.verificationCardBadgeSuccess}>
+                          <Text style={styles.verificationCardBadgeTextSuccess}>✅ Verified</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.verificationCardMessage}>
+                        This service is verified and active. You can receive requests and build your reputation.
+                      </Text>
+                    </View>
+                  ))}
                 </View>
               );
             }
@@ -1809,9 +1846,9 @@ export default function ProfileScreen() {
           {/* Service Category Verification Section */}
           {serviceCategories.length > 0 && (
             <View style={styles.detailsSection}>
-              <Text style={styles.sectionTitle}>Service Category Verification</Text>
+              <Text style={styles.sectionTitle}>All Service Categories</Text>
               <Text style={styles.sectionSubtitle}>
-                Verify each service category by uploading required documents
+                Manage verification for all service categories
               </Text>
               
               {serviceCategories.map((category) => {
@@ -1844,7 +1881,7 @@ export default function ProfileScreen() {
                           status === 'verified' && styles.categoryVerificationStatusVerified,
                           status === 'rejected' && styles.categoryVerificationStatusRejected,
                         ]}>
-                          {status === 'verified' ? 'Verified' : status === 'rejected' ? 'Rejected' : 'Pending'}
+                          {status === 'verified' ? '✅ Verified' : status === 'rejected' ? '❌ Rejected' : '⏳ Pending'}
                         </Text>
                         <Ionicons 
                           name={isExpanded ? 'chevron-up' : 'chevron-down'} 
@@ -2560,10 +2597,6 @@ const styles = StyleSheet.create({
     height: 150,
     resizeMode: 'cover',
   },
-  // New upload section styles
-  uploadSection: {
-    marginTop: 16,
-  },
   uploadSectionTitle: {
     fontSize: 16,
     fontWeight: '600',
@@ -2575,6 +2608,7 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 20,
   },
+
   documentUploadButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2802,6 +2836,150 @@ const styles = StyleSheet.create({
     color: '#F44336',
     backgroundColor: '#FFEBEE',
   },
+  // Verification Sections Styles
+  sectionHeaderWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  sectionTitleSuccess: {
+    color: '#4CAF50',
+  },
+  sectionTitleError: {
+    color: '#F44336',
+  },
+  verificationBadge: {
+    backgroundColor: '#FF7A2C',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    minWidth: 32,
+    alignItems: 'center',
+  },
+  verificationBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  verificationBadgeSuccess: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    minWidth: 32,
+    alignItems: 'center',
+  },
+  verificationBadgeTextSuccess: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  verificationBadgeError: {
+    backgroundColor: '#F44336',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    minWidth: 32,
+    alignItems: 'center',
+  },
+  verificationBadgeTextError: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  verificationCard: {
+    backgroundColor: '#FFF9F0',
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF9800',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  verificationCardSuccess: {
+    backgroundColor: '#F1F8F5',
+    borderLeftWidth: 4,
+    borderLeftColor: '#4CAF50',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  verificationCardError: {
+    backgroundColor: '#FFEBEE',
+    borderLeftWidth: 4,
+    borderLeftColor: '#F44336',
+    padding: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  verificationCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  verificationCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  verificationCardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    flex: 1,
+  },
+  verificationCardTitleSuccess: {
+    color: '#4CAF50',
+  },
+  verificationCardTitleError: {
+    color: '#F44336',
+  },
+  verificationCardBadge: {
+    backgroundColor: '#FFE5CC',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  verificationCardBadgeText: {
+    color: '#FF7A2C',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  verificationCardBadgeSuccess: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  verificationCardBadgeTextSuccess: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  verificationCardBadgeError: {
+    backgroundColor: '#FFEBEE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  verificationCardBadgeTextError: {
+    color: '#F44336',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  verificationCardMessage: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 18,
+  },
   // Dropdown styles
   dropdownHeader: {
     flexDirection: 'row',
@@ -2982,6 +3160,56 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#FFE082',
+  },
+  // Upload Section Styles
+  uploadSection: {
+    flexDirection: 'row',
+    gap: 12,
+    marginVertical: 12,
+  },
+  docUploadButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#FF7A2C',
+    borderStyle: 'dashed',
+    backgroundColor: '#FFF5F0',
+  },
+  docUploadButtonSuccess: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#F1F8F5',
+    borderStyle: 'solid',
+  },
+  docUploadButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+  },
+  submitDocButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#FF7A2C',
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  submitDocButtonDisabled: {
+    backgroundColor: '#CCCCCC',
+    opacity: 0.6,
+  },
+  submitDocButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
   },
 });
 

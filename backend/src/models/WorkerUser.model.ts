@@ -41,6 +41,7 @@ export interface IWorkerUser extends Document {
   verificationNotes?: string;
   verificationSubmitted?: boolean;
   submittedAt?: Date;
+  dateOfBirth?: Date;
   experience?: string;
   otpCode?: string;
   otpExpires?: Date;
@@ -98,6 +99,7 @@ const WorkerUserSchema: Schema = new Schema({
   verificationNotes: { type: String },
   verificationSubmitted: { type: Boolean, default: false },
   submittedAt: { type: Date },
+  dateOfBirth: { type: Date },
   experience: { type: String },
   otpCode: { type: String },
   otpExpires: { type: Date },
@@ -118,5 +120,13 @@ WorkerUserSchema.pre('save', function(next) {
   this.updatedAt = new Date();
   next();
 });
+
+// Indexes for better performance
+// WorkerUserSchema.index({ email: 1 }); // Already indexed by unique constraint
+WorkerUserSchema.index({ isActive: 1, status: 1 }); // Active/available workers
+WorkerUserSchema.index({ serviceCategories: 1 }); // Service category filtering
+WorkerUserSchema.index({ 'currentLocation.coordinates': '2dsphere' }); // Location-based queries
+WorkerUserSchema.index({ rating: -1 }); // Sort by rating
+WorkerUserSchema.index({ verificationStatus: 1 }); // Verification status filtering
 
 export default mongoose.model<IWorkerUser>("WorkerUser", WorkerUserSchema);

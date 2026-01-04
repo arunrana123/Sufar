@@ -12,6 +12,10 @@ import Service from '../models/Service.model';
 
 const router = Router();
 
+// Cache for booking queries to reduce database load
+const bookingCache = new Map<string, { data: any, timestamp: number }>();
+const BOOKING_CACHE_TTL = 60000; // 1 minute cache for bookings
+
 // Creates new booking and notifies nearby workers via Socket.IO
 // POST / - Body: userId, serviceId, serviceName, location, scheduledDate, price
 router.post('/', async (req: Request, res: Response) => {
@@ -96,6 +100,13 @@ router.post('/', async (req: Request, res: Response) => {
     await booking.save();
     console.log('Booking saved successfully:', booking._id);
     console.log('Booking status:', booking.status);
+
+    // Clear relevant booking caches when new booking is created
+    for (const [key] of bookingCache.entries()) {
+      if (key.includes('worker_bookings') || key.includes(`user_${userId}`)) {
+        bookingCache.delete(key);
+      }
+    }
 
     // Emit real-time event to notify workers (only verified workers for this service category)
     const io = req.app.get('io');
@@ -292,12 +303,23 @@ router.get('/user/:userId', async (req: Request, res: Response) => {
   }
 });
 
-// Get worker's bookings
+// Get worker's bookings - Optimized with intelligent caching
 // Returns: 1) Bookings assigned to this worker, 2) Pending bookings matching worker's service categories
 router.get('/worker/:workerId', async (req: Request, res: Response) => {
   try {
     const { workerId } = req.params;
     const { status } = req.query;
+
+    // Create cache key based on workerId and status filter
+    const cacheKey = `worker_bookings_${workerId}_${status || 'all'}`;
+    const cachedData = bookingCache.get(cacheKey);
+    const now = Date.now();
+
+    // Return cached data if available and not expired
+    if (cachedData && (now - cachedData.timestamp < BOOKING_CACHE_TTL)) {
+      console.log(`📋 Returning cached bookings for worker ${workerId} (${cachedData.data.length} bookings)`);
+      return res.json(cachedData.data);
+    }
 
     // Get worker's service categories
     const worker = await WorkerUser.findById(workerId).select('serviceCategories');
@@ -334,7 +356,21 @@ router.get('/worker/:workerId', async (req: Request, res: Response) => {
       .populate('userId', 'firstName lastName profilePhoto')
       .exec();
 
-    console.log(`✅ Fetched ${bookings.length} bookings for worker ${workerId}`);
+    console.log(`✅ Fetched ${bookings.length} bookings for worker ${workerId} from database`);
+    
+    // Cache the results
+    bookingCache.set(cacheKey, { data: bookings, timestamp: now });
+
+    // Clear old cache entries periodically (simple cleanup)
+    if (bookingCache.size > 100) {
+      const oldestAllowed = now - (BOOKING_CACHE_TTL * 2);
+      for (const [key, value] of bookingCache.entries()) {
+        if (value.timestamp < oldestAllowed) {
+          bookingCache.delete(key);
+        }
+      }
+    }
+
     res.json(bookings);
   } catch (error) {
     console.error('Get worker bookings error:', error);
@@ -544,6 +580,13 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
     }
 
     console.log('✅ Booking status updated:', booking.status);
+
+    // Clear relevant booking caches when booking status is updated
+    for (const [key] of bookingCache.entries()) {
+      if (key.includes('worker_bookings') || key.includes(`user_${booking.userId}`)) {
+        bookingCache.delete(key);
+      }
+    }
 
     // Emit real-time event to user and worker
     const io = req.app.get('io');

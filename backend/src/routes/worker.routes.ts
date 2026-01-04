@@ -4,7 +4,6 @@
 import { Router, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
 import { OAuth2Client } from 'google-auth-library';
-import Worker from "../models/Worker.model";
 import WorkerUser from "../models/WorkerUser.model";
 import Notification from "../models/Notification.model";
 import { logAdminActivity } from "./dashboard.routes";
@@ -205,105 +204,18 @@ router.post("/google-login", async (req: Request, res: Response) => {
   }
 });
 
-// Legacy worker registration (for admin dashboard)
-router.post("/admin-register", async (req: Request, res: Response) => {
-  try {
-    const { userId, name, dateOfBirth, typeOfWork, idCardImage, phoneNumber, skillProofDocument } = req.body;
-    if (!userId || !name || !dateOfBirth || !typeOfWork || !idCardImage || !phoneNumber || !skillProofDocument) {
-      return res.status(400).json({ message: "Missing required fields" });
-    }
+// Legacy worker registration routes - DEPRECATED
+// These routes used the old Worker model which has been replaced with WorkerUser
+// Keeping commented for reference but should be removed in future cleanup
 
-    // Validate and parse date of birth
-    const dobDate = new Date(dateOfBirth);
-    if (isNaN(dobDate.getTime())) {
-      return res.status(400).json({ message: "Invalid date of birth format. Please use DD/MM/YYYY or YYYY-MM-DD" });
-    }
-
-    const worker = await Worker.create({
-      userId,
-      name: name.trim(),
-      dateOfBirth: dobDate,
-      typeOfWork: typeOfWork.trim(),
-      idCardImage,
-      phoneNumber: phoneNumber.trim(),
-      skillProofDocument,
-      status: 'pending',
-    });
-    return res.status(201).json({ message: 'Worker registration submitted', workerId: worker._id });
-  } catch (err) {
-    console.error('Worker registration error:', err);
-    return res.status(500).json({ message: "Worker registration failed", error: String(err) });
-  }
-});
-
-// Get all pending worker requests (for admin dashboard)
-router.get("/pending", async (_req: Request, res: Response) => {
-  try {
-    const workers = await Worker.find({ status: 'pending' }).populate('userId', 'firstName email');
-    return res.json(workers);
-  } catch (err) {
-    console.error('Fetch pending workers error:', err);
-    return res.status(500).json({ message: "Failed to fetch pending workers" });
-  }
-});
-
-// Update worker status (approve/deny - for admin dashboard)
-router.patch("/:id/status", async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { status, adminId } = req.body as { status?: 'approved' | 'denied'; adminId?: string };
-
-    if (!status || !['approved', 'denied'].includes(status)) {
-      return res.status(400).json({ message: "Invalid status provided" });
-    }
-
-    const worker = await Worker.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true }
-    ).populate('userId', 'firstName lastName email');
-
-    if (!worker) {
-      return res.status(404).json({ message: "Worker not found" });
-    }
-
-    // Create notification for the user
-    const notificationTitle = status === 'approved' 
-      ? 'Worker Application Approved' 
-      : 'Worker Application Denied';
-    
-    const notificationMessage = status === 'approved'
-      ? `Congratulations! Your worker application for ${worker.typeOfWork} has been approved. You can now start receiving job requests.`
-      : `We're sorry, but your worker application for ${worker.typeOfWork} has been denied. Please contact support for more information.`;
-
-    await Notification.create({
-      userId: worker.userId,
-      title: notificationTitle,
-      message: notificationMessage,
-      type: status === 'approved' ? 'worker_approved' : 'worker_denied',
-    });
-
-    // Log admin activity
-    if (adminId) {
-      const userInfo = worker.userId as any;
-      await logAdminActivity(
-        adminId,
-        status === 'approved' ? 'approved_worker' : 'denied_worker',
-        `${status === 'approved' ? 'Approved' : 'Denied'} worker application for ${userInfo?.firstName || 'Unknown'} (${worker.typeOfWork})`,
-        String(worker._id),
-        'worker',
-        { workerName: worker.name, workType: worker.typeOfWork, userEmail: userInfo?.email }
-      );
-    }
-
-    console.log(`Worker ${worker._id} status updated to: ${worker.status}, notification sent`);
-
-    return res.json({ message: `Worker status updated to ${worker.status}`, worker });
-  } catch (err) {
-    console.error('Update worker status error:', err);
-    return res.status(500).json({ message: "Failed to update worker status" });
-  }
-});
+/* Removed legacy routes that used old Worker model:
+ * - POST /admin-register - Used old Worker model for registration
+ * - GET /pending - Listed pending workers from old model
+ * - PATCH /:id/status - Updated worker status in old model
+ *
+ * All worker functionality now uses WorkerUser model exclusively
+ * to prevent data duplication and inconsistencies
+ */
 
 // Verify worker using QR code
 router.post("/verify", async (req: Request, res: Response) => {
@@ -482,17 +394,14 @@ router.post("/search", async (req: Request, res: Response) => {
   }
 });
 
-// Update worker location
+// Cache for recent location updates to prevent unnecessary DB writes
+const locationUpdateCache = new Map<string, { location: any, timestamp: number }>();
+const LOCATION_UPDATE_THROTTLE = 30000; // 30 seconds minimum between DB updates
+
+// Update worker location - Optimized with intelligent throttling
 router.patch("/update-location", async (req: Request, res: Response) => {
   try {
     const { workerId, location, timestamp } = req.body;
-    
-    console.log('📍 Location update request received:', {
-      workerId,
-      hasLocation: !!location,
-      latitude: location?.latitude,
-      longitude: location?.longitude,
-    });
     
     if (!workerId || !location || !location.latitude || !location.longitude) {
       console.error('❌ Invalid location update request:', {
@@ -507,13 +416,50 @@ router.patch("/update-location", async (req: Request, res: Response) => {
       });
     }
 
+    // Check if location update is necessary (throttle frequent updates)
+    const cachedData = locationUpdateCache.get(workerId);
+    const now = Date.now();
+    
+    if (cachedData) {
+      const timeSinceLastUpdate = now - cachedData.timestamp;
+      const distanceMoved = calculateDistance(
+        cachedData.location.latitude, cachedData.location.longitude,
+        location.latitude, location.longitude
+      );
+      
+      // Skip update if worker hasn't moved significantly and update was recent
+      if (distanceMoved < 0.05 && timeSinceLastUpdate < LOCATION_UPDATE_THROTTLE) { // 50m threshold
+        // Still emit socket update for real-time tracking without DB write
+        const io = req.app.get('io');
+        if (io) {
+          io.emit('worker:location_update', {
+            workerId,
+            location: {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              accuracy: location.accuracy,
+              timestamp: timestamp || now,
+            }
+          });
+        }
+        
+        return res.json({ 
+          success: true,
+          message: "Location update throttled (minimal movement)",
+          cached: true,
+          distance: distanceMoved,
+          nextDbUpdateIn: Math.max(0, LOCATION_UPDATE_THROTTLE - timeSinceLastUpdate)
+        });
+      }
+    }
+
     const worker = await WorkerUser.findById(workerId);
     if (!worker) {
       console.error('❌ Worker not found:', workerId);
       return res.status(404).json({ message: "Worker not found" });
     }
 
-    // Update worker's current location
+    // Update worker's current location in database
     worker.currentLocation = {
       city: worker.currentLocation?.city || 'Unknown',
       coordinates: {
@@ -525,6 +471,9 @@ router.patch("/update-location", async (req: Request, res: Response) => {
     await worker.save();
     console.log('✅ Location updated for worker:', worker.name, worker._id);
 
+    // Cache the update
+    locationUpdateCache.set(workerId, { location, timestamp: now });
+
     // Emit location update via socket
     const io = req.app.get('io');
     if (io) {
@@ -534,7 +483,7 @@ router.patch("/update-location", async (req: Request, res: Response) => {
           latitude: location.latitude,
           longitude: location.longitude,
           accuracy: location.accuracy,
-          timestamp: timestamp || Date.now(),
+          timestamp: timestamp || now,
         }
       });
     }

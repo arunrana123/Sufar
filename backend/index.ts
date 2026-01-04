@@ -7,7 +7,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import connectDB from "./src/db";
-import itemRoutes from "./src/routes/item.routes";
+// import itemRoutes from "./src/routes/item.routes"; // UNUSED - Item model not used in app
 import userRoutes from "./src/routes/user.routes";
 import workerRoutes from "./src/routes/worker.routes";
 import notificationRoutes from "./src/routes/notification.routes";
@@ -347,7 +347,7 @@ io.on('connection', (socket) => {
 // Make io available to routes
 app.set('io', io);
 
-app.use("/api/items", itemRoutes);
+// app.use("/api/items", itemRoutes); // UNUSED - Item model not used in app
 app.use("/api/users", userRoutes);
 app.use("/api/users", googleAuthRoutes);
 app.use("/api/workers", workerRoutes);
