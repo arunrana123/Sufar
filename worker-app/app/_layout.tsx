@@ -97,6 +97,7 @@ function RootLayoutNav() {
           <Stack.Screen name="search" options={{ headerShown: false }} />
           <Stack.Screen name="notifications" options={{ headerShown: false }} />
           <Stack.Screen name="job-navigation" options={{ headerShown: false }} />
+          <Stack.Screen name="settings" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         {/* Global booking alert - shows on ANY screen when new request arrives */}

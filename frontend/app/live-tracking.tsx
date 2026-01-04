@@ -103,6 +103,9 @@ export default function LiveTrackingScreen() {
   const [workDuration, setWorkDuration] = useState<number>(0);
   const [eta, setEta] = useState<number>(0);
   const [distance, setDistance] = useState<number>(0);
+  const [distanceTraveled, setDistanceTraveled] = useState<number>(0);
+  const [distanceRemaining, setDistanceRemaining] = useState<number>(0);
+  const [routeData, setRouteData] = useState<any>(null);
   const [workerData, setWorkerData] = useState<any>(null);
   const [locationTrackingStarted, setLocationTrackingStarted] = useState<boolean>(false);
   const mapRef = useRef<any>(null);
@@ -300,6 +303,14 @@ export default function LiveTrackingScreen() {
       }
     };
 
+    // Listen for route updates
+    const handleRouteUpdated = (data: any) => {
+      if (data.bookingId === bookingId) {
+        console.log('🗺️ Route updated:', data);
+        setRouteData(data.route);
+      }
+    };
+
     // Listen for worker location updates
     const handleWorkerLocation = (data: any) => {
       if (data.bookingId === bookingId) {
@@ -309,6 +320,15 @@ export default function LiveTrackingScreen() {
           longitude: data.longitude,
         });
         
+        // Update distance traveled and remaining if provided
+        if (data.distanceTraveled !== undefined) {
+          setDistanceTraveled(data.distanceTraveled);
+        }
+        if (data.distanceRemaining !== undefined) {
+          setDistanceRemaining(data.distanceRemaining);
+          setDistance(data.distanceRemaining / 1000); // Convert to km
+        }
+        
         // Calculate distance and ETA
         if (booking?.location?.coordinates) {
           const dist = calculateDistance(
@@ -317,7 +337,10 @@ export default function LiveTrackingScreen() {
             booking.location.coordinates.latitude,
             booking.location.coordinates.longitude
           );
-          setDistance(dist);
+          if (data.distanceRemaining === undefined) {
+            setDistance(dist);
+            setDistanceRemaining(dist * 1000);
+          }
           setEta(Math.ceil(dist * 2)); // 2 min per km
         }
       }
@@ -420,7 +443,7 @@ export default function LiveTrackingScreen() {
                       bookingId: bookingId,
                       serviceTitle: serviceName,
                       workerName: workerName,
-                      workerId: booking?.workerId?._id || data.workerId,
+                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : booking?.workerId?._id || data.workerId,
                       amount: totalAmount,
                     },
                   });
@@ -451,7 +474,7 @@ export default function LiveTrackingScreen() {
                               bookingId: bookingId,
                               serviceTitle: serviceName,
                               workerName: workerName,
-                              workerId: booking?.workerId?._id || data.workerId,
+                              workerId: typeof booking?.workerId === 'string' ? booking.workerId : booking?.workerId?._id || data.workerId,
                               amount: totalAmount,
                             },
                           });
@@ -478,7 +501,7 @@ export default function LiveTrackingScreen() {
                       bookingId: bookingId,
                       serviceTitle: serviceName,
                       workerName: workerName,
-                      workerId: booking?.workerId?._id || data.workerId,
+                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : booking?.workerId?._id || data.workerId,
                       amount: totalAmount,
                     },
                   });
@@ -557,6 +580,7 @@ export default function LiveTrackingScreen() {
       clearInterval(interval);
       socketService.off('booking:accepted', handleBookingAccepted);
       socketService.off('location:tracking:started', handleLocationTrackingStarted);
+      socketService.off('route:updated', handleRouteUpdated);
       socketService.off('worker:location', handleWorkerLocation);
       socketService.off('navigation:started', handleNavigationStarted);
       socketService.off('navigation:arrived', handleNavigationArrived);
@@ -857,14 +881,25 @@ export default function LiveTrackingScreen() {
                   </View>
                 </MarkerComponent>
 
-                {/* Route Line */}
-                {Platform.OS !== 'web' && PolylineComponent && (
+                {/* Route Line - Blue road path */}
+                {Platform.OS !== 'web' && PolylineComponent && routeData && routeData.coordinates ? (
+                  <PolylineComponent
+                    coordinates={routeData.coordinates.map((coord: [number, number]) => ({
+                      latitude: coord[1],
+                      longitude: coord[0],
+                    }))}
+                    strokeColor="#2563EB"
+                    strokeWidth={6}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                ) : Platform.OS !== 'web' && PolylineComponent && (
                   <PolylineComponent
                     coordinates={[
                       currentWorkerLocation,
                       userLocationCoords,
                     ]}
-                    strokeColor="#4A90E2"
+                    strokeColor="#2563EB"
                     strokeWidth={3}
                     lineDashPattern={[5, 5]}
                   />
@@ -1041,7 +1076,7 @@ export default function LiveTrackingScreen() {
             <View style={styles.movingBadge}>
               <View style={styles.pulseDot} />
               <Text style={styles.movingText}>
-                {workerName} is on the way • Distance: {calculatedDistance.toFixed(2)} km • ETA: {eta} min
+                {workerName} is on the way • {distanceRemaining > 0 ? `${(distanceRemaining / 1000).toFixed(2)} km remaining` : `${calculatedDistance.toFixed(2)} km`} • ETA: {eta} min
               </Text>
             </View>
           )}

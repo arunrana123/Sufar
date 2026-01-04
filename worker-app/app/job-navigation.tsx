@@ -88,6 +88,11 @@ export default function JobNavigationScreen() {
   const [mapRegion, setMapRegionState] = useState<any>(null);
   const destinationKeyRef = useRef<string | null>(null);
   const mapRef = useRef<any>(null);
+  const [distanceTraveled, setDistanceTraveled] = useState<number>(0);
+  const [distanceRemaining, setDistanceRemaining] = useState<number>(0);
+  const [totalRouteDistance, setTotalRouteDistance] = useState<number>(0);
+  const previousLocationRef = useRef<any>(null);
+  const routeRecalculationInterval = useRef<any>(null);
   
   // Toast notification state
   const [toast, setToast] = useState<{
@@ -264,6 +269,10 @@ export default function JobNavigationScreen() {
       locationSubscription.current.remove();
       locationSubscription.current = null;
     }
+    if (routeRecalculationInterval.current) {
+      clearInterval(routeRecalculationInterval.current);
+      routeRecalculationInterval.current = null;
+    }
   };
 
   const calculateDistance = (point1: any, point2: any): number => {
@@ -277,8 +286,89 @@ export default function JobNavigationScreen() {
     return R * c;
   };
 
+  const fetchRoute = async (origin: any, destination: any) => {
+    if (!mapboxAvailable || !getDirections) {
+      console.log('⚠️ Mapbox not available, skipping route fetch');
+      return;
+    }
+
+    try {
+      setRouteError(null);
+      const route = await getDirections(
+        [origin.longitude, origin.latitude],
+        [destination.longitude, destination.latitude],
+        'driving-traffic' // Use driving-traffic for real-time traffic-aware routing
+      );
+      
+      setRouteData(route);
+      setTotalRouteDistance(route.distance || 0);
+      setDistanceRemaining(route.distance || 0);
+      setDistanceTraveled(0);
+      
+      // Update camera bounds to show entire route
+      if (route.geometry && route.geometry.coordinates) {
+        const coords = route.geometry.coordinates;
+        let minLat = coords[0][1];
+        let maxLat = coords[0][1];
+        let minLon = coords[0][0];
+        let maxLon = coords[0][0];
+        
+        coords.forEach((coord: [number, number]) => {
+          minLat = Math.min(minLat, coord[1]);
+          maxLat = Math.max(maxLat, coord[1]);
+          minLon = Math.min(minLon, coord[0]);
+          maxLon = Math.max(maxLon, coord[0]);
+        });
+        
+        setCameraBounds({
+          ne: [maxLon, maxLat],
+          sw: [minLon, minLat],
+        });
+      }
+      
+      // Emit route data to user app
+      socketService.emit('route:updated', {
+        bookingId,
+        route: route.geometry,
+        distance: route.distance,
+        duration: route.duration,
+        timestamp: new Date().toISOString(),
+      });
+      
+      console.log('✅ Route fetched successfully:', route.distance, 'meters');
+    } catch (error: any) {
+      console.error('❌ Error fetching route:', error);
+      setRouteError(error.message || 'Failed to fetch route');
+    }
+  };
+
+  const recalculateRoute = async (currentLocation: any, destination: any) => {
+    // Only recalculate if worker has moved significantly (more than 50 meters)
+    if (previousLocationRef.current) {
+      const dist = calculateDistance(previousLocationRef.current, currentLocation);
+      if (dist < 0.05) { // Less than 50 meters, skip recalculation
+        return;
+      }
+    }
+    
+    previousLocationRef.current = currentLocation;
+    await fetchRoute(currentLocation, destination);
+  };
+
   const handleStartNavigation = async () => {
     setNavStatus('navigating');
+    
+    // Fetch initial route
+    if (workerLocation && userLocation) {
+      await fetchRoute(workerLocation, userLocation);
+      
+      // Start periodic route recalculation (every 30 seconds or when moved significantly)
+      routeRecalculationInterval.current = setInterval(() => {
+        if (workerLocation && userLocation && navStatus === 'navigating') {
+          recalculateRoute(workerLocation, userLocation);
+        }
+      }, 30000); // Recalculate every 30 seconds
+    }
     
     // Emit navigation started event to user
     socketService.emit('navigation:started', { 
@@ -586,47 +676,8 @@ export default function JobNavigationScreen() {
   };
 
   useEffect(() => {
-    if (workerLocation && userLocation) {
+    if (workerLocation && userLocation && !routeData) {
       updateCameraBounds();
-    }
-  }, [workerLocation, userLocation]);
-
-  const fetchRoute = async (origin: { latitude: number; longitude: number }, destination: { latitude: number; longitude: number }) => {
-    if (!mapboxAvailable || !getDirections) {
-      // Fallback to simple distance calculation if Mapbox not available
-      const dist = calculateDistance(origin, destination);
-      setDistance(dist);
-      setEta(Math.max(1, Math.ceil(dist * 2)));
-      return;
-    }
-    
-    try {
-      const destinationKey = `${destination.latitude.toFixed(5)}-${destination.longitude.toFixed(5)}`;
-      if (destinationKeyRef.current === destinationKey && routeData) {
-        return;
-      }
-      destinationKeyRef.current = destinationKey;
-      const directions = await getDirections(
-        [origin.longitude, origin.latitude],
-        [destination.longitude, destination.latitude]
-      );
-      setRouteData(directions);
-      setRouteError(null);
-      if (directions?.distance) {
-        setDistance(directions.distance / 1000);
-      }
-      if (directions?.duration) {
-        setEta(Math.max(1, Math.ceil(directions.duration / 60)));
-      }
-    } catch (error) {
-      console.error('Error fetching directions:', error);
-      setRouteError('Unable to load directions right now.');
-    }
-  };
-
-  useEffect(() => {
-    if (workerLocation && userLocation) {
-      fetchRoute(workerLocation, userLocation);
     }
   }, [workerLocation, userLocation]);
 
@@ -732,16 +783,17 @@ export default function JobNavigationScreen() {
               />
             )}
 
-            {/* Route between worker and customer */}
-            {routeData?.geometry && (
+            {/* Route between worker and customer - Blue road path */}
+            {routeData?.geometry && navStatus === 'navigating' && (
               <ShapeSource id="routeSource" shape={routeData.geometry}>
                 <LineLayer
                   id="routeLayer"
                   style={{
-                    lineColor: '#FF7A2C',
-                    lineWidth: 4,
+                    lineColor: '#2563EB', // Blue color like Google Maps
+                    lineWidth: 6,
                     lineCap: 'round',
                     lineJoin: 'round',
+                    lineOpacity: 0.9,
                   }}
                 />
               </ShapeSource>
@@ -911,16 +963,27 @@ export default function JobNavigationScreen() {
               <View style={styles.infoRow}>
                 <View style={styles.infoItem}>
                   <Ionicons name="locate" size={20} color="#FF7A2C" />
-                  <Text style={styles.infoText}>{distance.toFixed(2)} km</Text>
+                  <Text style={styles.infoText}>
+                    {navStatus === 'navigating' && distanceRemaining > 0 
+                      ? (distanceRemaining / 1000).toFixed(2) 
+                      : distance.toFixed(2)} km
+                  </Text>
+                  <Text style={styles.infoSubtext}>
+                    {navStatus === 'navigating' ? 'Remaining' : 'Distance'}
+                  </Text>
                 </View>
                 <View style={styles.infoItem}>
                   <Ionicons name="time" size={20} color="#FF7A2C" />
                   <Text style={styles.infoText}>{eta} min</Text>
+                  <Text style={styles.infoSubtext}>ETA</Text>
                 </View>
-                <View style={styles.infoItem}>
-                  <Ionicons name="briefcase" size={20} color="#FF7A2C" />
-                  <Text style={styles.infoText}>{booking.serviceName}</Text>
-                </View>
+                {navStatus === 'navigating' && distanceTraveled > 0 && (
+                  <View style={styles.infoItem}>
+                    <Ionicons name="navigate" size={20} color="#4CAF50" />
+                    <Text style={styles.infoText}>{(distanceTraveled / 1000).toFixed(2)} km</Text>
+                    <Text style={styles.infoSubtext}>Traveled</Text>
+                  </View>
+                )}
               </View>
 
               {/* Customer Info */}
@@ -1151,6 +1214,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     fontWeight: '600',
+  },
+  infoSubtext: {
+    fontSize: 10,
+    color: '#999',
+    marginTop: 2,
   },
   customerInfo: {
     marginBottom: 12,

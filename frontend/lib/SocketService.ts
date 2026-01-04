@@ -27,6 +27,7 @@ export interface SocketEvents {
   'navigation:started': (data: any) => void;
   'navigation:arrived': (data: any) => void;
   'navigation:ended': (data: any) => void;
+  'route:updated': (data: { bookingId: string; route: any; distance: number; duration: number; timestamp: string }) => void;
 
   // Work status events
   'work:started': (data: any) => void;
