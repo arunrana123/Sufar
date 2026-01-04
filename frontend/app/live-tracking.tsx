@@ -303,54 +303,111 @@ export default function LiveTrackingScreen() {
       }
     };
 
-    // Listen for route updates
+    // Listen for enhanced route updates with live tracking data
     const handleRouteUpdated = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('🗺️ Route updated:', data);
-        setRouteData(data.route);
-      }
-    };
-
-    // Listen for worker location updates
-    const handleWorkerLocation = (data: any) => {
-      if (data.bookingId === bookingId) {
-        console.log('📍 Worker location update:', data);
-        setWorkerLocation({
-          latitude: data.latitude,
-          longitude: data.longitude,
+        console.log('🗺️ Enhanced route updated:', {
+          distance: data.distance,
+          duration: data.duration,
+          distanceTraveled: data.distanceTraveled,
+          distanceRemaining: data.distanceRemaining,
+          hasRoute: !!data.route
         });
         
-        // Update distance traveled and remaining if provided
+        // Update route geometry for real road-based path display
+        if (data.route && data.route.geometry) {
+          setRouteData({ 
+            coordinates: data.route.geometry.coordinates || [],
+            geometry: data.route 
+          });
+        }
+        
+        // Update live distance tracking
         if (data.distanceTraveled !== undefined) {
           setDistanceTraveled(data.distanceTraveled);
         }
         if (data.distanceRemaining !== undefined) {
           setDistanceRemaining(data.distanceRemaining);
-          setDistance(data.distanceRemaining / 1000); // Convert to km
+          setDistance(data.distanceRemaining); // Already in km from backend
         }
         
-        // Calculate distance and ETA
-        if (booking?.location?.coordinates) {
+        // Update ETA based on actual route duration
+        if (data.duration) {
+          setEta(Math.ceil(data.duration / 60)); // Convert seconds to minutes
+        }
+      }
+    };
+
+    // Listen for enhanced worker location updates with distance tracking
+    const handleWorkerLocation = (data: any) => {
+      if (data.bookingId === bookingId || data.workerId === booking?.workerId || 
+          (typeof booking?.workerId === 'object' && data.workerId === (booking.workerId as any)?._id)) {
+        console.log('📍 Enhanced worker location update:', {
+          location: `${data.latitude}, ${data.longitude}`,
+          accuracy: data.accuracy,
+          distanceTraveled: data.distanceTraveled,
+          distanceRemaining: data.distanceRemaining
+        });
+        
+        setWorkerLocation({
+          latitude: data.latitude,
+          longitude: data.longitude,
+        });
+        
+        // Use worker's calculated distances (more accurate than straight-line)
+        if (data.distanceTraveled !== undefined) {
+          setDistanceTraveled(data.distanceTraveled);
+        }
+        if (data.distanceRemaining !== undefined) {
+          setDistanceRemaining(data.distanceRemaining);
+          setDistance(data.distanceRemaining); // Already in km from backend
+          setEta(Math.max(1, Math.ceil(data.distanceRemaining * 2))); // 2 min per km estimate
+        } else if (booking?.location?.coordinates) {
+          // Fallback to straight-line calculation if enhanced data not available
           const dist = calculateDistance(
             data.latitude,
             data.longitude,
             booking.location.coordinates.latitude,
             booking.location.coordinates.longitude
           );
-          if (data.distanceRemaining === undefined) {
-            setDistance(dist);
-            setDistanceRemaining(dist * 1000);
-          }
-          setEta(Math.ceil(dist * 2)); // 2 min per km
+          setDistance(dist);
+          setDistanceRemaining(dist);
+          setEta(Math.ceil(dist * 2));
         }
       }
     };
 
-    // Listen for navigation status changes
+    // Listen for enhanced navigation started with initial route data
     const handleNavigationStarted = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('🚗 Worker started navigation');
+        console.log('🚗 Enhanced navigation started:', {
+          distance: data.distance,
+          duration: data.duration,
+          hasRoute: !!data.route
+        });
+        
         setNavStatus('navigating');
+        
+        // Set initial route display from navigation start
+        if (data.route && data.route.geometry) {
+          setRouteData({
+            coordinates: data.route.geometry.coordinates || [],
+            geometry: data.route
+          });
+        }
+        
+        // Initialize distance tracking
+        if (data.distance) {
+          const distanceKm = data.distance / 1000; // Convert meters to km
+          setDistance(distanceKm);
+          setDistanceRemaining(distanceKm);
+          setDistanceTraveled(0);
+        }
+        
+        // Initialize ETA
+        if (data.duration) {
+          setEta(Math.ceil(data.duration / 60)); // Convert seconds to minutes
+        }
       }
     };
 
@@ -422,7 +479,7 @@ export default function LiveTrackingScreen() {
           });
         }
         
-        const workerName = data.workerName || booking?.workerId?.firstName || 'Worker';
+        const workerName = data.workerName || (typeof booking?.workerId === 'object' ? (booking.workerId as any)?.firstName : null) || 'Worker';
         const serviceName = data.serviceName || booking?.serviceName || 'Service';
         const totalAmount = booking?.price || data.price || 0;
         const paymentMethod = data.paymentMethod;
@@ -443,7 +500,7 @@ export default function LiveTrackingScreen() {
                       bookingId: bookingId,
                       serviceTitle: serviceName,
                       workerName: workerName,
-                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : booking?.workerId?._id || data.workerId,
+                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || data.workerId,
                       amount: totalAmount,
                     },
                   });
@@ -474,7 +531,7 @@ export default function LiveTrackingScreen() {
                               bookingId: bookingId,
                               serviceTitle: serviceName,
                               workerName: workerName,
-                              workerId: typeof booking?.workerId === 'string' ? booking.workerId : booking?.workerId?._id || data.workerId,
+                              workerId: typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || data.workerId,
                               amount: totalAmount,
                             },
                           });
@@ -501,7 +558,7 @@ export default function LiveTrackingScreen() {
                       bookingId: bookingId,
                       serviceTitle: serviceName,
                       workerName: workerName,
-                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : booking?.workerId?._id || data.workerId,
+                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || data.workerId,
                       amount: totalAmount,
                     },
                   });
@@ -565,6 +622,7 @@ export default function LiveTrackingScreen() {
     // Register all socket listeners
     socketService.on('booking:accepted', handleBookingAccepted);
     socketService.on('location:tracking:started', handleLocationTrackingStarted);
+    socketService.on('route:updated', handleRouteUpdated);
     socketService.on('worker:location', handleWorkerLocation);
     socketService.on('navigation:started', handleNavigationStarted);
     socketService.on('navigation:arrived', handleNavigationArrived);
@@ -1076,8 +1134,13 @@ export default function LiveTrackingScreen() {
             <View style={styles.movingBadge}>
               <View style={styles.pulseDot} />
               <Text style={styles.movingText}>
-                {workerName} is on the way • {distanceRemaining > 0 ? `${(distanceRemaining / 1000).toFixed(2)} km remaining` : `${calculatedDistance.toFixed(2)} km`} • ETA: {eta} min
+                {workerName} is on the way • {distanceRemaining > 0 ? `${distanceRemaining.toFixed(2)} km remaining` : `${calculatedDistance.toFixed(2)} km`} • ETA: {eta} min
               </Text>
+              {distanceTraveled > 0 && (
+                <Text style={styles.distanceTraveledText}>
+                  Traveled: {distanceTraveled.toFixed(2)} km
+                </Text>
+              )}
             </View>
           )}
 
@@ -1473,6 +1536,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#2196F3',
+  },
+  distanceTraveledText: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
   },
   arrivedBadge: {
     flexDirection: 'row',

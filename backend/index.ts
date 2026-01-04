@@ -53,10 +53,11 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024, // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
+    // Allow images and PDFs for document verification
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(new Error('Only image and PDF files are allowed'));
     }
   }
 });
@@ -322,11 +323,62 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Worker location updates - broadcast to user
-  socket.on('worker:location', (data) => {
+  // Enhanced worker location updates - broadcast to specific user with distance tracking
+  socket.on('worker:location', async (data) => {
     if (data.bookingId) {
-      // Emit to the user who made the booking
-      io.emit('worker:location', data);
+      console.log('📍 Broadcasting enhanced worker location:', {
+        workerId: data.workerId,
+        bookingId: data.bookingId,
+        distanceTraveled: data.distanceTraveled,
+        distanceRemaining: data.distanceRemaining
+      });
+      
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          // Emit to the specific user who made the booking
+          io.to(String(booking.userId)).emit('worker:location', data);
+          console.log('✅ Enhanced location data sent to user:', booking.userId);
+        } else {
+          // Fallback: emit to all (for backward compatibility)
+          io.emit('worker:location', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for location update:', error);
+        // Fallback: emit to all
+        io.emit('worker:location', data);
+      }
+    }
+  });
+
+  // Enhanced route updates - broadcast real-time route changes to user
+  socket.on('route:updated', async (data) => {
+    console.log('🗺️ Broadcasting route update:', {
+      bookingId: data.bookingId,
+      distance: data.distance,
+      duration: data.duration,
+      distanceTraveled: data.distanceTraveled,
+      distanceRemaining: data.distanceRemaining
+    });
+    
+    if (data.bookingId) {
+      try {
+        const Booking = require('./src/models/Booking.model').default;
+        const booking = await Booking.findById(data.bookingId).lean();
+        if (booking && booking.userId) {
+          // Emit to the specific user who made the booking
+          io.to(String(booking.userId)).emit('route:updated', data);
+          console.log('✅ Route update sent to user:', booking.userId);
+        } else {
+          // Fallback: emit to all (for backward compatibility)
+          io.emit('route:updated', data);
+        }
+      } catch (error) {
+        console.error('Error finding booking for route update:', error);
+        // Fallback: emit to all
+        io.emit('route:updated', data);
+      }
     }
   });
 

@@ -121,15 +121,8 @@ export default function JobNavigationScreen() {
     fetchBookingDetails();
     startLocationTracking();
     
-    // Listen for user location updates
-    socketService.on('user:location', (data: any) => {
-      if (data.bookingId === bookingId) {
-        setUserLocation({
-          latitude: data.latitude,
-          longitude: data.longitude,
-        });
-      }
-    });
+    // Note: User location is fetched from booking data, not via socket
+    // This ensures we always have the correct booking location
 
     // Listen for booking updates
     socketService.on('booking:updated', (updatedBooking: any) => {
@@ -166,7 +159,6 @@ export default function JobNavigationScreen() {
 
     return () => {
       stopLocationTracking();
-      socketService.off('user:location');
       socketService.off('booking:updated');
       socketService.off('payment:status_updated');
     };
@@ -243,20 +235,41 @@ export default function JobNavigationScreen() {
           };
           setWorkerLocation(newLoc);
 
-          // Send location to user via socket (always send when tracking, not just when navigating)
+          // Calculate distance and traveled distance if navigating
+          let distanceTraveledValue = distanceTraveled;
+          let distanceRemainingValue = 0;
+          
+          if (userLocation) {
+            distanceRemainingValue = calculateDistance(newLoc, userLocation);
+            setDistance(distanceRemainingValue);
+            setDistanceRemaining(distanceRemainingValue);
+            setEta(Math.max(1, Math.ceil(distanceRemainingValue * 2))); // Rough estimate: 2 min per km
+
+            // Calculate traveled distance if we have a previous location
+            if (previousLocationRef.current && navStatus === 'navigating') {
+              const segmentDistance = calculateDistance(previousLocationRef.current, newLoc);
+              distanceTraveledValue = distanceTraveled + segmentDistance;
+              setDistanceTraveled(distanceTraveledValue);
+              previousLocationRef.current = newLoc;
+
+              // Check if worker has deviated significantly from route
+              if (navStatus === 'navigating' && segmentDistance > 0.05) { // 50m threshold
+                recalculateRoute(newLoc, userLocation);
+              }
+            }
+          }
+
+          // Send enhanced location data to user via socket with distance info
           socketService.emit('worker:location', {
+            workerId: worker?.id,
             bookingId,
             latitude: newLoc.latitude,
             longitude: newLoc.longitude,
-            timestamp: new Date().toISOString(),
+            accuracy: location.coords.accuracy,
+            timestamp: Date.now(),
+            distanceTraveled: distanceTraveledValue,
+            distanceRemaining: distanceRemainingValue,
           });
-
-          // Calculate distance and ETA
-          if (userLocation) {
-            const dist = calculateDistance(newLoc, userLocation);
-            setDistance(dist);
-            setEta(Math.max(1, Math.ceil(dist * 2))); // Rough estimate: 2 min per km
-          }
         }
       );
     } catch (error) {
@@ -289,7 +302,7 @@ export default function JobNavigationScreen() {
   const fetchRoute = async (origin: any, destination: any) => {
     if (!mapboxAvailable || !getDirections) {
       console.log('⚠️ Mapbox not available, skipping route fetch');
-      return;
+      return null;
     }
 
     try {
@@ -326,80 +339,151 @@ export default function JobNavigationScreen() {
         });
       }
       
-      // Emit route data to user app
+      // Emit enhanced route data to user app with distance tracking
       socketService.emit('route:updated', {
         bookingId,
         route: route.geometry,
         distance: route.distance,
         duration: route.duration,
         timestamp: new Date().toISOString(),
+        distanceTraveled: distanceTraveled,
+        distanceRemaining: route.distance ? route.distance / 1000 : calculateDistance(origin, destination), // Convert to km
       });
       
       console.log('✅ Route fetched successfully:', route.distance, 'meters');
+      return route; // Return route data for caller
     } catch (error: any) {
       console.error('❌ Error fetching route:', error);
       setRouteError(error.message || 'Failed to fetch route');
+      return null;
     }
   };
 
   const recalculateRoute = async (currentLocation: any, destination: any) => {
-    // Only recalculate if worker has moved significantly (more than 50 meters)
+    if (!mapboxAvailable || !getDirections || navStatus !== 'navigating') {
+      return;
+    }
+
+    // Only recalculate if worker has moved significantly (more than 50 meters) or enough time has passed
     if (previousLocationRef.current) {
-      const dist = calculateDistance(previousLocationRef.current, currentLocation);
-      if (dist < 0.05) { // Less than 50 meters, skip recalculation
+      const distanceMoved = calculateDistance(previousLocationRef.current, currentLocation);
+      if (distanceMoved < 0.05) { // Less than 50 meters, skip recalculation
         return;
       }
     }
     
-    previousLocationRef.current = currentLocation;
-    await fetchRoute(currentLocation, destination);
+    try {
+      console.log('🔄 Recalculating route due to position change...');
+      
+      const newRoute = await getDirections(
+        [currentLocation.longitude, currentLocation.latitude],
+        [destination.longitude, destination.latitude],
+        'driving-traffic'
+      );
+      
+      if (newRoute) {
+        setRouteData(newRoute);
+        
+        // Update route distance calculations
+        const newRouteDistance = newRoute.distance / 1000; // Convert to km
+        const currentDistanceRemaining = calculateDistance(currentLocation, destination);
+        
+        setDistanceRemaining(currentDistanceRemaining);
+        setTotalRouteDistance(newRouteDistance);
+        
+        // Emit updated route to user app
+        socketService.emit('route:updated', {
+          bookingId,
+          route: newRoute.geometry,
+          distance: newRoute.distance,
+          duration: newRoute.duration,
+          timestamp: new Date().toISOString(),
+          distanceTraveled: distanceTraveled,
+          distanceRemaining: currentDistanceRemaining,
+        });
+        
+        console.log('✅ Route recalculated and updated to user app');
+        previousLocationRef.current = currentLocation;
+      }
+    } catch (error) {
+      console.error('❌ Error recalculating route:', error);
+      // Don't show error to user, just log it
+    }
   };
 
   const handleStartNavigation = async () => {
-    setNavStatus('navigating');
-    
-    // Fetch initial route
-    if (workerLocation && userLocation) {
-      await fetchRoute(workerLocation, userLocation);
-      
-      // Start periodic route recalculation (every 30 seconds or when moved significantly)
-      routeRecalculationInterval.current = setInterval(() => {
-        if (workerLocation && userLocation && navStatus === 'navigating') {
-          recalculateRoute(workerLocation, userLocation);
-        }
-      }, 30000); // Recalculate every 30 seconds
-    }
-    
-    // Emit navigation started event to user
-    socketService.emit('navigation:started', { 
-      bookingId, 
-      workerId: worker?.id,
-      timestamp: new Date().toISOString(),
-    });
-    
-    // Update booking status to accepted (if not already)
     try {
-      const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'accepted' }),
-      });
+      setNavStatus('navigating');
+
+      // Ensure we have location data
+      if (!workerLocation || !userLocation) {
+        Alert.alert('Error', 'Location data not available. Please wait for GPS to initialize.');
+        setNavStatus('idle');
+        return;
+      }
+
+      // Fetch initial route and get route data
+      const routeResponse = await fetchRoute(workerLocation, userLocation);
       
-      if (response.ok) {
-        const updatedBooking = await response.json();
-        setBooking(updatedBooking);
-        console.log('✅ Booking status updated to accepted');
+      if (routeResponse && routeData) {
+        // Calculate initial distances
+        const totalDistance = routeResponse.distance / 1000; // Convert to km
+        const currentDistance = calculateDistance(workerLocation, userLocation);
+        
+        setTotalRouteDistance(totalDistance);
+        setDistanceRemaining(currentDistance);
+        setDistanceTraveled(0);
+        previousLocationRef.current = workerLocation;
+
+        // Start periodic route recalculation
+        routeRecalculationInterval.current = setInterval(() => {
+          if (workerLocation && userLocation && navStatus === 'navigating') {
+            recalculateRoute(workerLocation, userLocation);
+          }
+        }, 30000);
+
+        // Emit enhanced navigation started event to user with route data
+        socketService.emit('navigation:started', { 
+          bookingId, 
+          workerId: worker?.id,
+          route: routeData.geometry,
+          distance: routeResponse.distance,
+          duration: routeResponse.duration,
+          timestamp: new Date().toISOString(),
+        });
+
+        // Update booking status to accepted (if not already)
+        try {
+          const apiUrl = getApiUrl();
+          const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'accepted' }),
+          });
+          
+          if (response.ok) {
+            const updatedBooking = await response.json();
+            setBooking(updatedBooking);
+            console.log('✅ Booking status updated to accepted');
+          }
+        } catch (error) {
+          console.error('Error updating booking status:', error);
+        }
+
+        showToast(
+          'Navigation started! Your live location is being shared with the customer.',
+          'Navigation Started',
+          'success'
+        );
+      } else {
+        Alert.alert('Route Error', 'Could not calculate route. Please check your internet connection and try again.');
+        setNavStatus('idle');
       }
     } catch (error) {
-      console.error('Error updating booking status:', error);
+      console.error('Error starting navigation:', error);
+      Alert.alert('Navigation Error', 'Failed to start navigation. Please check your connection and try again.');
+      setNavStatus('idle');
     }
-    
-    showToast(
-      'Navigation started! Your live location is being shared with the customer.',
-      'Navigation Started',
-      'success'
-    );
   };
 
   const handleArrived = async () => {
@@ -873,18 +957,32 @@ export default function JobNavigationScreen() {
               </RNMarker>
             )}
 
-            {/* Route Line between worker and customer - Updates in real-time */}
+            {/* Route Line - Show road path if available, otherwise straight line */}
             {workerLocation && userLocation && RNPolyline && (
-              <RNPolyline
-                key={`route-${workerLocation.latitude}-${userLocation.latitude}`}
-                coordinates={[
-                  { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
-                  { latitude: userLocation.latitude, longitude: userLocation.longitude },
-                ]}
-                strokeColor="#FF7A2C"
-                strokeWidth={4}
-                lineDashPattern={[5, 5]}
-              />
+              routeData?.geometry?.coordinates ? (
+                <RNPolyline
+                  key={`road-route-${routeData.geometry.coordinates.length}`}
+                  coordinates={routeData.geometry.coordinates.map((coord: [number, number]) => ({
+                    latitude: coord[1],
+                    longitude: coord[0],
+                  }))}
+                  strokeColor="#2563EB"
+                  strokeWidth={6}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              ) : (
+                <RNPolyline
+                  key={`direct-route-${workerLocation.latitude}-${userLocation.latitude}`}
+                  coordinates={[
+                    { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
+                    { latitude: userLocation.latitude, longitude: userLocation.longitude },
+                  ]}
+                  strokeColor="#FF7A2C"
+                  strokeWidth={4}
+                  lineDashPattern={[5, 5]}
+                />
+              )
             )}
           </RNMapView>
         ) : (
@@ -965,7 +1063,7 @@ export default function JobNavigationScreen() {
                   <Ionicons name="locate" size={20} color="#FF7A2C" />
                   <Text style={styles.infoText}>
                     {navStatus === 'navigating' && distanceRemaining > 0 
-                      ? (distanceRemaining / 1000).toFixed(2) 
+                      ? distanceRemaining.toFixed(2) 
                       : distance.toFixed(2)} km
                   </Text>
                   <Text style={styles.infoSubtext}>
@@ -980,7 +1078,7 @@ export default function JobNavigationScreen() {
                 {navStatus === 'navigating' && distanceTraveled > 0 && (
                   <View style={styles.infoItem}>
                     <Ionicons name="navigate" size={20} color="#4CAF50" />
-                    <Text style={styles.infoText}>{(distanceTraveled / 1000).toFixed(2)} km</Text>
+                    <Text style={styles.infoText}>{distanceTraveled.toFixed(2)} km</Text>
                     <Text style={styles.infoSubtext}>Traveled</Text>
                   </View>
                 )}

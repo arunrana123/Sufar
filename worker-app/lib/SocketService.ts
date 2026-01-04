@@ -11,40 +11,58 @@ export interface SocketEvents {
   'booking:completed': (booking: any) => void;
   'booking:cancelled': (booking: any) => void;
   'booking:updated': (booking: any) => void;
+  'booking:status_updated': (data: any) => void;
 
-  // Worker events
+  // Worker location and navigation events
   'worker:location_update': (data: { workerId: string; location: any }) => void;
+  'worker:location': (data: { 
+    workerId: string; 
+    bookingId: string; 
+    latitude: number; 
+    longitude: number; 
+    accuracy?: number; 
+    timestamp: number;
+    distanceTraveled?: number;
+    distanceRemaining?: number;
+  }) => void;
   'worker:status_change': (data: { workerId: string; status: string }) => void;
   'worker:available': (workerId: string) => void;
   'worker:busy': (workerId: string) => void;
 
-  // User location events
-  'user:location': (data: { bookingId: string; latitude: number; longitude: number }) => void;
-
   // Location tracking events
   'location:tracking:started': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
 
-  // Navigation events
-  'navigation:started': (data: any) => void;
-  'navigation:arrived': (data: any) => void;
-  'navigation:ended': (data: any) => void;
+  // Navigation events with enhanced data
+  'navigation:started': (data: { 
+    bookingId: string; 
+    workerId: string; 
+    route: any; 
+    distance: number; 
+    duration: number; 
+    timestamp: string;
+  }) => void;
+  'navigation:arrived': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
+  'navigation:ended': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
+  'route:updated': (data: { 
+    bookingId: string; 
+    route: any; 
+    distance: number; 
+    duration: number; 
+    timestamp: string;
+    distanceTraveled: number;
+    distanceRemaining: number;
+  }) => void;
 
   // Work events
   'work:started': (data: any) => void;
   'work:completed': (data: any) => void;
 
-  // Worker location updates
-  'worker:location': (data: any) => void;
+  // Payment events
+  'payment:status_updated': (data: { bookingId: string; paymentStatus: string; userConfirmed: boolean; workerConfirmed: boolean; booking?: any }) => void;
 
   // Notification events
   'notification:new': (notification: any) => void;
   'notification:read': (notificationId: string) => void;
-
-  // Booking status events
-  'booking:status_updated': (data: any) => void;
-
-  // Payment events
-  'payment:status_updated': (data: { bookingId: string; paymentStatus: string; userConfirmed: boolean; workerConfirmed: boolean; booking?: any }) => void;
 
   // Worker stats events
   'worker:stats_updated': (data: { workerId: string; message?: string }) => void;
@@ -121,7 +139,7 @@ export class SocketService {
       this.reconnectAttempts = 0;
       
       // Authenticate immediately when connected
-      if (this.currentUserId && this.currentUserType) {
+      if (this.currentUserId && this.currentUserType && this.socket) {
         console.log(`🔐 Authenticating as ${this.currentUserType}: ${this.currentUserId}`);
         this.socket.emit('authenticate', { 
           userId: this.currentUserId, 
@@ -250,7 +268,7 @@ export class SocketService {
    */
   on<K extends keyof SocketEvents>(event: K, callback: SocketEvents[K]) {
     if (this.socket) {
-      this.socket.on(event, callback);
+      this.socket.on(event, callback as any);
     }
   }
 
@@ -259,7 +277,7 @@ export class SocketService {
    */
   off<K extends keyof SocketEvents>(event: K, callback?: SocketEvents[K]) {
     if (this.socket) {
-      this.socket.off(event, callback);
+      this.socket.off(event, callback as any);
     }
   }
 

@@ -12,10 +12,20 @@ export interface SocketEvents {
   'booking:cancelled': (booking: any) => void;
   'booking:deleted': (data: any) => void;
   'booking:updated': (booking: any) => void;
+  'booking:status_updated': (data: any) => void;
 
-  // Worker events
+  // Worker location and navigation events
   'worker:location_update': (data: { workerId: string; location: any }) => void;
-  'worker:location': (data: any) => void;
+  'worker:location': (data: { 
+    workerId: string; 
+    bookingId: string; 
+    latitude: number; 
+    longitude: number; 
+    accuracy?: number; 
+    timestamp: number;
+    distanceTraveled?: number;
+    distanceRemaining?: number;
+  }) => void;
   'worker:status_change': (data: { workerId: string; status: string }) => void;
   'worker:available': (workerId: string) => void;
   'worker:busy': (workerId: string) => void;
@@ -23,11 +33,26 @@ export interface SocketEvents {
   // Location tracking events
   'location:tracking:started': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
 
-  // Navigation events
-  'navigation:started': (data: any) => void;
-  'navigation:arrived': (data: any) => void;
-  'navigation:ended': (data: any) => void;
-  'route:updated': (data: { bookingId: string; route: any; distance: number; duration: number; timestamp: string }) => void;
+  // Navigation events with enhanced data
+  'navigation:started': (data: { 
+    bookingId: string; 
+    workerId: string; 
+    route: any; 
+    distance: number; 
+    duration: number; 
+    timestamp: string;
+  }) => void;
+  'navigation:arrived': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
+  'navigation:ended': (data: { bookingId: string; workerId: string; timestamp: string }) => void;
+  'route:updated': (data: { 
+    bookingId: string; 
+    route: any; 
+    distance: number; 
+    duration: number; 
+    timestamp: string;
+    distanceTraveled: number;
+    distanceRemaining: number;
+  }) => void;
 
   // Work status events
   'work:started': (data: any) => void;
@@ -111,7 +136,7 @@ export class SocketService {
       this.reconnectAttempts = 0;
       
       // Re-authenticate if we have user credentials
-      if (this.currentUserId && this.currentUserType) {
+      if (this.currentUserId && this.currentUserType && this.socket) {
         console.log(`Re-authenticating as ${this.currentUserType}: ${this.currentUserId}`);
         this.socket.emit('authenticate', { 
           userId: this.currentUserId, 
@@ -223,7 +248,7 @@ export class SocketService {
    */
   on<K extends keyof SocketEvents>(event: K, callback: SocketEvents[K]) {
     if (this.socket) {
-      this.socket.on(event, callback);
+      this.socket.on(event, callback as any);
     }
   }
 
@@ -232,7 +257,7 @@ export class SocketService {
    */
   off<K extends keyof SocketEvents>(event: K, callback?: SocketEvents[K]) {
     if (this.socket) {
-      this.socket.off(event, callback);
+      this.socket.off(event, callback as any);
     }
   }
 
