@@ -83,7 +83,8 @@ const config = {
       [
         '@rnmapbox/maps',
         {
-          RNMapboxMapsDownloadToken: MAPBOX_DOWNLOAD_TOKEN,
+          // ✅ Updated to use new key (RNMapboxMapsDownloadToken is deprecated)
+          RNMAPBOX_MAPS_DOWNLOAD_TOKEN: MAPBOX_DOWNLOAD_TOKEN,
         },
       ],
       [
