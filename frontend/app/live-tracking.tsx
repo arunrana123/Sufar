@@ -1,6 +1,6 @@
 // LIVE TRACKING SCREEN - Real-time worker location tracking with map, route visualization, and ETA
 // Features: Socket.IO real-time updates, Google Maps integration, worker info, status updates, call/message worker
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { getApiUrl } from '@/lib/config';
 import { socketService } from '@/lib/SocketService';
 import { useAuth } from '@/contexts/AuthContext';
+// ARCHITECTURE: User app does NOT import getDirections - only receives route via socket
 
 let MapComponent: any;
 let MarkerComponent: any;
@@ -109,6 +110,11 @@ export default function LiveTrackingScreen() {
   const [workerData, setWorkerData] = useState<any>(null);
   const [locationTrackingStarted, setLocationTrackingStarted] = useState<boolean>(false);
   const mapRef = useRef<any>(null);
+  const routeKeyRef = useRef<string>('');
+  const markerKeyRef = useRef<string>('');
+
+  // ARCHITECTURE: User app NEVER calls getDirections - only receives route from backend
+  // Removed fetchRouteFromMapbox - user app only receives route geometry via socket
 
   const fetchBookingDetails = async () => {
     try {
@@ -198,13 +204,15 @@ export default function LiveTrackingScreen() {
           console.log('✅ Worker data already in booking response:', data.worker);
         }
 
-        // Fit map to show both markers
+        // ARCHITECTURE: User app does NOT fetch routes - route comes via socket events
+        // Fit map to show both locations (route received via socket)
         if (
-          Platform.OS !== 'web' &&
+          Platform.OS === 'android' &&
           data.workerLocation &&
           data.location?.coordinates &&
           mapRef.current?.fitToCoordinates
         ) {
+          // Fit map to show both markers even without route (Android)
           setTimeout(() => {
             try {
               mapRef.current?.fitToCoordinates(
@@ -219,14 +227,14 @@ export default function LiveTrackingScreen() {
                   },
                 ],
                 {
-                  edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+                  edgePadding: { top: 80, right: 40, bottom: 200, left: 40 },
                   animated: true,
                 }
               );
             } catch (e) {
               console.warn('Map fit error:', e);
             }
-          }, 500);
+          }, 300); // Faster for Android
         }
       } else {
         const errorText = await response.text();
@@ -316,6 +324,7 @@ export default function LiveTrackingScreen() {
         
         // Update route geometry for real road-based path display
         if (data.route && data.route.geometry) {
+          routeKeyRef.current = `route-${Date.now()}-${data.route.geometry.coordinates?.length || 0}`;
           setRouteData({ 
             coordinates: data.route.geometry.coordinates || [],
             geometry: data.route 
@@ -349,10 +358,55 @@ export default function LiveTrackingScreen() {
           distanceRemaining: data.distanceRemaining
         });
         
-        setWorkerLocation({
+        const newLocation = {
           latitude: data.latitude,
           longitude: data.longitude,
-        });
+        };
+        // Generate stable key for marker (only update if location changed significantly)
+        const locationKey = `${data.latitude.toFixed(4)}-${data.longitude.toFixed(4)}`;
+        if (markerKeyRef.current !== locationKey) {
+          markerKeyRef.current = locationKey;
+        }
+        setWorkerLocation(newLocation);
+        
+        // ARCHITECTURE: User app does NOT fetch routes - only receives via socket
+        // ARCHITECTURE: Camera updates ONLY every 2-3 seconds (Uber style)
+        if (Platform.OS === 'android' && mapRef.current && (navStatus === 'tracking' || navStatus === 'navigating')) {
+          const now = Date.now();
+          const lastCameraUpdate = (mapRef.current as any)._lastCameraUpdate || 0;
+          
+          // ARCHITECTURE RULE: Camera updates every 2-3 seconds
+          if (now - lastCameraUpdate < 2500) { // 2.5 seconds
+            return;
+          }
+          
+          try {
+            (mapRef.current as any)._lastCameraUpdate = now;
+            
+            // ARCHITECTURE: Use flyTo/easeTo with duration ≥ 1000ms
+            if (mapRef.current.animateToCoordinate) {
+              mapRef.current.animateToCoordinate(
+                {
+                  latitude: newLocation.latitude,
+                  longitude: newLocation.longitude,
+                },
+                1200 // Smooth 1.2s animation
+              );
+            } else if (mapRef.current.animateToRegion) {
+              mapRef.current.animateToRegion(
+                {
+                  latitude: newLocation.latitude,
+                  longitude: newLocation.longitude,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                },
+                1200
+              );
+            }
+          } catch (error) {
+            console.log('Map follow error:', error);
+          }
+        }
         
         // Use worker's calculated distances (more accurate than straight-line)
         if (data.distanceTraveled !== undefined) {
@@ -390,6 +444,7 @@ export default function LiveTrackingScreen() {
         
         // Set initial route display from navigation start
         if (data.route && data.route.geometry) {
+          routeKeyRef.current = `route-${Date.now()}-${data.route.geometry.coordinates?.length || 0}`;
           setRouteData({
             coordinates: data.route.geometry.coordinates || [],
             geometry: data.route
@@ -650,6 +705,9 @@ export default function LiveTrackingScreen() {
     };
   }, [bookingId, booking, user?.id]);
 
+  // ARCHITECTURE: User app does NOT fetch routes - only receives via socket
+  // Removed auto-fetch useEffect
+
   // Update work duration timer
   useEffect(() => {
     if (workStatus === 'in_progress' && workStartTime) {
@@ -739,8 +797,8 @@ export default function LiveTrackingScreen() {
     }
   };
 
-  // Get worker name from various possible sources
-  const getWorkerName = () => {
+  // Memoize worker info to prevent hook order issues - MUST be before early returns
+  const workerName = useMemo(() => {
     if (booking?.worker) {
       // If worker object exists with name
       if (booking.worker.name) {
@@ -778,13 +836,16 @@ export default function LiveTrackingScreen() {
     }
     
     // Fallback
-    return 'Worker';
-  };
+    return booking ? 'Worker' : 'Awaiting assignment';
+  }, [booking, workerData]);
 
-  // Calculate worker info (before early returns to avoid hook order issues)
-  const workerName = booking ? getWorkerName() : 'Awaiting assignment';
-  const workerPhone = booking?.worker?.phone || (booking?.workerId && typeof booking.workerId === 'object' ? booking.workerId.phone : null) || workerData?.phone || '—';
-  const workerProfileImage = booking?.worker?.profileImage || booking?.worker?.image || (booking?.workerId && typeof booking.workerId === 'object' ? (booking.workerId.profileImage || booking.workerId.image) : null) || workerData?.profileImage || workerData?.image;
+  const workerPhone = useMemo(() => {
+    return booking?.worker?.phone || (booking?.workerId && typeof booking.workerId === 'object' ? booking.workerId.phone : null) || workerData?.phone || '—';
+  }, [booking, workerData]);
+
+  const workerProfileImage = useMemo(() => {
+    return booking?.worker?.profileImage || booking?.worker?.image || (booking?.workerId && typeof booking.workerId === 'object' ? (booking.workerId.profileImage || booking.workerId.image) : null) || workerData?.profileImage || workerData?.image;
+  }, [booking, workerData]);
 
   // Debug logging useEffect (must be before early returns)
   useEffect(() => {
@@ -801,6 +862,18 @@ export default function LiveTrackingScreen() {
       });
     }
   }, [booking, workerName, workerPhone, workerProfileImage, workerData]);
+
+  // ARCHITECTURE: Memoize polyline geometry - NEVER recreate on location updates
+  // Dependency on routeData ensures it only updates when route changes, not on GPS updates
+  const routeCoordinates = useMemo(() => {
+    if (routeData && routeData.coordinates && routeData.coordinates.length > 0) {
+      return routeData.coordinates.map((coord: [number, number]) => ({
+        latitude: coord[1],
+        longitude: coord[0],
+      }));
+    }
+    return [];
+  }, [routeData?.coordinates]); // Only recreate when route coordinates array changes (not on location updates)
 
   if (error) {
     return (
@@ -903,17 +976,41 @@ export default function LiveTrackingScreen() {
         <View style={styles.mapContainer}>
           <MapComponent
             ref={mapRef}
-            provider={GOOGLE_PROVIDER}
+            provider={Platform.OS === 'android' ? GOOGLE_PROVIDER : undefined}
             style={styles.map}
+            mapType="standard"
             initialRegion={{
               latitude: userLocationCoords.latitude,
               longitude: userLocationCoords.longitude,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
+            // Remove region prop to prevent blinking - use animateToCoordinate instead
+            onRegionChangeComplete={(region: any) => {
+              // Prevent unnecessary updates
+            }}
+            showsUserLocation={false}
+            showsMyLocationButton={false}
+            loadingEnabled={true}
+            loadingIndicatorColor="#2563EB"
+            // Android-specific optimizations
+            {...(Platform.OS === 'android' && {
+              mapPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+              pitchEnabled: false,
+              rotateEnabled: false,
+              scrollEnabled: true,
+              zoomEnabled: true,
+              zoomControlEnabled: false,
+              toolbarEnabled: false,
+              cacheEnabled: true,
+              liteMode: false,
+            })}
           >
-            {/* User Location Marker */}
+            {/* ARCHITECTURE FIX: Components ALWAYS mounted - NO conditional rendering */}
+            {/* User marker - Always mounted, coordinate updates via props */}
             <MarkerComponent
+              key="user-location-marker"
+              identifier="user-location"
               coordinate={userLocationCoords}
               title="Your Location"
               description={booking.location?.address}
@@ -923,46 +1020,53 @@ export default function LiveTrackingScreen() {
               </View>
             </MarkerComponent>
 
-            {/* Worker Location Marker */}
-            {currentWorkerLocation && (
-              <>
-                <MarkerComponent
-                  coordinate={{
-                    latitude: currentWorkerLocation.latitude,
-                    longitude: currentWorkerLocation.longitude,
-                  }}
-                  title={workerName}
-                  description="Worker Location"
-                >
-                  <View style={styles.workerMarker}>
-                    <Ionicons name="person" size={24} color="#fff" />
-                  </View>
-                </MarkerComponent>
+            {/* Worker marker - Always mounted, coordinate updates via props */}
+            <MarkerComponent
+              key="worker-marker"
+              identifier="worker-location"
+              coordinate={currentWorkerLocation ? {
+                latitude: currentWorkerLocation.latitude,
+                longitude: currentWorkerLocation.longitude,
+              } : userLocationCoords}
+              title={workerName}
+              description={navStatus === 'navigating' ? 'Navigating to you...' : 'Worker Location'}
+              flat={navStatus === 'navigating'}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={[
+                styles.workerMarker,
+                navStatus === 'navigating' && styles.workerMarkerNavigating
+              ]}>
+                <Ionicons 
+                  name={navStatus === 'navigating' ? 'navigate' : 'person'} 
+                  size={navStatus === 'navigating' ? 28 : 24} 
+                  color="#fff" 
+                />
+              </View>
+            </MarkerComponent>
 
-                {/* Route Line - Blue road path */}
-                {Platform.OS !== 'web' && PolylineComponent && routeData && routeData.coordinates ? (
-                  <PolylineComponent
-                    coordinates={routeData.coordinates.map((coord: [number, number]) => ({
-                      latitude: coord[1],
-                      longitude: coord[0],
-                    }))}
-                    strokeColor="#2563EB"
-                    strokeWidth={6}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ) : Platform.OS !== 'web' && PolylineComponent && (
-                  <PolylineComponent
-                    coordinates={[
-                      currentWorkerLocation,
-                      userLocationCoords,
-                    ]}
-                    strokeColor="#2563EB"
-                    strokeWidth={3}
-                    lineDashPattern={[5, 5]}
-                  />
-                )}
-              </>
+            {/* Route Line - Always mounted, coordinates update via props (memoized) */}
+            {Platform.OS === 'android' && PolylineComponent && (
+              <PolylineComponent
+                key="route-polyline"
+                identifier="route-polyline"
+                coordinates={routeCoordinates}
+                strokeColor="#2563EB"
+                strokeWidth={routeCoordinates.length > 0 ? 8 : 0}
+                lineCap="round"
+                lineJoin="round"
+                geodesic={false}
+                tappable={false}
+                zIndex={1}
+              />
+            )}
+            
+            {/* Loading indicator - Only show when no route data */}
+            {Platform.OS === 'android' && !routeData && (
+              <View style={styles.routeLoadingContainer}>
+                <ActivityIndicator size="small" color="#2563EB" />
+                <Text style={styles.routeLoadingText}>Calculating route...</Text>
+              </View>
             )}
           </MapComponent>
 
@@ -1355,6 +1459,20 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: '#fff',
   },
+  workerMarkerNavigating: {
+    backgroundColor: '#2563EB',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    padding: 10,
+    borderWidth: 4,
+    borderColor: '#60A5FA',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 8,
+  },
   infoCard: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
@@ -1683,6 +1801,29 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#FF9800',
+  },
+  routeLoadingContainer: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -80 }, { translateY: -20 }],
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  routeLoadingText: {
+    fontSize: 14,
+    color: '#2563EB',
+    fontWeight: '600',
   },
 });
 
