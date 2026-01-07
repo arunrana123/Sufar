@@ -67,25 +67,63 @@ export const getDirections = async (
   profile: string = DIRECTIONS_PROFILE.driving
 ): Promise<any> => {
   try {
-    const url = `${DIRECTIONS_API_BASE_URL}/${profile}/${origin[0]},${origin[1]};${destination[0]},${destination[1]}?geometries=geojson&access_token=${MAPBOX_ACCESS_TOKEN}&steps=true&banner_instructions=true&voice_instructions=true`;
+    if (!MAPBOX_ACCESS_TOKEN || !MAPBOX_ACCESS_TOKEN.startsWith('pk.')) {
+      throw new Error('Invalid or missing Mapbox access token. Please configure EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN in your .env file.');
+    }
     
+    const url = `${DIRECTIONS_API_BASE_URL}/${profile}/${origin[0]},${origin[1]};${destination[0]},${destination[1]}?geometries=geojson&access_token=${MAPBOX_ACCESS_TOKEN}&steps=true&banner_instructions=true&voice_instructions=true&overview=full`;
+    
+    console.log('🔄 Fetching route from Mapbox Directions API...');
     const response = await fetch(url);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      if (errorData.message) {
+        throw new Error(`Mapbox API error: ${errorData.message}`);
+      }
+      throw new Error(`HTTP ${response.status}: Failed to fetch route from Mapbox`);
+    }
+    
     const data = await response.json();
     
+    // Check for Mapbox API errors
+    if (data.code && data.code !== 'Ok') {
+      throw new Error(`Mapbox API error: ${data.message || data.code}`);
+    }
+    
     if (data.routes && data.routes.length > 0) {
+      const route = data.routes[0];
+      const steps = route.legs && route.legs[0] ? route.legs[0].steps : [];
+      
+      console.log('✅ Route fetched successfully:', {
+        distance: route.distance,
+        duration: route.duration,
+        steps: steps.length,
+      });
+      
       return {
-        route: data.routes[0],
-        distance: data.routes[0].distance, // in meters
-        duration: data.routes[0].duration, // in seconds
-        geometry: data.routes[0].geometry,
-        steps: data.routes[0].legs[0].steps,
+        route: route,
+        distance: route.distance, // in meters
+        duration: route.duration, // in seconds
+        geometry: route.geometry,
+        steps: steps,
       };
     }
     
-    throw new Error('No route found');
-  } catch (error) {
+    throw new Error('No route found between origin and destination');
+  } catch (error: any) {
     console.error('❌ Error fetching directions:', error);
-    throw error;
+    
+    // Provide more specific error messages
+    if (error.message?.includes('Network') || error.message?.includes('fetch')) {
+      throw new Error('Network error. Please check your internet connection and try again.');
+    } else if (error.message?.includes('token') || error.message?.includes('access')) {
+      throw new Error('Mapbox authentication error. Please check your API token configuration.');
+    } else if (error.message) {
+      throw error; // Re-throw with original message
+    } else {
+      throw new Error('Failed to calculate route. Please try again.');
+    }
   }
 };
 
