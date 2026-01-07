@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -93,6 +93,15 @@ export default function JobNavigationScreen() {
   const [totalRouteDistance, setTotalRouteDistance] = useState<number>(0);
   const previousLocationRef = useRef<any>(null);
   const routeRecalculationInterval = useRef<any>(null);
+  
+  // ARCHITECTURE: Live GPS stored in useRef, React state only for UI updates
+  const liveLocationRef = useRef<any>(null);
+  const lastSocketEmitRef = useRef<number>(0);
+  const lastUIUpdateRef = useRef<number>(0);
+  const [currentStep, setCurrentStep] = useState<any>(null);
+  const [nextStep, setNextStep] = useState<any>(null);
+  const [navigationInstructions, setNavigationInstructions] = useState<string>('');
+  const [distanceToNextTurn, setDistanceToNextTurn] = useState<number>(0);
   
   // Toast notification state
   const [toast, setToast] = useState<{
@@ -221,55 +230,100 @@ export default function JobNavigationScreen() {
         timestamp: new Date().toISOString(),
       });
 
-      // Watch for location changes
+      // ARCHITECTURE: Watch GPS with quality control and throttling
       locationSubscription.current = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000, // Update every 5 seconds
-          distanceInterval: 10, // Or every 10 meters
+          accuracy: Location.Accuracy.Highest,
+          timeInterval: 1000, // Fast GPS updates for internal use
+          distanceInterval: 5,
+          mayShowUserSettingsDialog: true,
         },
         (location) => {
+          // ARCHITECTURE RULE: Ignore GPS if accuracy > 40 meters or stale
+          if (location.coords.accuracy && location.coords.accuracy > 40) {
+            console.warn('⚠️ Ignoring low-quality GPS:', location.coords.accuracy, 'meters (threshold: 40m)');
+            return; // Skip this update
+          }
+          
+          // Check timestamp freshness (ignore if > 5 seconds old)
+          const now = Date.now();
+          const locationAge = now - location.timestamp;
+          if (locationAge > 5000) {
+            console.warn('⚠️ Ignoring stale GPS reading:', locationAge, 'ms old');
+            return;
+          }
+          
           const newLoc = {
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
+            accuracy: location.coords.accuracy,
+            timestamp: location.timestamp,
           };
-          setWorkerLocation(newLoc);
-
-          // Calculate distance and traveled distance if navigating
-          let distanceTraveledValue = distanceTraveled;
-          let distanceRemainingValue = 0;
           
-          if (userLocation) {
-            distanceRemainingValue = calculateDistance(newLoc, userLocation);
-            setDistance(distanceRemainingValue);
-            setDistanceRemaining(distanceRemainingValue);
-            setEta(Math.max(1, Math.ceil(distanceRemainingValue * 2))); // Rough estimate: 2 min per km
+          // ARCHITECTURE: Store in useRef for live tracking
+          liveLocationRef.current = newLoc;
+          
+          // ARCHITECTURE: UI state update max once every 2 seconds
+          const timeSinceLastUIUpdate = now - lastUIUpdateRef.current;
+          if (timeSinceLastUIUpdate >= 2000) {
+            setWorkerLocation(newLoc);
+            lastUIUpdateRef.current = now;
+          }
 
-            // Calculate traveled distance if we have a previous location
-            if (previousLocationRef.current && navStatus === 'navigating') {
-              const segmentDistance = calculateDistance(previousLocationRef.current, newLoc);
-              distanceTraveledValue = distanceTraveled + segmentDistance;
-              setDistanceTraveled(distanceTraveledValue);
-              previousLocationRef.current = newLoc;
-
-              // Check if worker has deviated significantly from route
-              if (navStatus === 'navigating' && segmentDistance > 0.05) { // 50m threshold
+          // ARCHITECTURE: Calculate distance only if navigating and have route
+          if (navStatus === 'navigating' && previousLocationRef.current && routeData) {
+            const segmentDistance = calculateDistance(previousLocationRef.current, newLoc);
+            const newDistanceTraveled = distanceTraveled + segmentDistance;
+            const routeDistanceKm = routeData.distance / 1000;
+            const remaining = Math.max(0, routeDistanceKm - newDistanceTraveled);
+            
+            setDistanceTraveled(newDistanceTraveled);
+            setDistanceRemaining(remaining);
+            setDistance(remaining);
+            
+            // Update navigation step
+            if (routeData?.steps) {
+              updateNavigationStep(newLoc);
+            }
+            
+            previousLocationRef.current = newLoc;
+            
+            // ARCHITECTURE RULE: Recalculate route ONLY if deviation > 120 meters from polyline
+            // Check distance to nearest point on route polyline
+            if (routeData.geometry?.coordinates) {
+              let minDistanceToRoute = Infinity;
+              routeData.geometry.coordinates.forEach((coord: [number, number]) => {
+                const dist = calculateDistance(newLoc, {
+                  latitude: coord[1],
+                  longitude: coord[0],
+                });
+                minDistanceToRoute = Math.min(minDistanceToRoute, dist);
+              });
+              
+              // Only recalculate if deviated > 120m from route
+              if (minDistanceToRoute > 0.12) { // 120 meters
+                console.log('🔄 Worker deviated >120m from route, recalculating...');
                 recalculateRoute(newLoc, userLocation);
               }
             }
+          } else if (navStatus === 'navigating') {
+            previousLocationRef.current = newLoc;
           }
 
-          // Send enhanced location data to user via socket with distance info
-          socketService.emit('worker:location', {
-            workerId: worker?.id,
-            bookingId,
-            latitude: newLoc.latitude,
-            longitude: newLoc.longitude,
-            accuracy: location.coords.accuracy,
-            timestamp: Date.now(),
-            distanceTraveled: distanceTraveledValue,
-            distanceRemaining: distanceRemainingValue,
-          });
+          // ARCHITECTURE RULE: Throttle socket emits to 3-5 seconds
+          const timeSinceLastSocketEmit = now - lastSocketEmitRef.current;
+          if (timeSinceLastSocketEmit >= 3000) { // 3 seconds
+            // ARCHITECTURE: Worker emits ONLY basic location data (no route calculation)
+            socketService.emit('worker:location', {
+              workerId: worker?.id,
+              bookingId,
+              latitude: newLoc.latitude,
+              longitude: newLoc.longitude,
+              accuracy: newLoc.accuracy,
+              timestamp: newLoc.timestamp,
+            });
+            lastSocketEmitRef.current = now;
+          }
         }
       );
     } catch (error) {
@@ -302,21 +356,35 @@ export default function JobNavigationScreen() {
   const fetchRoute = async (origin: any, destination: any) => {
     if (!mapboxAvailable || !getDirections) {
       console.log('⚠️ Mapbox not available, skipping route fetch');
+      setRouteError('Mapbox is not available. Please ensure Mapbox is properly configured.');
       return null;
     }
 
     try {
       setRouteError(null);
+      console.log('🔄 Fetching route from Mapbox...');
       const route = await getDirections(
         [origin.longitude, origin.latitude],
         [destination.longitude, destination.latitude],
         'driving-traffic' // Use driving-traffic for real-time traffic-aware routing
       );
       
+      if (!route || !route.geometry) {
+        throw new Error('Invalid route data received from Mapbox');
+      }
+      
       setRouteData(route);
-      setTotalRouteDistance(route.distance || 0);
-      setDistanceRemaining(route.distance || 0);
+      const routeDistanceKm = (route.distance || 0) / 1000; // Convert to km
+      setTotalRouteDistance(routeDistanceKm);
+      setDistanceRemaining(routeDistanceKm);
       setDistanceTraveled(0);
+      
+      // Initialize navigation steps
+      if (route.steps && route.steps.length > 0) {
+        setCurrentStep(route.steps[0]);
+        setNextStep(route.steps.length > 1 ? route.steps[1] : null);
+        updateNavigationInstructions(route.steps[0], route.steps[1]);
+      }
       
       // Update camera bounds to show entire route
       if (route.geometry && route.geometry.coordinates) {
@@ -346,31 +414,100 @@ export default function JobNavigationScreen() {
         distance: route.distance,
         duration: route.duration,
         timestamp: new Date().toISOString(),
-        distanceTraveled: distanceTraveled,
-        distanceRemaining: route.distance ? route.distance / 1000 : calculateDistance(origin, destination), // Convert to km
+        distanceTraveled: 0,
+        distanceRemaining: routeDistanceKm,
       });
       
-      console.log('✅ Route fetched successfully:', route.distance, 'meters');
+      console.log('✅ Route fetched successfully:', route.distance, 'meters', route.duration, 'seconds');
       return route; // Return route data for caller
     } catch (error: any) {
       console.error('❌ Error fetching route:', error);
-      setRouteError(error.message || 'Failed to fetch route');
+      const errorMessage = error.message || 'Failed to fetch route. Please check your internet connection and Mapbox configuration.';
+      setRouteError(errorMessage);
+      
+      // If it's a network error, provide more specific guidance
+      if (error.message?.includes('Network') || error.message?.includes('fetch')) {
+        setRouteError('Network error. Please check your internet connection and try again.');
+      } else if (error.message?.includes('token') || error.message?.includes('access')) {
+        setRouteError('Mapbox authentication error. Please check your API token configuration.');
+      }
+      
       return null;
     }
   };
+  
+  // Update navigation instructions based on current step
+  const updateNavigationInstructions = (step: any, nextStep: any) => {
+    if (!step) {
+      setNavigationInstructions('Follow the route');
+      return;
+    }
+    
+    const instruction = step.banner_instructions?.[0]?.primary?.text || 
+                       step.maneuver?.instruction || 
+                       'Continue straight';
+    
+    setNavigationInstructions(instruction);
+    
+    // Calculate distance to next turn
+    if (step.distance) {
+      setDistanceToNextTurn(step.distance / 1000); // Convert to km
+    } else if (nextStep) {
+      // Estimate distance to next step
+      const estimatedDistance = calculateDistance(
+        { latitude: step.maneuver?.location?.[1] || 0, longitude: step.maneuver?.location?.[0] || 0 },
+        { latitude: nextStep.maneuver?.location?.[1] || 0, longitude: nextStep.maneuver?.location?.[0] || 0 }
+      );
+      setDistanceToNextTurn(estimatedDistance);
+    }
+  };
+  
+  // Update current navigation step based on worker's position
+  const updateNavigationStep = (currentLocation: any) => {
+    if (!routeData?.steps || routeData.steps.length === 0) return;
+    
+    // Find the next upcoming step (not the closest, but the next one we haven't reached)
+    let nextStepIndex = 0;
+    let minDistance = Infinity;
+    
+    routeData.steps.forEach((step: any, index: number) => {
+      if (step.maneuver?.location) {
+        const stepLocation = {
+          latitude: step.maneuver.location[1],
+          longitude: step.maneuver.location[0],
+        };
+        const distance = calculateDistance(currentLocation, stepLocation);
+        
+        // Find the next step that's ahead of us (within reasonable distance)
+        if (distance < minDistance && distance < 0.5) { // Within 500m
+          minDistance = distance;
+          nextStepIndex = index;
+        }
+      }
+    });
+    
+    // Update current and next steps
+    const currentStepData = routeData.steps[nextStepIndex];
+    const nextStepData = nextStepIndex + 1 < routeData.steps.length 
+      ? routeData.steps[nextStepIndex + 1] 
+      : null;
+    
+    setCurrentStep(currentStepData);
+    setNextStep(nextStepData);
+    updateNavigationInstructions(currentStepData, nextStepData);
+  };
 
+  // ARCHITECTURE: Route recalculation ONLY when deviation > 120m (called from GPS callback)
   const recalculateRoute = async (currentLocation: any, destination: any) => {
     if (!mapboxAvailable || !getDirections || navStatus !== 'navigating') {
       return;
     }
-
-    // Only recalculate if worker has moved significantly (more than 50 meters) or enough time has passed
-    if (previousLocationRef.current) {
-      const distanceMoved = calculateDistance(previousLocationRef.current, currentLocation);
-      if (distanceMoved < 0.05) { // Less than 50 meters, skip recalculation
-        return;
-      }
+    
+    // Prevent concurrent recalculations
+    if ((mapRef.current as any)?._recalculating) {
+      return;
     }
+    (mapRef.current as any)._recalculating = true;
     
     try {
       console.log('🔄 Recalculating route due to position change...');
@@ -381,15 +518,20 @@ export default function JobNavigationScreen() {
         'driving-traffic'
       );
       
-      if (newRoute) {
+      if (newRoute && newRoute.geometry) {
         setRouteData(newRoute);
         
-        // Update route distance calculations
+        // Update route distance calculations using route distance, not straight-line
         const newRouteDistance = newRoute.distance / 1000; // Convert to km
-        const currentDistanceRemaining = calculateDistance(currentLocation, destination);
+        const routeDistanceRemaining = newRouteDistance; // Use route distance, not straight-line
         
-        setDistanceRemaining(currentDistanceRemaining);
+        setDistanceRemaining(routeDistanceRemaining);
         setTotalRouteDistance(newRouteDistance);
+        
+        // Update navigation steps
+        if (newRoute.steps && newRoute.steps.length > 0) {
+          updateNavigationStep(currentLocation);
+        }
         
         // Emit updated route to user app
         socketService.emit('route:updated', {
@@ -399,7 +541,7 @@ export default function JobNavigationScreen() {
           duration: newRoute.duration,
           timestamp: new Date().toISOString(),
           distanceTraveled: distanceTraveled,
-          distanceRemaining: currentDistanceRemaining,
+          distanceRemaining: routeDistanceRemaining,
         });
         
         console.log('✅ Route recalculated and updated to user app');
@@ -407,7 +549,8 @@ export default function JobNavigationScreen() {
       }
     } catch (error) {
       console.error('❌ Error recalculating route:', error);
-      // Don't show error to user, just log it
+    } finally {
+      (mapRef.current as any)._recalculating = false;
     }
   };
 
@@ -425,13 +568,13 @@ export default function JobNavigationScreen() {
       // Fetch initial route and get route data
       const routeResponse = await fetchRoute(workerLocation, userLocation);
       
-      if (routeResponse && routeData) {
-        // Calculate initial distances
+      if (routeResponse && routeResponse.geometry) {
+        // Use route-based distance, not straight-line
         const totalDistance = routeResponse.distance / 1000; // Convert to km
-        const currentDistance = calculateDistance(workerLocation, userLocation);
         
         setTotalRouteDistance(totalDistance);
-        setDistanceRemaining(currentDistance);
+        setDistanceRemaining(totalDistance); // Use route distance
+        setDistance(totalDistance);
         setDistanceTraveled(0);
         previousLocationRef.current = workerLocation;
 
@@ -446,7 +589,7 @@ export default function JobNavigationScreen() {
         socketService.emit('navigation:started', { 
           bookingId, 
           workerId: worker?.id,
-          route: routeData.geometry,
+          route: routeResponse.geometry,
           distance: routeResponse.distance,
           duration: routeResponse.duration,
           timestamp: new Date().toISOString(),
@@ -476,7 +619,20 @@ export default function JobNavigationScreen() {
           'success'
         );
       } else {
-        Alert.alert('Route Error', 'Could not calculate route. Please check your internet connection and try again.');
+        // Show more specific error message
+        const errorMsg = routeError || 'Could not calculate route. Please check your internet connection and Mapbox configuration.';
+        Alert.alert(
+          'Route Error', 
+          errorMsg,
+          [
+            { text: 'OK', style: 'default' },
+            { 
+              text: 'Retry', 
+              onPress: () => handleStartNavigation(),
+              style: 'default'
+            }
+          ]
+        );
         setNavStatus('idle');
       }
     } catch (error) {
@@ -760,13 +916,27 @@ export default function JobNavigationScreen() {
   };
 
   useEffect(() => {
-    if (workerLocation && userLocation && !routeData) {
+    if (workerLocation && userLocation) {
       updateCameraBounds();
+      
+      // ARCHITECTURE: Route fetched ONLY when navigation starts (removed auto-fetch)
     }
-  }, [workerLocation, userLocation]);
+  }, [workerLocation, userLocation, routeData, navStatus]);
 
   // Calculate region for map - Updates in real-time when locations change
   // MUST be before conditional return to avoid hooks error
+  // ARCHITECTURE: Memoize polyline geometry - NEVER recreate on location updates
+  // Dependency on routeData.geometry ensures it only updates when route changes, not on GPS updates
+  const memoizedRouteCoordinates = useMemo(() => {
+    if (routeData?.geometry?.coordinates && routeData.geometry.coordinates.length > 0) {
+      return routeData.geometry.coordinates.map((coord: [number, number]) => ({
+        latitude: coord[1],
+        longitude: coord[0],
+      }));
+    }
+    return [];
+  }, [routeData?.geometry]); // Only recreate when route geometry object changes (not on location updates)
+
   useEffect(() => {
     if (workerLocation && userLocation) {
       const newRegion = {
@@ -792,10 +962,41 @@ export default function JobNavigationScreen() {
     }
   }, [workerLocation, userLocation]);
 
-  // Fit map to show both markers
-  // MUST be before conditional return to avoid hooks error
+  // ARCHITECTURE: Camera updates ONLY every 2-3 seconds (Uber style)
   useEffect(() => {
-    if (mapRef.current && workerLocation && userLocation && Platform.OS !== 'web') {
+    if (navStatus === 'navigating' && workerLocation && mapRef.current) {
+      const now = Date.now();
+      const lastCameraUpdate = (mapRef.current as any)._lastCameraUpdate || 0;
+      
+      // ARCHITECTURE RULE: Camera updates every 2-3 seconds
+      if (now - lastCameraUpdate < 2500) { // 2.5 seconds
+        return;
+      }
+      
+      try {
+        (mapRef.current as any)._lastCameraUpdate = now;
+        
+        if (mapboxAvailable && mapRef.current.getCamera) {
+          // Mapbox Camera component handles this via props (see Camera component below)
+        } else if (useRNMaps && mapRef.current.animateToCoordinate) {
+          // ARCHITECTURE: Use flyTo/easeTo with duration ≥ 1000ms
+          mapRef.current.animateToCoordinate(
+            {
+              latitude: workerLocation.latitude,
+              longitude: workerLocation.longitude,
+            },
+            1200 // Smooth 1.2s animation
+          );
+        }
+      } catch (error) {
+        console.log('Camera follow error:', error);
+      }
+    }
+  }, [workerLocation, navStatus]);
+
+  // Fit map to show both markers (only when not navigating)
+  useEffect(() => {
+    if (mapRef.current && workerLocation && userLocation && Platform.OS !== 'web' && navStatus !== 'navigating') {
       try {
         if (mapboxAvailable && mapRef.current.fitToCoordinates) {
           // Mapbox fitToCoordinates
@@ -826,7 +1027,7 @@ export default function JobNavigationScreen() {
         console.log('Map fit error:', error);
       }
     }
-  }, [workerLocation, userLocation]);
+  }, [workerLocation, userLocation, navStatus]);
 
   // Early return check - must be after all hooks
   if (!booking || !workerLocation || !userLocation) {
@@ -837,10 +1038,9 @@ export default function JobNavigationScreen() {
     );
   }
 
-  // At this point, workerLocation and userLocation are guaranteed to be non-null
-  // Calculate features for Mapbox markers (only used if mapboxAvailable)
-  const workerFeature = pointFeatureCollection(workerLocation);
-  const userFeature = pointFeatureCollection(userLocation);
+  // ARCHITECTURE: Memoize Mapbox features - prevent unnecessary ShapeSource recreations
+  const workerFeature = useMemo(() => pointFeatureCollection(workerLocation), [workerLocation.latitude, workerLocation.longitude]);
+  const userFeature = useMemo(() => pointFeatureCollection(userLocation), [userLocation.latitude, userLocation.longitude]);
 
   return (
     <View style={styles.container}>
@@ -848,7 +1048,18 @@ export default function JobNavigationScreen() {
         {/* Map */}
         {mapboxAvailable ? (
           <MapboxMap styleURL={DEFAULT_MAP_STYLE} style={styles.map} ref={mapRef}>
-            {cameraBounds ? (
+            {navStatus === 'navigating' ? (
+              // During navigation: Camera follows worker smoothly (like Google Maps)
+              <Camera
+                centerCoordinate={[workerLocation.longitude, workerLocation.latitude]}
+                zoomLevel={15}
+                pitch={45}
+                heading={0}
+                animationDuration={1000}
+                animationMode="flyTo"
+              />
+            ) : cameraBounds ? (
+              // When idle: Show both locations with bounds
               <Camera
                 bounds={{
                   ne: cameraBounds.ne,
@@ -861,128 +1072,146 @@ export default function JobNavigationScreen() {
                 animationDuration={800}
               />
             ) : (
+              // Default: Center on worker
               <Camera
                 zoomLevel={13}
                 centerCoordinate={[workerLocation.longitude, workerLocation.latitude]}
               />
             )}
 
-            {/* Route between worker and customer - Blue road path */}
-            {routeData?.geometry && navStatus === 'navigating' && (
-              <ShapeSource id="routeSource" shape={routeData.geometry}>
-                <LineLayer
-                  id="routeLayer"
-                  style={{
-                    lineColor: '#2563EB', // Blue color like Google Maps
-                    lineWidth: 6,
-                    lineCap: 'round',
-                    lineJoin: 'round',
-                    lineOpacity: 0.9,
-                  }}
-                />
-              </ShapeSource>
-            )}
+            {/* ARCHITECTURE FIX: Components ALWAYS mounted - NO conditional rendering */}
+            {/* Route - Always mounted, shape updates via props (memoized geometry) */}
+            <ShapeSource 
+              id="routeSource" 
+              shape={routeData?.geometry || { type: 'FeatureCollection', features: [] }} 
+              key="route-source"
+            >
+              <LineLayer
+                id="routeLayer"
+                style={{
+                  lineColor: navStatus === 'navigating' ? '#2563EB' : '#9CA3AF',
+                  lineWidth: navStatus === 'navigating' ? 8 : 6,
+                  lineCap: 'round',
+                  lineJoin: 'round',
+                  lineOpacity: routeData?.geometry ? (navStatus === 'navigating' ? 0.9 : 0.7) : 0,
+                }}
+              />
+            </ShapeSource>
 
-            {/* Worker marker */}
-            {workerFeature && (
-              <ShapeSource id="workerSource" shape={workerFeature}>
-                <SymbolLayer
-                  id="workerLayer"
-                  style={{
-                    iconImage: 'marker-15',
-                    iconColor: '#2563EB',
-                    iconSize: 1.5,
-                  }}
-                />
-              </ShapeSource>
-            )}
+            {/* Worker marker - Always mounted, shape updates via props */}
+            <ShapeSource 
+              id="workerSource" 
+              shape={workerFeature}
+              key="worker-source"
+            >
+              <SymbolLayer
+                id="workerLayer"
+                style={{
+                  iconImage: 'marker-15',
+                  iconColor: navStatus === 'navigating' ? '#2563EB' : '#6B7280',
+                  iconSize: navStatus === 'navigating' ? 2 : 1.5,
+                  iconAllowOverlap: true,
+                  iconIgnorePlacement: true,
+                }}
+              />
+            </ShapeSource>
 
-            {/* Customer marker */}
-            {userFeature && (
-              <ShapeSource id="customerSource" shape={userFeature}>
-                <SymbolLayer
-                  id="customerLayer"
-                  style={{
-                    iconImage: 'marker-15',
-                    iconColor: '#DC2626',
-                    iconSize: 1.5,
-                  }}
-                />
-              </ShapeSource>
-            )}
+            {/* Customer marker - Always mounted, shape updates via props */}
+            <ShapeSource 
+              id="customerSource" 
+              shape={userFeature} 
+              key="customer-source"
+            >
+              <SymbolLayer
+                id="customerLayer"
+                style={{
+                  iconImage: 'marker-15',
+                  iconColor: '#DC2626',
+                  iconSize: 1.5,
+                }}
+              />
+            </ShapeSource>
           </MapboxMap>
         ) : useRNMaps && RNMapView && mapRegion ? (
           <RNMapView
             ref={mapRef}
             style={styles.map}
-            region={mapRegion}
-            onRegionChangeComplete={(region: any) => setMapRegionState(region)}
+            // Remove region prop to prevent blinking - use animateToCoordinate instead
+            onRegionChangeComplete={(region: any) => {
+              // Prevent unnecessary updates
+              if (navStatus !== 'navigating') {
+                setMapRegionState(region);
+              }
+            }}
             showsUserLocation={false}
             showsMyLocationButton={false}
             provider={Platform.OS === 'android' ? 'google' : undefined}
             mapType="standard"
+            followsUserLocation={navStatus === 'navigating'}
           >
-            {/* Worker Location Marker - Updates in real-time */}
-            {workerLocation && (
-              <RNMarker
-                key={`worker-${workerLocation.latitude}-${workerLocation.longitude}`}
-                coordinate={{
-                  latitude: workerLocation.latitude,
-                  longitude: workerLocation.longitude,
-                }}
-                title="Your Location"
-                description="Worker - Moving"
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={styles.workerMarkerContainer}>
-                  <Ionicons name="person" size={24} color="#fff" />
-                </View>
-              </RNMarker>
-            )}
-
-            {/* Customer Location Marker */}
-            {userLocation && (
-              <RNMarker
-                coordinate={{
-                  latitude: userLocation.latitude,
-                  longitude: userLocation.longitude,
-                }}
-                title="Customer Location"
-                description={booking.location?.address || 'Destination'}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={styles.customerMarkerContainer}>
-                  <Ionicons name="home" size={24} color="#fff" />
-                </View>
-              </RNMarker>
-            )}
-
-            {/* Route Line - Show road path if available, otherwise straight line */}
-            {workerLocation && userLocation && RNPolyline && (
-              routeData?.geometry?.coordinates ? (
-                <RNPolyline
-                  key={`road-route-${routeData.geometry.coordinates.length}`}
-                  coordinates={routeData.geometry.coordinates.map((coord: [number, number]) => ({
-                    latitude: coord[1],
-                    longitude: coord[0],
-                  }))}
-                  strokeColor="#2563EB"
-                  strokeWidth={6}
-                  lineCap="round"
-                  lineJoin="round"
+            {/* ARCHITECTURE FIX: Components ALWAYS mounted - NO conditional rendering */}
+            {/* Worker marker - Always mounted, coordinate updates via props */}
+            <RNMarker
+              key="worker-marker"
+              identifier="worker-marker"
+              coordinate={workerLocation ? {
+                latitude: workerLocation.latitude,
+                longitude: workerLocation.longitude,
+              } : { latitude: 0, longitude: 0 }}
+              title="Your Location"
+              description={navStatus === 'navigating' ? 'Navigating...' : 'Worker Location'}
+              anchor={{ x: 0.5, y: 0.5 }}
+              flat={navStatus === 'navigating'}
+              rotation={0}
+            >
+              <View style={[
+                styles.workerMarkerContainer,
+                navStatus === 'navigating' && styles.workerMarkerNavigating
+              ]}>
+                <Ionicons 
+                  name={navStatus === 'navigating' ? 'navigate' : 'person'} 
+                  size={navStatus === 'navigating' ? 28 : 24} 
+                  color="#fff" 
                 />
-              ) : (
-                <RNPolyline
-                  key={`direct-route-${workerLocation.latitude}-${userLocation.latitude}`}
-                  coordinates={[
-                    { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
-                    { latitude: userLocation.latitude, longitude: userLocation.longitude },
-                  ]}
-                  strokeColor="#FF7A2C"
-                  strokeWidth={4}
-                  lineDashPattern={[5, 5]}
-                />
-              )
+              </View>
+            </RNMarker>
+
+            {/* Customer marker - Always mounted, coordinate updates via props */}
+            <RNMarker
+              key="customer-marker"
+              identifier="customer-marker"
+              coordinate={userLocation ? {
+                latitude: userLocation.latitude,
+                longitude: userLocation.longitude,
+              } : { latitude: 0, longitude: 0 }}
+              title="Customer Location"
+              description={booking.location?.address || 'Destination'}
+              anchor={{ x: 0.5, y: 0.5 }}
+            >
+              <View style={styles.customerMarkerContainer}>
+                <Ionicons name="home" size={24} color="#fff" />
+              </View>
+            </RNMarker>
+
+            {/* Route Line - Always mounted, coordinates update via props (memoized) */}
+            <RNPolyline
+              key="route-polyline"
+              identifier="route-polyline"
+              coordinates={memoizedRouteCoordinates}
+              strokeColor={navStatus === 'navigating' ? '#2563EB' : '#9CA3AF'}
+              strokeWidth={memoizedRouteCoordinates.length > 0 ? (navStatus === 'navigating' ? 8 : 6) : 0}
+              lineCap="round"
+              lineJoin="round"
+              geodesic={false}
+              tappable={false}
+              zIndex={1}
+            />
+            
+            {/* Show loading indicator only when route is being calculated */}
+            {workerLocation && userLocation && !routeData && navStatus === 'navigating' && (
+              <View style={styles.routeLoadingIndicator}>
+                <Text style={styles.routeLoadingText}>Calculating route...</Text>
+              </View>
             )}
           </RNMapView>
         ) : (
@@ -1112,6 +1341,36 @@ export default function JobNavigationScreen() {
 
             {navStatus === 'navigating' && (
               <>
+                {/* Navigation Guidance Card - Google Maps style */}
+                {navigationInstructions && (
+                  <View style={styles.navigationGuidance}>
+                    <View style={styles.guidanceHeader}>
+                      <Ionicons name="navigate" size={24} color="#2563EB" />
+                      <Text style={styles.guidanceTitle}>Navigation Active</Text>
+                    </View>
+                    <View style={styles.instructionCard}>
+                      <Text style={styles.instructionText}>{navigationInstructions}</Text>
+                      {distanceToNextTurn > 0 && (
+                        <Text style={styles.distanceToTurn}>
+                          {distanceToNextTurn < 0.1 
+                            ? `${Math.round(distanceToNextTurn * 1000)}m` 
+                            : `${distanceToNextTurn.toFixed(2)}km`} to next turn
+                        </Text>
+                      )}
+                    </View>
+                    {nextStep && (
+                      <View style={styles.nextStepPreview}>
+                        <Text style={styles.nextStepLabel}>Then:</Text>
+                        <Text style={styles.nextStepText}>
+                          {nextStep.banner_instructions?.[0]?.primary?.text || 
+                           nextStep.maneuver?.instruction || 
+                           'Continue on route'}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+                
                 <View style={styles.navigatingBadge}>
                   <View style={styles.pulseDot} />
                   <Text style={styles.navigatingText}>Moving to destination...</Text>
@@ -1230,6 +1489,19 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
+  },
+  workerMarkerNavigating: {
+    backgroundColor: '#2563EB',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 4,
+    borderColor: '#60A5FA',
+    shadowColor: '#2563EB',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 8,
   },
   customerMarkerContainer: {
     backgroundColor: '#DC2626',
@@ -1461,6 +1733,82 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  navigationGuidance: {
+    backgroundColor: '#F0F7FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2563EB',
+  },
+  guidanceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  guidanceTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#2563EB',
+  },
+  instructionCard: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  instructionText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 6,
+  },
+  distanceToTurn: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  nextStepPreview: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  nextStepLabel: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginBottom: 4,
+    fontWeight: '500',
+  },
+  nextStepText: {
+    fontSize: 14,
+    color: '#4B5563',
+    fontWeight: '500',
+  },
+  routeLoadingIndicator: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -100 }, { translateY: -20 }],
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: 12,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  routeLoadingText: {
+    fontSize: 14,
+    color: '#2563EB',
+    fontWeight: '600',
   },
 });
 
