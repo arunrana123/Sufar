@@ -14,7 +14,7 @@ class MockLocationService {
   private isTracking = false;
   private socketService: SocketService;
   private currentLocation: LocationData | null = null;
-  private updateInterval: NodeJS.Timeout | null = null;
+  private updateInterval: number | null = null;
   private workerId: string | null = null;
 
   private constructor() {
