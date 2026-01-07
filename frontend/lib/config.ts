@@ -1,14 +1,17 @@
 import { Platform } from 'react-native';
 
-// Default backend API URL - Use 192.168.1.112:5001 as the primary server address
-const DEFAULT_API_URL = 'http://192.168.1.112:5001';
+// Default backend API URL - Use 192.168.1.66:5001 as the primary server address
+// Update this IP if your backend server is running on a different machine
+// You can also override via EXPO_PUBLIC_API_URL environment variable
+const DEFAULT_API_URL = 'http://192.168.1.66:5001';
 
-// Legacy IP mappings - automatically redirect old IPs to the current server IP (192.168.1.112)
+// Legacy IP mappings - automatically redirect old IPs to the current server IP
 const LEGACY_IPS: Record<string, string> = {
-  '192.168.1.88': '192.168.1.112',  // Redirect old IP to current server
-  '192.168.1.92': '192.168.1.112',  // Redirect old IP to current server
-  '192.168.1.96': '192.168.1.112',  // Redirect old IP to current server
-  '10.21.12.171': '192.168.1.112'   // Redirect to correct server IP
+  '192.168.1.88': '192.168.1.66',   // Redirect old IP to current server
+  '192.168.1.92': '192.168.1.66',   // Redirect old IP to current server
+  '192.168.1.96': '192.168.1.66',   // Redirect old IP to current server
+  '192.168.1.112': '192.168.1.66',  // Redirect old IP to current server
+  '10.21.12.171': '192.168.1.66'    // Redirect to correct server IP
 };
 
 const ensureHttpScheme = (url: string) => {
@@ -35,43 +38,38 @@ const sanitizeUrl = (value?: string | null) => {
   sanitized = sanitized.replace(/\/+$/, '');
   sanitized = ensurePort(sanitized);
 
-  // Replace legacy IPs with the correct server IP (192.168.1.112)
+  // Replace legacy IPs with the correct server IP
   Object.entries(LEGACY_IPS).forEach(([legacy, replacement]) => {
     // Replace IP in URL (handles both with and without http://)
     const legacyPattern = new RegExp(legacy.replace(/\./g, '\\.'), 'g');
     sanitized = sanitized.replace(legacyPattern, replacement);
   });
 
-  // Force use of 192.168.1.112 if any legacy IP was detected
-  if (sanitized && !sanitized.includes('192.168.1.112') && !sanitized.includes('localhost') && !sanitized.includes('10.0.2.2')) {
+  // Force use of default IP if any legacy IP was detected (but allow localhost and 10.0.2.2 for Android emulator)
+  const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
+  if (sanitized && !sanitized.includes(defaultIp) && !sanitized.includes('localhost') && !sanitized.includes('10.0.2.2')) {
     console.warn('⚠️ Detected non-standard IP, redirecting to default:', sanitized);
     // Extract port if present
     const portMatch = sanitized.match(/:(\d+)/);
     const port = portMatch ? portMatch[1] : '5001';
-    sanitized = `http://192.168.1.112:${port}`;
+    sanitized = `http://${defaultIp}:${port}`;
   }
 
   return sanitized;
 };
 
 const resolveBaseUrl = () => {
-  // For mobile platforms, always use 192.168.1.112:5001 (ignore environment variable if it's wrong)
+  // For mobile platforms, prefer environment variable, otherwise use default
   if (__DEV__ && Platform.OS !== 'web') {
     const envUrl = sanitizeUrl(process.env.EXPO_PUBLIC_API_URL);
     
-    // If environment variable is set and contains the correct IP, use it
-    if (envUrl && envUrl.includes('192.168.1.112')) {
-      console.log('✅ Using API URL from environment variable (correct IP):', envUrl);
+    // If environment variable is set, use it (it will be sanitized to handle legacy IPs)
+    if (envUrl) {
+      console.log('✅ Using API URL from environment variable:', envUrl);
       return envUrl;
     }
     
-    // If environment variable is set but has wrong IP, warn and use default
-    if (envUrl && !envUrl.includes('192.168.1.112')) {
-      console.warn('⚠️ Environment variable has wrong IP, using default:', envUrl, '->', DEFAULT_API_URL);
-      return DEFAULT_API_URL;
-    }
-    
-    // No environment variable or web platform - use default
+    // No environment variable - use default
     console.log('📱 Mobile platform detected, using default IP:', DEFAULT_API_URL);
     return DEFAULT_API_URL;
   }
@@ -93,9 +91,10 @@ const resolveBaseUrl = () => {
 
 let BASE_URL = resolveBaseUrl();
 
-// Final validation - ensure mobile platforms always use 192.168.1.112
-if (__DEV__ && Platform.OS !== 'web' && !BASE_URL.includes('192.168.1.112')) {
-  console.warn('⚠️ FORCING correct IP address - was:', BASE_URL);
+// Final validation - ensure mobile platforms use a valid IP (allow localhost and 10.0.2.2 for emulators)
+const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
+if (__DEV__ && Platform.OS !== 'web' && !BASE_URL.includes(defaultIp) && !BASE_URL.includes('localhost') && !BASE_URL.includes('10.0.2.2')) {
+  console.warn('⚠️ FORCING default IP address - was:', BASE_URL);
   BASE_URL = DEFAULT_API_URL;
   console.log('✅ Corrected to:', BASE_URL);
 }
@@ -107,7 +106,8 @@ if (__DEV__) {
   console.log('  Environment URL:', process.env.EXPO_PUBLIC_API_URL || 'not set');
   console.log('  Resolved URL:', BASE_URL);
   console.log('  Platform:', Platform.OS);
-  console.log('  ✅ Using correct IP (192.168.1.112):', BASE_URL.includes('192.168.1.112'));
+  const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
+  console.log(`  ✅ Using correct IP (${defaultIp}):`, BASE_URL.includes(defaultIp));
 }
 
 // Note: process.env is read-only in React Native/Expo, so we just use the resolved URL
@@ -118,8 +118,9 @@ export const API_CONFIG = {
 export const getApiUrl = () => {
   let url = API_CONFIG.BASE_URL;
   
-  // Final safety check - ensure mobile platforms always get 192.168.1.112
-  if (__DEV__ && Platform.OS !== 'web' && !url.includes('192.168.1.112')) {
+  // Final safety check - ensure mobile platforms use a valid IP (allow localhost and 10.0.2.2 for emulators)
+  const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
+  if (__DEV__ && Platform.OS !== 'web' && !url.includes(defaultIp) && !url.includes('localhost') && !url.includes('10.0.2.2')) {
     console.error('❌ ERROR: Wrong IP detected in getApiUrl(), forcing correction:', url);
     url = DEFAULT_API_URL;
     console.log('✅ Corrected to:', url);
@@ -127,7 +128,7 @@ export const getApiUrl = () => {
   
   if (__DEV__) {
     console.log('🔗 getApiUrl() called, returning:', url);
-    console.log('   ✅ IP is correct (192.168.1.112):', url.includes('192.168.1.112'));
+    console.log(`   ✅ IP is correct (${defaultIp}):`, url.includes(defaultIp) || url.includes('localhost') || url.includes('10.0.2.2'));
   }
   return url;
 };
