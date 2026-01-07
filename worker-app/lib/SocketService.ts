@@ -107,10 +107,11 @@ export class SocketService {
     if (this.initialized) return;
     
     try {
-      // Use getApiUrl() from config to ensure correct IP (192.168.1.112)
+      // Use getApiUrl() from config to ensure correct IP
       const apiUrl = getApiUrl();
       console.log('✅ Initializing socket connection to:', apiUrl);
-      console.log('   Using correct IP (192.168.1.112):', apiUrl.includes('192.168.1.112'));
+      const defaultIp = '192.168.1.66';
+      console.log(`   Using correct IP (${defaultIp}):`, apiUrl.includes(defaultIp) || apiUrl.includes('localhost') || apiUrl.includes('10.0.2.2'));
       
       this.socket = io(apiUrl, {
         transports: ['websocket', 'polling'], // Fallback to polling if websocket fails
