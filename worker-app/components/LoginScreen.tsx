@@ -17,6 +17,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApiUrl } from '@/lib/config';
+import { loginRequest } from '@/lib/networkUtils';
 // Simple Google Sign-In implementation (no complex imports)
 // For full functionality, set up Google OAuth credentials
 
@@ -194,25 +195,15 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
         console.log('✅ API URL is correct:', apiUrl);
       }
       
-      // Proceed with login attempt (with timeout)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      // Use robust login request with automatic retry
+      console.log('📡 Making login request...');
+      console.log('📡 Using robust network utility with retry logic');
       
       try {
-        console.log('📡 Making login request...');
-        const response = await fetch(`${apiUrl}/api/workers/login`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify({ email, password }),
-          signal: controller.signal,
-          cache: 'no-cache',
-          credentials: 'omit',
-        });
-
-        clearTimeout(timeoutId);
+        const response = await loginRequest('/api/workers/login', {
+          email,
+          password,
+        }, apiUrl);
         console.log('Response status:', response.status);
         
         // Check if response is JSON
@@ -259,109 +250,30 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
           Alert.alert('Login Failed', data.message || 'Invalid credentials');
         }
       } catch (fetchError: any) {
-        clearTimeout(timeoutId);
-        
-        console.error('❌ Fetch error details:', {
-          name: fetchError.name,
-          message: fetchError.message,
-          stack: fetchError.stack,
-          apiUrl: apiUrl,
-        });
-        
-        if (fetchError.name === 'AbortError') {
-          // Timeout error
-          Alert.alert(
-            'Connection Timeout',
-            `Unable to connect to server at ${apiUrl}\n\nPlease check:\n• Backend server is running on port 5001\n• Your device is on the same network\n• Firewall is not blocking the connection\n\nTry restarting the backend server and try again.`,
-            [
-              { text: 'OK', style: 'default' },
-              { 
-                text: 'Retry', 
-                onPress: () => handleLogin(),
-                style: 'default'
-              }
-            ]
-          );
-          setLoading(false);
-          return;
-        } else if (fetchError.message?.includes('Network request failed') || fetchError.name === 'TypeError') {
-          // Network failure
-          const isAndroid = Platform.OS === 'android';
-          const serverIP = apiUrl.split('://')[1]?.split(':')[0] || 'unknown';
-          
-          Alert.alert(
-            'Network Connection Failed',
-            `Cannot reach server at:\n${apiUrl}\n\n🔴 FIRST: Check if backend is running!\n\nOpen terminal and run:\ncd backend\nbun run dev\n\nThen verify:\n• Server shows "Server running on port 5001"\n• No errors in backend terminal\n\n${isAndroid ? '🔧 Android Fix Required:' : '📱 iOS Checks:'}\n${isAndroid ? '1. Rebuild the app (network config was updated):\n   cd worker-app\n   bunx expo prebuild --clean\n   bunx expo run:android\n\n2. Verify network security config is applied\n3. Ensure device and computer are on same WiFi\n4. Test in phone browser: http://' + serverIP + ':5001' : '• Check iOS network permissions\n• Ensure device and computer are on same network\n• Try restarting the app'}\n\n✅ Network Checks:\n• Device and computer on same WiFi network\n• Computer IP is ${serverIP}\n• Firewall allows port 5001\n• Test URL in phone browser: http://${serverIP}:5001`,
-            [
-              { text: 'OK', style: 'default' },
-              { 
-                text: 'Retry Login', 
-                onPress: () => {
-                  console.log('🔄 Retrying login...');
-                  handleLogin();
-                },
-                style: 'default'
-              }
-            ]
-          );
-          setLoading(false);
-          return;
-        } else {
-          throw fetchError; // Re-throw to be caught by outer catch
-        }
+        // Error already handled by loginRequest with retry logic
+        console.error('❌ Login request failed after retries:', fetchError.message);
+        throw fetchError; // Re-throw to be caught by outer catch
       }
     } catch (error) {
       console.error('Login error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      const apiUrl = getApiUrl();
-      const serverIP = apiUrl.split('://')[1]?.split(':')[0] || 'unknown';
-      const isAndroid = Platform.OS === 'android';
       
-      // Provide helpful error messages based on error type
-      if (errorMessage.includes('Network request failed') || errorMessage.includes('fetch')) {
-        const suggestions = isAndroid 
-          ? `🔴 FIRST: Start backend server!\n\ncd backend\nbun run dev\n\n🔧 Then rebuild app:\n\ncd worker-app\nbunx expo prebuild --clean\nbunx expo run:android\n\n✅ Verify:\n• Backend shows "Server running on port 5001"\n• Device and computer on same WiFi\n• Test in phone browser: http://${serverIP}:5001\n• Network security config is applied`
-          : `🔴 FIRST: Start backend server!\n\ncd backend\nbun run dev\n\n✅ Then verify:\n• Backend shows "Server running on port 5001"\n• Device is on the same network\n• Firewall allows connections\n• Test in phone browser: http://${serverIP}:5001`;
-        
-        Alert.alert(
-          'Connection Error',
-          `Cannot connect to server at:\n${apiUrl}\n\n${suggestions}\n\nPlatform: ${Platform.OS}`,
-          [
-            { text: 'OK', style: 'default' },
-            {
-              text: 'Retry',
-              onPress: () => handleLogin(),
-              style: 'default'
-            }
-          ]
-        );
-      } else if (errorMessage.includes('timeout') || errorMessage.includes('AbortError')) {
-        Alert.alert(
-          'Connection Timeout',
-          `Request timed out while connecting to:\n${apiUrl}\n\nPlease check:\n• Backend server is running\n• Network connection is stable`,
-          [
-            { text: 'OK', style: 'default' },
-            { 
-              text: 'Retry Login', 
-              onPress: () => handleLogin(),
-              style: 'default'
-            }
-          ]
-        );
-      } else {
-        Alert.alert(
-          'Login Error', 
-          `An error occurred: ${errorMessage}\n\nAPI URL: ${apiUrl}\n\nPlease check your connection and try again.`,
-          [
-            { text: 'OK', style: 'default' },
-            { 
-              text: 'Retry', 
-              onPress: () => handleLogin(),
-              style: 'default'
-            }
-          ]
-        );
-      }
+      // Display error message (loginRequest already provides detailed messages)
+      Alert.alert(
+        'Login Failed',
+        errorMessage,
+        [
+          { text: 'OK', style: 'default' },
+          {
+            text: 'Retry',
+            onPress: () => {
+              console.log('🔄 Retrying login...');
+              handleLogin();
+            },
+            style: 'default'
+          }
+        ]
+      );
     } finally {
       setLoading(false);
     }

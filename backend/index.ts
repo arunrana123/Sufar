@@ -501,7 +501,173 @@ app.post('/api/workers/upload-documents', upload.fields([
   }
 });
 
-// Category-specific document upload route
+// NEW: Service category document upload route
+// Handles all documents for service category verification: drivingLicense, citizenship, serviceCertificate, experienceCertificate
+app.post('/api/workers/upload-service-documents', upload.fields([
+  { name: 'drivingLicense', maxCount: 1 },
+  { name: 'citizenship', maxCount: 1 },
+  { name: 'serviceCertificate', maxCount: 1 },
+  { name: 'experienceCertificate', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const workerId = req.body.workerId;
+    const category = req.body.category;
+
+    if (!workerId || !category) {
+      return res.status(400).json({ message: 'Worker ID and category are required' });
+    }
+
+    // Check required documents
+    if (!files.citizenship?.[0] || !files.serviceCertificate?.[0] || !files.experienceCertificate?.[0]) {
+      return res.status(400).json({ 
+        message: 'Citizenship, Service Certificate, and Experience Certificate are required' 
+      });
+    }
+
+    const WorkerUser = require('./src/models/WorkerUser.model').default;
+    const worker = await WorkerUser.findById(workerId);
+
+    if (!worker) {
+      return res.status(404).json({ message: 'Worker not found' });
+    }
+
+    // Get existing documents
+    const existingDocuments = worker.documents || {};
+    const existingCategoryDocuments = worker.categoryDocuments || {};
+    const existingCategoryStatus = worker.categoryVerificationStatus || {};
+    const existingVerificationStatus = worker.verificationStatus || {};
+
+    // Update general documents (citizenship, license)
+    const updatedDocuments = {
+      ...existingDocuments,
+      citizenship: files.citizenship?.[0]?.filename || existingDocuments.citizenship,
+      license: files.drivingLicense?.[0]?.filename || existingDocuments.license,
+    };
+
+    // Update category-specific documents
+    const categoryDocuments = {
+      ...existingCategoryDocuments,
+      [category]: {
+        skillProof: files.serviceCertificate?.[0]?.filename,
+        experience: files.experienceCertificate?.[0]?.filename,
+      }
+    };
+
+    // Set verification status to pending
+    const verificationStatus = {
+      ...existingVerificationStatus,
+      citizenship: files.citizenship?.[0] ? 'pending' : existingVerificationStatus.citizenship,
+      license: files.drivingLicense?.[0] ? 'pending' : existingVerificationStatus.license,
+      overall: 'pending',
+    };
+
+    // Set category verification status to pending
+    const categoryVerificationStatus = {
+      ...existingCategoryStatus,
+      [category]: 'pending',
+    };
+
+    console.log(`📤 Saving service documents for ${category}:`, {
+      drivingLicense: files.drivingLicense?.[0]?.filename,
+      citizenship: files.citizenship?.[0]?.filename,
+      serviceCertificate: files.serviceCertificate?.[0]?.filename,
+      experienceCertificate: files.experienceCertificate?.[0]?.filename,
+    });
+
+    const updatedWorker = await WorkerUser.findByIdAndUpdate(
+      workerId,
+      {
+        documents: updatedDocuments,
+        categoryDocuments,
+        categoryVerificationStatus,
+        verificationStatus,
+        verificationSubmitted: true,
+        submittedAt: new Date(),
+      },
+      { new: true }
+    );
+
+    if (!updatedWorker) {
+      return res.status(404).json({ message: 'Worker not found' });
+    }
+
+    console.log(`✅ Service documents saved for ${category}`);
+
+    // Create admin notification
+    try {
+      const Notification = require('./src/models/Notification.model').default;
+      const User = require('./src/models/User.model').default;
+      
+      const admin = await User.findOne({ role: 'admin' });
+      const adminId = admin ? admin._id : '000000000000000000000000';
+      
+      await Notification.create({
+        userId: adminId,
+        type: 'category_verification_submitted',
+        title: 'New Service Category Verification',
+        message: `${worker.name} has submitted verification documents for ${category} service category`,
+        data: {
+          workerId: String(workerId),
+          workerName: worker.name,
+          category: category,
+          documents: {
+            drivingLicense: files.drivingLicense?.[0]?.filename,
+            citizenship: files.citizenship?.[0]?.filename,
+            serviceCertificate: files.serviceCertificate?.[0]?.filename,
+            experienceCertificate: files.experienceCertificate?.[0]?.filename,
+          },
+          submittedAt: new Date().toISOString(),
+        },
+        priority: 'high',
+      });
+      console.log(`📧 Admin notification created for category verification: ${category}`);
+    } catch (notificationError) {
+      console.error('⚠️ Failed to create admin notification:', notificationError);
+    }
+
+    // Emit Socket.IO event
+    if (io) {
+      io.to('admin').emit('category:verification:submitted', {
+        workerId: String(workerId),
+        workerName: worker.name,
+        category,
+        documents: {
+          drivingLicense: files.drivingLicense?.[0]?.filename,
+          citizenship: files.citizenship?.[0]?.filename,
+          serviceCertificate: files.serviceCertificate?.[0]?.filename,
+          experienceCertificate: files.experienceCertificate?.[0]?.filename,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      
+      io.emit('document:verification:submitted', {
+        workerId: String(workerId),
+        category,
+        documents: updatedDocuments,
+      });
+      
+      console.log(`📢 Service verification submitted event emitted for ${category}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Service documents uploaded successfully for ${category}`,
+      category,
+      documents: {
+        drivingLicense: files.drivingLicense?.[0]?.filename,
+        citizenship: files.citizenship?.[0]?.filename,
+        serviceCertificate: files.serviceCertificate?.[0]?.filename,
+        experienceCertificate: files.experienceCertificate?.[0]?.filename,
+      },
+    });
+  } catch (error) {
+    console.error('Service document upload error:', error);
+    res.status(500).json({ message: 'Failed to upload service documents' });
+  }
+});
+
+// Category-specific document upload route (legacy - kept for backward compatibility)
 // Handles skill proof and experience documents for service category verification
 app.post('/api/workers/upload-category-documents', upload.fields([
   { name: 'skillProof', maxCount: 1 },

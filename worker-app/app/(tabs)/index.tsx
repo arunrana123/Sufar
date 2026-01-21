@@ -440,7 +440,7 @@ export default function HomeScreen() {
               { 
                 text: 'Verify Now', 
                 onPress: () => {
-                  router.push('/(tabs)/profile');
+                  router.push('/document-verification');
                 }
               },
             ]

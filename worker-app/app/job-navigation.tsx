@@ -18,46 +18,34 @@ import { SocketService } from '@/lib/SocketService';
 import { getApiUrl } from '@/lib/config';
 import ToastNotification from '@/components/ToastNotification';
 
-// Lazy load Mapbox to avoid crashes when native modules aren't built
-let MapboxMap: any, Camera: any, ShapeSource: any, LineLayer: any, SymbolLayer: any;
-let DEFAULT_MAP_STYLE: string;
-let getDirections: any;
-let mapboxAvailable = false;
-let ReactNativeMaps: any = null;
+// ARCHITECTURE: Use react-native-maps for map rendering, Mapbox Directions API for route calculation only
 let RNMapView: any = null;
 let RNMarker: any = null;
 let RNPolyline: any = null;
-let useRNMaps = false;
+let getDirections: any;
+let mapsAvailable = false;
 
-// Try to load Mapbox native modules
+// Load react-native-maps for map rendering
 try {
-  const MapboxComponents = require('@rnmapbox/maps');
-  MapboxMap = MapboxComponents.MapView;
-  Camera = MapboxComponents.Camera;
-  ShapeSource = MapboxComponents.ShapeSource;
-  LineLayer = MapboxComponents.LineLayer;
-  SymbolLayer = MapboxComponents.SymbolLayer;
-  
+  const RNMaps = require('react-native-maps');
+  RNMapView = RNMaps.default || RNMaps;
+  RNMarker = RNMaps.Marker;
+  RNPolyline = RNMaps.Polyline;
+  mapsAvailable = true;
+  console.log(' react-native-maps loaded successfully');
+} catch (mapsError) {
+  console.error(' react-native-maps not available:', mapsError);
+  mapsAvailable = false;
+}
+
+// Load Mapbox Directions API (for route calculation only, no native modules needed)
+try {
   const MapboxConfig = require('@/lib/MapboxConfig');
-  DEFAULT_MAP_STYLE = MapboxConfig.DEFAULT_MAP_STYLE;
   getDirections = MapboxConfig.getDirections;
-  mapboxAvailable = true;
-  console.log('✅ Mapbox native modules loaded successfully');
+  console.log(' Mapbox Directions API loaded (for route calculation only)');
 } catch (error) {
-  console.log('⚠️ Mapbox native modules not available, trying react-native-maps fallback...');
-  
-  // Try react-native-maps as fallback
-  try {
-    const RNMaps = require('react-native-maps');
-    RNMapView = RNMaps.default || RNMaps;
-    RNMarker = RNMaps.Marker;
-    RNPolyline = RNMaps.Polyline;
-    useRNMaps = true;
-    console.log('✅ Using react-native-maps as fallback');
-  } catch (mapsError) {
-    console.log('⚠️ react-native-maps also not available:', mapsError);
-    useRNMaps = false;
-  }
+  console.error(' Mapbox Directions API not available:', error);
+  getDirections = null;
 }
 
 const { width, height } = Dimensions.get('window');
@@ -121,12 +109,7 @@ export default function JobNavigationScreen() {
   };
 
   useEffect(() => {
-    // Initialize Mapbox if available
-    if (mapboxAvailable) {
-      const { initializeMapbox } = require('@/lib/MapboxConfig');
-      initializeMapbox();
-    }
-    
+    // Maps are loaded at module level - no initialization needed
     fetchBookingDetails();
     startLocationTracking();
     
@@ -136,7 +119,7 @@ export default function JobNavigationScreen() {
     // Listen for booking updates
     socketService.on('booking:updated', (updatedBooking: any) => {
       if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
-        console.log('📝 Booking updated in job-navigation:', updatedBooking);
+        console.log(' Booking updated in job-navigation:', updatedBooking);
         setBooking(updatedBooking);
         
         // Update nav status based on booking status
@@ -241,7 +224,7 @@ export default function JobNavigationScreen() {
         (location) => {
           // ARCHITECTURE RULE: Ignore GPS if accuracy > 40 meters or stale
           if (location.coords.accuracy && location.coords.accuracy > 40) {
-            console.warn('⚠️ Ignoring low-quality GPS:', location.coords.accuracy, 'meters (threshold: 40m)');
+            console.warn(' Ignoring low-quality GPS:', location.coords.accuracy, 'meters (threshold: 40m)');
             return; // Skip this update
           }
           
@@ -249,7 +232,7 @@ export default function JobNavigationScreen() {
           const now = Date.now();
           const locationAge = now - location.timestamp;
           if (locationAge > 5000) {
-            console.warn('⚠️ Ignoring stale GPS reading:', locationAge, 'ms old');
+            console.warn(' Ignoring stale GPS reading:', locationAge, 'ms old');
             return;
           }
           
@@ -302,7 +285,7 @@ export default function JobNavigationScreen() {
               
               // Only recalculate if deviated > 120m from route
               if (minDistanceToRoute > 0.12) { // 120 meters
-                console.log('🔄 Worker deviated >120m from route, recalculating...');
+                console.log(' Worker deviated >120m from route, recalculating...');
                 recalculateRoute(newLoc, userLocation);
               }
             }
@@ -354,7 +337,7 @@ export default function JobNavigationScreen() {
   };
 
   const fetchRoute = async (origin: any, destination: any) => {
-    if (!mapboxAvailable || !getDirections) {
+    if (!getDirections) {
       console.log('⚠️ Mapbox not available, skipping route fetch');
       setRouteError('Mapbox is not available. Please ensure Mapbox is properly configured.');
       return null;
@@ -362,7 +345,7 @@ export default function JobNavigationScreen() {
 
     try {
       setRouteError(null);
-      console.log('🔄 Fetching route from Mapbox...');
+      console.log(' Fetching route from Mapbox...');
       const route = await getDirections(
         [origin.longitude, origin.latitude],
         [destination.longitude, destination.latitude],
@@ -418,10 +401,10 @@ export default function JobNavigationScreen() {
         distanceRemaining: routeDistanceKm,
       });
       
-      console.log('✅ Route fetched successfully:', route.distance, 'meters', route.duration, 'seconds');
+      console.log(' Route fetched successfully:', route.distance, 'meters', route.duration, 'seconds');
       return route; // Return route data for caller
     } catch (error: any) {
-      console.error('❌ Error fetching route:', error);
+      console.error(' Error fetching route:', error);
       const errorMessage = error.message || 'Failed to fetch route. Please check your internet connection and Mapbox configuration.';
       setRouteError(errorMessage);
       
@@ -499,7 +482,7 @@ export default function JobNavigationScreen() {
 
   // ARCHITECTURE: Route recalculation ONLY when deviation > 120m (called from GPS callback)
   const recalculateRoute = async (currentLocation: any, destination: any) => {
-    if (!mapboxAvailable || !getDirections || navStatus !== 'navigating') {
+    if (!getDirections || navStatus !== 'navigating') {
       return;
     }
     
@@ -510,7 +493,7 @@ export default function JobNavigationScreen() {
     (mapRef.current as any)._recalculating = true;
     
     try {
-      console.log('🔄 Recalculating route due to position change...');
+      console.log(' Recalculating route due to position change...');
       
       const newRoute = await getDirections(
         [currentLocation.longitude, currentLocation.latitude],
@@ -544,11 +527,11 @@ export default function JobNavigationScreen() {
           distanceRemaining: routeDistanceRemaining,
         });
         
-        console.log('✅ Route recalculated and updated to user app');
+        console.log(' Route recalculated and updated to user app');
         previousLocationRef.current = currentLocation;
       }
     } catch (error) {
-      console.error('❌ Error recalculating route:', error);
+      console.error(' Error recalculating route:', error);
     } finally {
       (mapRef.current as any)._recalculating = false;
     }
@@ -607,7 +590,7 @@ export default function JobNavigationScreen() {
           if (response.ok) {
             const updatedBooking = await response.json();
             setBooking(updatedBooking);
-            console.log('✅ Booking status updated to accepted');
+            console.log(' Booking status updated to accepted');
           }
         } catch (error) {
           console.error('Error updating booking status:', error);
@@ -664,7 +647,7 @@ export default function JobNavigationScreen() {
       if (response.ok) {
         const updatedBooking = await response.json();
         setBooking(updatedBooking);
-        console.log('✅ Booking updated after arrival');
+        console.log(' Booking updated after arrival');
       }
     } catch (error) {
       console.error('Error updating booking status:', error);
@@ -699,7 +682,7 @@ export default function JobNavigationScreen() {
       if (response.ok) {
         const updatedBooking = await response.json();
         setBooking(updatedBooking);
-        console.log('✅ Booking updated after navigation ended');
+        console.log(' Booking updated after navigation ended');
       }
     } catch (error) {
       console.error('Error updating booking status:', error);
@@ -726,7 +709,7 @@ export default function JobNavigationScreen() {
       startTime: startTimeISO,
       timestamp: startTimeISO,
     });
-    console.log('✅ Work started event emitted to user');
+    console.log(' Work started event emitted to user');
 
     // Update booking status to in_progress
     try {
@@ -743,7 +726,7 @@ export default function JobNavigationScreen() {
       if (response.ok) {
         const updatedBooking = await response.json();
         setBooking((prev: any) => prev ? { ...prev, ...updatedBooking, status: 'in_progress' } : updatedBooking);
-        console.log('✅ Booking status updated to in_progress');
+        console.log(' Booking status updated to in_progress');
       }
     } catch (error) {
       console.error('Error updating booking status:', error);
@@ -764,11 +747,11 @@ export default function JobNavigationScreen() {
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: '💵 Cash',
+          text: ' Cash',
           onPress: () => handleCashPayment(),
         },
         {
-          text: '💳 Online',
+          text: ' Online',
           onPress: () => handleOnlinePayment(),
         },
       ]
@@ -832,7 +815,7 @@ export default function JobNavigationScreen() {
       // Show success notification
       showToast(
         `Job completed! Please confirm payment when customer pays.`,
-        '✅ Job Completed!',
+        ' Job Completed!',
         'success'
       );
       
@@ -976,9 +959,7 @@ export default function JobNavigationScreen() {
       try {
         (mapRef.current as any)._lastCameraUpdate = now;
         
-        if (mapboxAvailable && mapRef.current.getCamera) {
-          // Mapbox Camera component handles this via props (see Camera component below)
-        } else if (useRNMaps && mapRef.current.animateToCoordinate) {
+        if (mapsAvailable && mapRef.current.animateToCoordinate) {
           // ARCHITECTURE: Use flyTo/easeTo with duration ≥ 1000ms
           mapRef.current.animateToCoordinate(
             {
@@ -998,19 +979,7 @@ export default function JobNavigationScreen() {
   useEffect(() => {
     if (mapRef.current && workerLocation && userLocation && Platform.OS !== 'web' && navStatus !== 'navigating') {
       try {
-        if (mapboxAvailable && mapRef.current.fitToCoordinates) {
-          // Mapbox fitToCoordinates
-          mapRef.current.fitToCoordinates(
-            [
-              { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
-              { latitude: userLocation.latitude, longitude: userLocation.longitude },
-            ],
-            {
-              edgePadding: { top: 80, right: 40, bottom: 320, left: 40 },
-              animated: true,
-            }
-          );
-        } else if (useRNMaps && mapRef.current.fitToCoordinates) {
+        if (mapsAvailable && mapRef.current.fitToCoordinates) {
           // react-native-maps fitToCoordinates
           mapRef.current.fitToCoordinates(
             [
@@ -1029,6 +998,8 @@ export default function JobNavigationScreen() {
     }
   }, [workerLocation, userLocation, navStatus]);
 
+  // No need for Mapbox features - using react-native-maps markers directly
+
   // Early return check - must be after all hooks
   if (!booking || !workerLocation || !userLocation) {
     return (
@@ -1038,105 +1009,14 @@ export default function JobNavigationScreen() {
     );
   }
 
-  // ARCHITECTURE: Memoize Mapbox features - prevent unnecessary ShapeSource recreations
-  const workerFeature = useMemo(() => pointFeatureCollection(workerLocation), [workerLocation.latitude, workerLocation.longitude]);
-  const userFeature = useMemo(() => pointFeatureCollection(userLocation), [userLocation.latitude, userLocation.longitude]);
-
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
-        {/* Map */}
-        {mapboxAvailable ? (
-          <MapboxMap styleURL={DEFAULT_MAP_STYLE} style={styles.map} ref={mapRef}>
-            {navStatus === 'navigating' ? (
-              // During navigation: Camera follows worker smoothly (like Google Maps)
-              <Camera
-                centerCoordinate={[workerLocation.longitude, workerLocation.latitude]}
-                zoomLevel={15}
-                pitch={45}
-                heading={0}
-                animationDuration={1000}
-                animationMode="flyTo"
-              />
-            ) : cameraBounds ? (
-              // When idle: Show both locations with bounds
-              <Camera
-                bounds={{
-                  ne: cameraBounds.ne,
-                  sw: cameraBounds.sw,
-                  paddingTop: 80,
-                  paddingBottom: 320,
-                  paddingLeft: 40,
-                  paddingRight: 40,
-                }}
-                animationDuration={800}
-              />
-            ) : (
-              // Default: Center on worker
-              <Camera
-                zoomLevel={13}
-                centerCoordinate={[workerLocation.longitude, workerLocation.latitude]}
-              />
-            )}
-
-            {/* ARCHITECTURE FIX: Components ALWAYS mounted - NO conditional rendering */}
-            {/* Route - Always mounted, shape updates via props (memoized geometry) */}
-            <ShapeSource 
-              id="routeSource" 
-              shape={routeData?.geometry || { type: 'FeatureCollection', features: [] }} 
-              key="route-source"
-            >
-              <LineLayer
-                id="routeLayer"
-                style={{
-                  lineColor: navStatus === 'navigating' ? '#2563EB' : '#9CA3AF',
-                  lineWidth: navStatus === 'navigating' ? 8 : 6,
-                  lineCap: 'round',
-                  lineJoin: 'round',
-                  lineOpacity: routeData?.geometry ? (navStatus === 'navigating' ? 0.9 : 0.7) : 0,
-                }}
-              />
-            </ShapeSource>
-
-            {/* Worker marker - Always mounted, shape updates via props */}
-            <ShapeSource 
-              id="workerSource" 
-              shape={workerFeature}
-              key="worker-source"
-            >
-              <SymbolLayer
-                id="workerLayer"
-                style={{
-                  iconImage: 'marker-15',
-                  iconColor: navStatus === 'navigating' ? '#2563EB' : '#6B7280',
-                  iconSize: navStatus === 'navigating' ? 2 : 1.5,
-                  iconAllowOverlap: true,
-                  iconIgnorePlacement: true,
-                }}
-              />
-            </ShapeSource>
-
-            {/* Customer marker - Always mounted, shape updates via props */}
-            <ShapeSource 
-              id="customerSource" 
-              shape={userFeature} 
-              key="customer-source"
-            >
-              <SymbolLayer
-                id="customerLayer"
-                style={{
-                  iconImage: 'marker-15',
-                  iconColor: '#DC2626',
-                  iconSize: 1.5,
-                }}
-              />
-            </ShapeSource>
-          </MapboxMap>
-        ) : useRNMaps && RNMapView && mapRegion ? (
+        {/* Map - Using react-native-maps only, Mapbox Directions API for routes */}
+        {mapsAvailable && RNMapView ? (
           <RNMapView
             ref={mapRef}
             style={styles.map}
-            // Remove region prop to prevent blinking - use animateToCoordinate instead
             onRegionChangeComplete={(region: any) => {
               // Prevent unnecessary updates
               if (navStatus !== 'navigating') {
@@ -1147,9 +1027,14 @@ export default function JobNavigationScreen() {
             showsMyLocationButton={false}
             provider={Platform.OS === 'android' ? 'google' : undefined}
             mapType="standard"
-            followsUserLocation={navStatus === 'navigating'}
+            followsUserLocation={false}
+            initialRegion={mapRegion || {
+              latitude: workerLocation?.latitude || 27.7172,
+              longitude: workerLocation?.longitude || 85.3240,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
           >
-            {/* ARCHITECTURE FIX: Components ALWAYS mounted - NO conditional rendering */}
             {/* Worker marker - Always mounted, coordinate updates via props */}
             <RNMarker
               key="worker-marker"
@@ -1193,7 +1078,7 @@ export default function JobNavigationScreen() {
               </View>
             </RNMarker>
 
-            {/* Route Line - Always mounted, coordinates update via props (memoized) */}
+            {/* Route Line - Display route from Mapbox Directions API on react-native-maps Polyline */}
             <RNPolyline
               key="route-polyline"
               identifier="route-polyline"
@@ -1417,19 +1302,7 @@ export default function JobNavigationScreen() {
   );
 }
 
-const pointFeatureCollection = (coords: { latitude: number; longitude: number }) => ({
-  type: 'FeatureCollection',
-  features: [
-    {
-      type: 'Feature',
-      properties: {},
-      geometry: {
-        type: 'Point',
-        coordinates: [coords.longitude, coords.latitude],
-      },
-    },
-  ],
-});
+// Removed pointFeatureCollection - no longer needed (using react-native-maps markers directly)
 
 const styles = StyleSheet.create({
   container: {

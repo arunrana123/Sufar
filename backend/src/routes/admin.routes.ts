@@ -237,6 +237,109 @@ router.delete('/workers', async (req, res) => {
   }
 });
 
+// Verify a service category (accept or reject with reason)
+router.post('/verify-category', async (req, res) => {
+  try {
+    const { workerId, category, status, rejectionReason } = req.body;
+
+    if (!workerId || !category || !status) {
+      return res.status(400).json({ message: 'Missing required fields: workerId, category, status' });
+    }
+
+    if (status !== 'verified' && status !== 'rejected') {
+      return res.status(400).json({ message: 'Status must be "verified" or "rejected"' });
+    }
+
+    if (status === 'rejected' && !rejectionReason) {
+      return res.status(400).json({ message: 'Rejection reason is required when rejecting' });
+    }
+
+    const worker = await WorkerUser.findById(workerId);
+    if (!worker) {
+      return res.status(404).json({ message: 'Worker not found' });
+    }
+
+    // Update category verification status
+    const existingCategoryStatus = worker.categoryVerificationStatus || {};
+    const updatedCategoryStatus = {
+      ...existingCategoryStatus,
+      [category]: status,
+    };
+
+    // Update worker
+    const updatedWorker = await WorkerUser.findByIdAndUpdate(
+      workerId,
+      {
+        categoryVerificationStatus: updatedCategoryStatus,
+        ...(status === 'rejected' && {
+          verificationNotes: rejectionReason,
+        }),
+      },
+      { new: true }
+    );
+
+    if (!updatedWorker) {
+      return res.status(404).json({ message: 'Worker not found' });
+    }
+
+    // Log admin activity
+    await AdminActivity.create({
+      adminId: new mongoose.Types.ObjectId(),
+      action: `Category verification: ${category} ${status}`,
+      description: `${category} service ${status} for worker ${worker.name}${status === 'rejected' ? `: ${rejectionReason}` : ''}`,
+      targetId: workerId,
+      targetType: 'worker',
+      metadata: {
+        category,
+        status,
+        rejectionReason: status === 'rejected' ? rejectionReason : undefined,
+        workerName: worker.name,
+      },
+    });
+
+    // Send notification to worker
+    const notificationMessage = status === 'verified'
+      ? `Your ${category} service has been verified! You can now receive requests for this service.`
+      : `Your ${category} verification was rejected. ${rejectionReason || 'Please resubmit valid documents.'}`;
+
+    await Notification.create({
+      userId: workerId,
+      type: 'category_verification_updated',
+      title: status === 'verified' ? 'Service Verified' : 'Service Rejected',
+      message: notificationMessage,
+      data: {
+        category,
+        status,
+        rejectionReason: status === 'rejected' ? rejectionReason : undefined,
+      },
+      priority: 'high',
+    });
+
+    // Emit Socket.IO event
+    const io = getIO(req);
+    if (io) {
+      io.emit('category:verification:updated', {
+        workerId: String(workerId),
+        category,
+        status,
+        rejectionReason: status === 'rejected' ? rejectionReason : undefined,
+        timestamp: new Date().toISOString(),
+      });
+      console.log(`📢 Category verification updated event emitted: ${category} ${status}`);
+    }
+
+    res.json({
+      success: true,
+      message: `Category ${category} ${status} successfully`,
+      category,
+      status,
+    });
+  } catch (error) {
+    console.error('Error verifying category:', error);
+    res.status(500).json({ message: 'Failed to verify category' });
+  }
+});
+
 // Verify a specific document
 router.post('/verify-document', async (req, res) => {
   try {

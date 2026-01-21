@@ -139,7 +139,7 @@ export default function LiveTrackingScreen() {
 
       if (response.ok) {
         const data = await response.json();
-        console.log('✅ Fetched booking details:', {
+        console.log(' Fetched booking details:', {
           id: data._id,
           status: data.status,
           hasWorker: !!data.worker,
@@ -155,7 +155,7 @@ export default function LiveTrackingScreen() {
           if (data.workStartTime) {
             const startTime = new Date(data.workStartTime);
             setWorkStartTime(startTime);
-            console.log('⏰ Work start time loaded from booking:', startTime.toISOString());
+            console.log(' Work start time loaded from booking:', startTime.toISOString());
           }
         } else if (data.status === 'completed') {
           setWorkStatus('completed');
@@ -165,11 +165,11 @@ export default function LiveTrackingScreen() {
         if (data.workerId && (!data.worker || !data.worker.name || !data.worker.phone || !data.worker.profileImage)) {
           try {
             const workerId = typeof data.workerId === 'string' ? data.workerId : data.workerId._id || data.workerId;
-            console.log('🔍 Fetching worker details for ID:', workerId);
+            console.log(' Fetching worker details for ID:', workerId);
             const workerResponse = await fetch(`${apiUrl}/api/workers/${workerId}`);
             if (workerResponse.ok) {
               const workerDetails = await workerResponse.json();
-              console.log('✅ Fetched worker details:', {
+              console.log(' Fetched worker details:', {
                 name: workerDetails.name,
                 phone: workerDetails.phone,
                 profileImage: workerDetails.profileImage,
@@ -194,14 +194,14 @@ export default function LiveTrackingScreen() {
                 }
               });
             } else {
-              console.warn('⚠️ Failed to fetch worker details:', workerResponse.status);
+              console.warn(' Failed to fetch worker details:', workerResponse.status);
             }
           } catch (err) {
-            console.error('❌ Error fetching worker details:', err);
+            console.error(' Error fetching worker details:', err);
           }
         } else if (data.worker) {
           // Worker data already exists in response, use it
-          console.log('✅ Worker data already in booking response:', data.worker);
+          console.log(' Worker data already in booking response:', data.worker);
         }
 
         // ARCHITECTURE: User app does NOT fetch routes - route comes via socket events
@@ -239,21 +239,21 @@ export default function LiveTrackingScreen() {
       } else {
         const errorText = await response.text();
         const errorMessage = `Failed to fetch booking details: ${response.status} - ${errorText}`;
-        console.error('❌', errorMessage);
+        console.error('', errorMessage);
         setError(errorMessage);
       }
     } catch (error: any) {
       if (error.name === 'AbortError') {
         const errorMessage = 'Request timeout. Please check your network connection.';
-        console.error('⏱️', errorMessage);
+        console.error('', errorMessage);
         setError(errorMessage);
       } else if (error.message === 'Network request failed' || error.message?.includes('NetworkError')) {
         const errorMessage = 'Network error. Please check your internet connection and ensure the backend server is running.';
-        console.error('🌐 Network error:', error);
+        console.error(' Network error:', error);
         setError(errorMessage);
       } else {
         const errorMessage = `Error fetching booking details: ${error.message || error}`;
-        console.error('❌', errorMessage);
+        console.error('', errorMessage);
         setError(errorMessage);
       }
     } finally {
@@ -281,7 +281,7 @@ export default function LiveTrackingScreen() {
     // Listen for booking accepted
     const handleBookingAccepted = (data: any) => {
       if (data.bookingId === bookingId || data.booking?._id === bookingId || data.booking?.id === bookingId) {
-        console.log('✅ Booking accepted:', data);
+        console.log(' Booking accepted:', data);
         setNavStatus('accepted');
         // Update booking state immediately
         if (booking) {
@@ -314,7 +314,7 @@ export default function LiveTrackingScreen() {
     // Listen for enhanced route updates with live tracking data
     const handleRouteUpdated = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('🗺️ Enhanced route updated:', {
+        console.log(' Enhanced route updated:', {
           distance: data.distance,
           duration: data.duration,
           distanceTraveled: data.distanceTraveled,
@@ -434,7 +434,7 @@ export default function LiveTrackingScreen() {
     // Listen for enhanced navigation started with initial route data
     const handleNavigationStarted = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('🚗 Enhanced navigation started:', {
+        console.log(' Enhanced navigation started:', {
           distance: data.distance,
           duration: data.duration,
           hasRoute: !!data.route
@@ -524,7 +524,7 @@ export default function LiveTrackingScreen() {
 
     const handleWorkCompleted = (data: any) => {
       if (data.bookingId === bookingId) {
-        console.log('✅ Work completed:', data);
+        console.log(' Work completed:', data);
         setWorkStatus('completed');
         // Update booking status in UI
         if (booking) {
@@ -543,7 +543,7 @@ export default function LiveTrackingScreen() {
         if (paymentMethod === 'cash') {
           // Cash payment - confirm and go to review
           Alert.alert(
-            '✅ Service Completed!',
+            ' Service Completed!',
             `${workerName} has completed your ${serviceName}!\n\n💵 Total Amount: Rs. ${totalAmount}\n\nPlease pay cash to the worker.`,
             [
               {
@@ -566,7 +566,7 @@ export default function LiveTrackingScreen() {
         } else if (paymentMethod === 'online') {
           // Online payment - show payment options
           Alert.alert(
-            '✅ Service Completed!',
+            ' Service Completed!',
             `${workerName} has completed your ${serviceName}!\n\n💳 Total Amount: Rs. ${totalAmount}\n\nPlease complete online payment.`,
             [
               {
@@ -641,7 +641,7 @@ export default function LiveTrackingScreen() {
     // Listen for booking status updates (from backend status endpoint)
     const handleBookingUpdated = (updatedBooking: any) => {
       if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
-        console.log('📝 Booking updated event received in live-tracking:', updatedBooking);
+        console.log(' Booking updated event received in live-tracking:', updatedBooking);
         
         // Update booking state immediately
         setBooking(prev => prev ? { 
@@ -1045,8 +1045,8 @@ export default function LiveTrackingScreen() {
               </View>
             </MarkerComponent>
 
-            {/* Route Line - Always mounted, coordinates update via props (memoized) */}
-            {Platform.OS === 'android' && PolylineComponent && (
+            {/* Route Line - Display route received from backend (via socket) on react-native-maps Polyline */}
+            {PolylineComponent && (
               <PolylineComponent
                 key="route-polyline"
                 identifier="route-polyline"
@@ -1062,7 +1062,7 @@ export default function LiveTrackingScreen() {
             )}
             
             {/* Loading indicator - Only show when no route data */}
-            {Platform.OS === 'android' && !routeData && (
+            {!routeData && (
               <View style={styles.routeLoadingContainer}>
                 <ActivityIndicator size="small" color="#2563EB" />
                 <Text style={styles.routeLoadingText}>Calculating route...</Text>
