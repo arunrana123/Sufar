@@ -1,6 +1,6 @@
 // MY BOOKINGS SCREEN - Displays user's service bookings with status, map preview, and tracking
 // Features: Real-time updates via Socket.IO, pull-to-refresh, mini-map preview, live tracking navigation
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -239,11 +239,20 @@ export default function MyBookingsScreen() {
       socketService.on('work:completed', (data: any) => {
         console.log('✅ Work completed event received in my-bookings:', data);
         if (data.bookingId) {
-          // Update the booking status to completed
+          // Update the booking status to completed with all payment fields
           setBookings(prev => 
             prev.map(b => 
               b._id === data.bookingId 
-                ? { ...b, status: 'completed', paymentStatus: data.paymentStatus || b.paymentStatus }
+                ? { 
+                    ...b, 
+                    status: 'completed', 
+                    paymentStatus: data.paymentStatus || b.paymentStatus,
+                    userConfirmedPayment: data.userConfirmedPayment !== undefined ? data.userConfirmedPayment : b.userConfirmedPayment,
+                    workerConfirmedPayment: data.workerConfirmedPayment !== undefined ? data.workerConfirmedPayment : b.workerConfirmedPayment,
+                    completedAt: data.completedAt || b.completedAt,
+                    // Update all fields from data if provided
+                    ...(data.booking ? data.booking : {}),
+                  }
                 : b
             )
           );
@@ -417,6 +426,41 @@ export default function MyBookingsScreen() {
       return 'Finding Worker...';
     }
     return getStatusText(booking.status);
+  };
+
+  // Get status icon component for optimized card display
+  const getStatusIcon = (booking: Booking) => {
+    if (booking.status === 'completed') {
+      if (booking.paymentStatus === 'paid') {
+        // Double checkmark for completed & paid
+        return <Ionicons name="checkmark-done-circle" size={18} color={theme.success} />;
+      } else if (booking.userConfirmedPayment && booking.workerConfirmedPayment) {
+        // Single checkmark for payment confirmed
+        return <Ionicons name="checkmark-circle" size={18} color={theme.info} />;
+      } else if (booking.userConfirmedPayment || booking.workerConfirmedPayment) {
+        // Hourglass for awaiting confirmation
+        return <Ionicons name="hourglass-outline" size={18} color={theme.warning} />;
+      } else {
+        // Cash icon with cross for payment pending
+        return (
+          <View style={styles.statusIconContainer}>
+            <Ionicons name="cash-outline" size={18} color={theme.warning} />
+            <View style={styles.crossOverlay}>
+              <Ionicons name="close" size={10} color={theme.danger} />
+            </View>
+          </View>
+        );
+      }
+    } else if (booking.status === 'in_progress') {
+      return <Ionicons name="hammer-outline" size={18} color={theme.primary} />;
+    } else if (booking.status === 'accepted') {
+      return <Ionicons name="navigate-outline" size={18} color={theme.info} />;
+    } else if (booking.status === 'pending') {
+      return <Ionicons name="time-outline" size={18} color={theme.warning} />;
+    } else if (booking.status === 'cancelled' || booking.status === 'rejected') {
+      return <Ionicons name="close-circle-outline" size={18} color={theme.danger} />;
+    }
+    return <Ionicons name="ellipse-outline" size={18} color={theme.secondary} />;
   };
 
   // Group bookings by date for daily reminders
@@ -669,37 +713,56 @@ export default function MyBookingsScreen() {
     });
   };
 
-  // Filter bookings based on active filter
-  const filteredBookings = bookings.filter((booking) => {
-    switch (activeFilter) {
-      case 'completed':
-        return booking.status === 'completed';
-      case 'payment_pending':
-        return booking.status === 'completed' && booking.paymentStatus !== 'paid';
-      case 'payment_confirmed':
-        return booking.status === 'completed' && 
-               (booking.userConfirmedPayment || booking.workerConfirmedPayment) && 
-               booking.paymentStatus !== 'paid';
-      case 'payment_paid':
-        return booking.paymentStatus === 'paid';
-      case 'all':
-      default:
-        return true;
-    }
-  });
+  // Filter bookings based on active filter - memoized for performance
+  const filteredBookings = useMemo(() => {
+    if (!bookings || bookings.length === 0) return [];
+    
+    const filtered = bookings.filter((booking) => {
+      switch (activeFilter) {
+        case 'completed':
+          return booking.status === 'completed';
+        case 'payment_pending':
+          return booking.status === 'completed' && booking.paymentStatus !== 'paid';
+        case 'payment_confirmed':
+          return booking.status === 'completed' && 
+                 (booking.userConfirmedPayment || booking.workerConfirmedPayment) && 
+                 booking.paymentStatus !== 'paid';
+        case 'payment_paid':
+          return booking.paymentStatus === 'paid';
+        case 'all':
+        default:
+          return true;
+      }
+    });
+    
+    console.log(`🔍 Filter "${activeFilter}" applied: ${filtered.length} of ${bookings.length} bookings`);
+    return filtered;
+  }, [bookings, activeFilter]);
 
-  // Get counts for each filter
-  const filterCounts = {
-    all: bookings.length,
-    completed: bookings.filter(b => b.status === 'completed').length,
-    payment_pending: bookings.filter(b => b.status === 'completed' && b.paymentStatus !== 'paid').length,
-    payment_confirmed: bookings.filter(b => 
-      b.status === 'completed' && 
-      (b.userConfirmedPayment || b.workerConfirmedPayment) && 
-      b.paymentStatus !== 'paid'
-    ).length,
-    payment_paid: bookings.filter(b => b.paymentStatus === 'paid').length,
-  };
+  // Get counts for each filter - memoized for performance
+  const filterCounts = useMemo(() => {
+    if (!bookings || bookings.length === 0) {
+      return {
+        all: 0,
+        completed: 0,
+        payment_pending: 0,
+        payment_confirmed: 0,
+        payment_paid: 0,
+      };
+    }
+    
+    return {
+      all: bookings.length,
+      completed: bookings.filter(b => b.status === 'completed').length,
+      payment_pending: bookings.filter(b => b.status === 'completed' && b.paymentStatus !== 'paid').length,
+      payment_confirmed: bookings.filter(b => 
+        b.status === 'completed' && 
+        (b.userConfirmedPayment || b.workerConfirmedPayment) && 
+        b.paymentStatus !== 'paid'
+      ).length,
+      payment_paid: bookings.filter(b => b.paymentStatus === 'paid').length,
+    };
+  }, [bookings]);
 
   if (loading) {
     return (
@@ -950,23 +1013,25 @@ export default function MyBookingsScreen() {
                         .map((booking) => (
                           <View key={booking._id} style={styles.bookingCard}>
                             <View style={styles.bookingHeader}>
-                              <View>
-                                <Text style={styles.bookingTitle}>{booking.serviceName}</Text>
-                                <Text style={styles.bookingLocation}>
+                              <View style={{ flex: 1, marginRight: 8 }}>
+                                <Text style={styles.bookingTitle} numberOfLines={1} ellipsizeMode="tail">
+                                  {booking.serviceName}
+                                </Text>
+                                <Text style={styles.bookingLocation} numberOfLines={1} ellipsizeMode="tail">
                                   <Ionicons name="location-outline" size={12} color="#666" /> {booking.location.address}
                                 </Text>
                               </View>
                               <View style={[styles.statusBadge, { backgroundColor: getStatusColor(booking.status) + '20' }]}>
-                                <Text style={[styles.statusText, { color: getStatusColor(booking.status) }]}>
-                                  {getDetailedStatusText(booking)}
-                                </Text>
+                                {getStatusIcon(booking)}
                               </View>
                             </View>
 
                             {booking.workerId && (
                               <View style={styles.workerInfo}>
                                 <Ionicons name="person-circle-outline" size={20} color="#4A90E2" />
-                                <Text style={styles.workerName}>{getWorkerName(booking.workerId)}</Text>
+                                <Text style={styles.workerName} numberOfLines={1} ellipsizeMode="tail">
+                                  {getWorkerName(booking.workerId)}
+                                </Text>
                                 <View style={styles.ratingContainer}>
                                   <Ionicons name="star" size={12} color="#FFD700" />
                                   <Text style={styles.ratingText}>{getWorkerProperty(booking.workerId, 'rating', 0)}</Text>
@@ -975,13 +1040,13 @@ export default function MyBookingsScreen() {
                             )}
 
                             <View style={styles.bookingDetails}>
-                              <Text style={styles.detailText}>
+                              <Text style={styles.detailText} numberOfLines={1}>
                                 <Ionicons name="cash-outline" size={14} color="#666" /> Rs. {booking.price}
                               </Text>
                               {booking.scheduledDate && (
-                                <Text style={styles.detailText}>
+                                <Text style={styles.detailText} numberOfLines={1} ellipsizeMode="tail">
                                   <Ionicons name="calendar-outline" size={14} color="#666" /> 
-                                  Scheduled: {new Date(booking.scheduledDate).toLocaleDateString()} at {new Date(booking.scheduledDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  {new Date(booking.scheduledDate).toLocaleDateString()} {new Date(booking.scheduledDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </Text>
                               )}
                             </View>
@@ -994,14 +1059,14 @@ export default function MyBookingsScreen() {
                                       style={[styles.payButton, { backgroundColor: theme.success }]}
                                       onPress={() => handleConfirmPayment(booking)}
                                     >
-                                      <Ionicons name="checkmark-circle" size={16} color="#fff" />
-                                      <Text style={styles.payButtonText}>Confirm Payment</Text>
+                                      <Ionicons name="checkmark-circle" size={18} color="#fff" />
+                                      <Text style={styles.payButtonText}>Confirm</Text>
                                     </TouchableOpacity>
                                   )}
                                   {booking.paymentStatus !== 'paid' && booking.userConfirmedPayment && !booking.workerConfirmedPayment && (
                                     <View style={styles.waitingBadge}>
-                                      <Ionicons name="hourglass" size={14} color={theme.warning} />
-                                      <Text style={styles.waitingText}>Waiting for worker confirmation</Text>
+                                      <Ionicons name="hourglass" size={16} color={theme.warning} />
+                                      <Text style={styles.waitingText} numberOfLines={1}>Waiting...</Text>
                                     </View>
                                   )}
                                   {booking.paymentStatus === 'paid' && !booking.review && (
@@ -1009,14 +1074,14 @@ export default function MyBookingsScreen() {
                                       style={styles.reviewButton}
                                       onPress={() => handleReview(booking)}
                                     >
-                                      <Ionicons name="star" size={16} color="#fff" />
-                                      <Text style={styles.reviewButtonText}>Leave Review</Text>
+                                      <Ionicons name="star" size={18} color="#fff" />
+                                      <Text style={styles.reviewButtonText}>Review</Text>
                                     </TouchableOpacity>
                                   )}
                                   {booking.review && (
                                     <View style={styles.reviewedBadge}>
-                                      <Ionicons name="star" size={14} color="#FFD700" />
-                                      <Text style={styles.reviewedText}>Reviewed ({booking.rating}★)</Text>
+                                      <Ionicons name="star" size={16} color="#FFD700" />
+                                      <Text style={styles.reviewedText} numberOfLines={1}>{booking.rating}★</Text>
                                     </View>
                                   )}
                                 </>
@@ -1028,9 +1093,9 @@ export default function MyBookingsScreen() {
                                     handleViewTracking(booking);
                                   }}
                                 >
-                                  <Ionicons name="navigate" size={16} color="#fff" />
-                                  <Text style={styles.trackButtonText}>
-                                    {booking.status === 'pending' ? 'View Request' : 'Track Worker'}
+                                  <Ionicons name="navigate" size={18} color="#fff" />
+                                  <Text style={styles.trackButtonText} numberOfLines={1}>
+                                    {booking.status === 'pending' ? 'View' : 'Track'}
                                   </Text>
                                 </TouchableOpacity>
                               )}
@@ -1382,15 +1447,60 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginBottom: 4,
+    flex: 1,
+    marginRight: 8,
   },
   bookingLocation: {
     fontSize: 12,
     color: '#666',
+    flex: 1,
+    flexWrap: 'wrap',
   },
   statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 40,
+  },
+  statusIconContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  doubleCheckContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 32,
+    height: 20,
+  },
+  secondCheckmark: {
+    position: 'absolute',
+    left: 12,
+    top: 0,
+  },
+  overlayIcon: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+  },
+  crossOverlay: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    width: 14,
+    height: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fff',
   },
   statusText: {
     fontSize: 12,
