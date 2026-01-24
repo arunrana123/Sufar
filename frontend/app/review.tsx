@@ -13,8 +13,25 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { getApiUrl } from '@/lib/config';
+import { useTheme } from '@/contexts/ThemeContext';
+
+// App theme colors - consistent across the app
+const APP_COLORS = {
+  primary: '#4A90E2', // App primary blue
+  primaryDark: '#1E40AF', // Darker blue for text
+  starYellow: '#FFD700', // Yellow for stars only
+  background: '#F8F9FA', // Light gray background
+  white: '#FFFFFF',
+  textPrimary: '#333333',
+  textSecondary: '#666666',
+  textLight: '#999999',
+  border: '#E0E0E0',
+  success: '#10B981', // Green for success
+  cardShadow: '#000000',
+};
 
 export default function ReviewScreen() {
+  const { theme } = useTheme();
   const params = useLocalSearchParams();
   const bookingId = params.bookingId as string;
   const serviceTitle = params.serviceTitle as string || 'Service';
@@ -141,28 +158,28 @@ export default function ReviewScreen() {
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
         {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { backgroundColor: APP_COLORS.primary }]}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#fff" />
+            <Ionicons name="arrow-back" size={24} color={APP_COLORS.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Rate Service</Text>
           <View style={styles.placeholder} />
         </View>
 
-        <View style={styles.content}>
+        <View style={[styles.content, { backgroundColor: APP_COLORS.background }]}>
           {/* Service Info */}
-          <View style={styles.serviceInfo}>
-            <Ionicons name="construct" size={40} color="#FF9800" />
-            <Text style={styles.serviceTitle}>{serviceTitle}</Text>
-            <Text style={styles.workerName}>by {workerName}</Text>
+          <View style={[styles.serviceInfo, { backgroundColor: APP_COLORS.white }]}>
+            <Ionicons name="construct" size={40} color={APP_COLORS.primary} />
+            <Text style={[styles.serviceTitle, { color: APP_COLORS.textPrimary }]}>{serviceTitle}</Text>
+            <Text style={[styles.workerName, { color: APP_COLORS.textSecondary }]}>by {workerName}</Text>
             {amount && (
-              <Text style={styles.amountText}>Amount Paid: Rs. {amount}</Text>
+              <Text style={[styles.amountText, { color: APP_COLORS.success }]}>Amount Paid: Rs. {amount}</Text>
             )}
           </View>
 
           {/* Rating */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>How was your experience?</Text>
+            <Text style={[styles.sectionTitle, { color: APP_COLORS.textPrimary }]}>How was your experience?</Text>
             <View style={styles.starsContainer}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity
@@ -173,13 +190,13 @@ export default function ReviewScreen() {
                   <Ionicons
                     name={star <= rating ? 'star' : 'star-outline'}
                     size={40}
-                    color={star <= rating ? '#FFD700' : '#E0E0E0'}
+                    color={star <= rating ? APP_COLORS.starYellow : APP_COLORS.border}
                   />
                 </TouchableOpacity>
               ))}
             </View>
             {rating > 0 && (
-              <Text style={styles.ratingText}>
+              <Text style={[styles.ratingText, { color: APP_COLORS.primary }]}>
                 {rating === 1 ? 'Poor' :
                  rating === 2 ? 'Fair' :
                  rating === 3 ? 'Good' :
@@ -191,11 +208,15 @@ export default function ReviewScreen() {
 
           {/* Comment */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Share your feedback (optional)</Text>
+            <Text style={[styles.sectionTitle, { color: APP_COLORS.textPrimary }]}>Share your feedback (optional)</Text>
             <TextInput
-              style={styles.commentInput}
+              style={[styles.commentInput, { 
+                backgroundColor: APP_COLORS.white, 
+                borderColor: APP_COLORS.border,
+                color: APP_COLORS.textPrimary 
+              }]}
               placeholder="Tell us about your experience..."
-              placeholderTextColor="#999"
+              placeholderTextColor={APP_COLORS.textLight}
               value={comment}
               onChangeText={setComment}
               multiline
@@ -206,19 +227,23 @@ export default function ReviewScreen() {
 
           {/* Submit Button */}
           <TouchableOpacity
-            style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+            style={[
+              styles.submitButton, 
+              { backgroundColor: APP_COLORS.primary },
+              loading && styles.submitButtonDisabled
+            ]}
             onPress={handleSubmitReview}
             disabled={loading}
           >
             <Text style={styles.submitButtonText}>
               {loading ? 'Submitting...' : 'Submit Review'}
             </Text>
-            <Ionicons name="checkmark-circle" size={20} color="#fff" />
+            <Ionicons name="checkmark-circle" size={20} color={APP_COLORS.white} />
           </TouchableOpacity>
 
           {/* Skip Option */}
           <TouchableOpacity onPress={() => router.back()} style={styles.skipButton}>
-            <Text style={styles.skipText}>Skip for now</Text>
+            <Text style={[styles.skipText, { color: APP_COLORS.textSecondary }]}>Skip for now</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -229,13 +254,12 @@ export default function ReviewScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: APP_COLORS.background,
   },
   safe: {
     flex: 1,
   },
   header: {
-    backgroundColor: '#FF9800',
     paddingHorizontal: 16,
     paddingTop: 60,
     paddingBottom: 20,
@@ -249,7 +273,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#fff',
+    color: APP_COLORS.white,
     flex: 1,
     textAlign: 'center',
   },
@@ -261,12 +285,11 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   serviceInfo: {
-    backgroundColor: '#fff',
     padding: 24,
     borderRadius: 16,
     alignItems: 'center',
     marginBottom: 24,
-    shadowColor: '#000',
+    shadowColor: APP_COLORS.cardShadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
@@ -275,18 +298,15 @@ const styles = StyleSheet.create({
   serviceTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
     marginTop: 12,
     marginBottom: 4,
   },
   workerName: {
     fontSize: 14,
-    color: '#666',
   },
   amountText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#10B981',
     marginTop: 8,
   },
   section: {
@@ -295,7 +315,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
     marginBottom: 16,
     textAlign: 'center',
   },
@@ -311,28 +330,23 @@ const styles = StyleSheet.create({
   ratingText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#FF9800',
     textAlign: 'center',
   },
   commentInput: {
-    backgroundColor: '#fff',
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
-    color: '#333',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
     minHeight: 120,
   },
   submitButton: {
-    backgroundColor: '#FF9800',
     paddingVertical: 16,
     borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    shadowColor: '#000',
+    shadowColor: APP_COLORS.cardShadow,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 4,
@@ -340,11 +354,12 @@ const styles = StyleSheet.create({
   },
   submitButtonDisabled: {
     backgroundColor: '#B0BEC5',
+    opacity: 0.6,
   },
   submitButtonText: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#fff',
+    color: APP_COLORS.white,
   },
   skipButton: {
     paddingVertical: 12,
@@ -353,7 +368,6 @@ const styles = StyleSheet.create({
   },
   skipText: {
     fontSize: 14,
-    color: '#666',
   },
 });
 
