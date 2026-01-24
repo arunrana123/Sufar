@@ -1,5 +1,5 @@
-// DOCUMENT VERIFICATION PAGE - Admin tool to verify worker documents (photos, certificates, citizenship, license)
-// Features: View uploaded documents, approve/reject each document, add verification notes, Socket.IO real-time updates
+// DOCUMENT VERIFICATION PAGE - Admin tool to verify worker documents by service category
+// Features: View uploaded documents by category, approve/reject category verification, PDF/image viewing, Socket.IO real-time updates
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -7,19 +7,9 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { socketService } from '../../lib/socketService';
 
-interface Document {
-  profilePhoto?: string;
-  certificate?: string;
-  citizenship?: string;
-  license?: string;
-}
-
-interface VerificationStatus {
-  profilePhoto?: 'pending' | 'verified' | 'rejected';
-  certificate?: 'pending' | 'verified' | 'rejected';
-  citizenship?: 'pending' | 'verified' | 'rejected';
-  license?: 'pending' | 'verified' | 'rejected';
-  overall?: 'pending' | 'verified' | 'rejected';
+interface CategoryDocuments {
+  skillProof?: string;
+  experience?: string;
 }
 
 interface Worker {
@@ -28,8 +18,26 @@ interface Worker {
   email: string;
   phone: string;
   skills: string[];
-  documents: Document;
-  verificationStatus: VerificationStatus | string;
+  serviceCategories: string[];
+  documents?: {
+    profilePhoto?: string;
+    certificate?: string;
+    citizenship?: string;
+    license?: string;
+  };
+  categoryDocuments?: {
+    [category: string]: CategoryDocuments;
+  };
+  verificationStatus?: {
+    profilePhoto?: 'pending' | 'verified' | 'rejected';
+    certificate?: 'pending' | 'verified' | 'rejected';
+    citizenship?: 'pending' | 'verified' | 'rejected';
+    license?: 'pending' | 'verified' | 'rejected';
+    overall?: 'pending' | 'verified' | 'rejected';
+  } | string;
+  categoryVerificationStatus?: {
+    [category: string]: 'pending' | 'verified' | 'rejected';
+  };
   verificationNotes?: string;
   verificationSubmitted?: boolean;
   submittedAt?: string;
@@ -40,14 +48,27 @@ interface Worker {
   experience?: string;
 }
 
+interface CategoryVerificationData {
+  category: string;
+  documents: {
+    drivingLicense?: string;
+    citizenship?: string;
+    serviceCertificate?: string;
+    experienceCertificate?: string;
+  };
+  status: 'pending' | 'verified' | 'rejected';
+}
+
 export default function DocumentVerificationPage() {
   const router = useRouter();
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
-  const [selectedDocument, setSelectedDocument] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedDocument, setSelectedDocument] = useState<{ url: string; type: string; name: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [admin, setAdmin] = useState<any>(null);
   const [filter, setFilter] = useState<'all' | 'pending' | 'verified' | 'rejected'>('all');
+  const [rejectionReason, setRejectionReason] = useState<string>('');
 
   useEffect(() => {
     const adminData = localStorage.getItem('adminUser');
@@ -71,17 +92,23 @@ export default function DocumentVerificationPage() {
     const adminId = parsedAdmin._id || parsedAdmin.id || 'admin-' + Date.now();
     socketService.connect(adminId, 'admin');
 
-    // Listen for document verification submissions
+    // Listen for category verification submissions
+    const handleCategorySubmitted = (data: any) => {
+      console.log('📢 New category verification submission received:', data);
+      fetchWorkers();
+    };
+
+    // Listen for document verification submissions (legacy)
     const handleDocumentSubmitted = (worker: any) => {
-      console.log('📢 New document submission received in document verification page:', worker);
-      // Immediately refresh workers list to show new submission
+      console.log('📢 New document submission received:', worker);
       fetchWorkers();
     };
 
     // Wait a bit for connection to establish
     const connectTimeout = setTimeout(() => {
+      socketService.on('category:verification:submitted', handleCategorySubmitted);
       socketService.on('document:verification:submitted', handleDocumentSubmitted);
-      console.log('✅ Socket.IO listener registered for document:verification:submitted in document verification page');
+      console.log('✅ Socket.IO listeners registered for document verification');
     }, 1000);
     
     // Auto-refresh every 30 seconds to get new workers (as backup)
@@ -92,6 +119,7 @@ export default function DocumentVerificationPage() {
     return () => {
       clearTimeout(connectTimeout);
       clearInterval(interval);
+      socketService.off('category:verification:submitted', handleCategorySubmitted);
       socketService.off('document:verification:submitted', handleDocumentSubmitted);
     };
   }, [router]);
@@ -109,37 +137,24 @@ export default function DocumentVerificationPage() {
       const data = await response.json();
       
       console.log('📊 Workers fetched from backend:', data.length);
-      console.log('📋 Sample worker data:', data[0] ? {
-        name: data[0].name,
-        verificationSubmitted: data[0].verificationSubmitted,
-        hasDocuments: !!data[0].documents,
-        documentKeys: data[0].documents ? Object.keys(data[0].documents) : [],
-      } : 'No workers');
       
       // Filter workers who have submitted documents for verification
-      // The backend already filters, but we ensure documents exist and are not empty
       const filteredWorkers = data.filter((worker: Worker) => {
-        // Check if worker has submitted verification OR has documents
+        // Check if worker has category documents
+        const hasCategoryDocs = worker.categoryDocuments && 
+          Object.keys(worker.categoryDocuments).length > 0 &&
+          Object.values(worker.categoryDocuments).some(catDocs => 
+            catDocs.skillProof || catDocs.experience
+          );
+        
+        // Check if worker has general documents
+        const hasGeneralDocs = worker.documents && 
+          Object.values(worker.documents).some(doc => doc && doc !== '');
+        
+        // Check if verification was submitted
         const hasSubmitted = worker.verificationSubmitted === true;
         
-        // Check if documents exist and have at least one non-empty value
-        const docKeys = worker.documents ? Object.keys(worker.documents) : [];
-        const hasDocuments = docKeys.some(key => {
-          const value = worker.documents[key as keyof Document];
-          return value && value !== null && value !== '';
-        });
-        
-        if (!hasSubmitted && !hasDocuments) {
-          console.log(`⚠️ Worker ${worker.name} excluded: Submitted=${hasSubmitted}, HasDocs=${hasDocuments}`);
-          return false;
-        }
-        
-        if (!hasDocuments) {
-          console.log(`⚠️ Worker ${worker.name} has no valid documents`);
-          return false;
-        }
-        
-        return true;
+        return hasCategoryDocs || (hasGeneralDocs && hasSubmitted);
       });
       
       console.log(`✅ Filtered workers with documents: ${filteredWorkers.length} out of ${data.length}`);
@@ -153,17 +168,55 @@ export default function DocumentVerificationPage() {
     }
   };
 
+  // Get all categories that need verification for a worker
+  const getCategoriesNeedingVerification = (worker: Worker): CategoryVerificationData[] => {
+    const categories: CategoryVerificationData[] = [];
+    
+    if (!worker.categoryDocuments || !worker.serviceCategories) {
+      return categories;
+    }
+
+    worker.serviceCategories.forEach(category => {
+      const catDocs = worker.categoryDocuments?.[category];
+      const status = worker.categoryVerificationStatus?.[category] || 'pending';
+      
+      // Get documents from categoryDocuments (skillProof, experience)
+      // Also check general documents for citizenship and license
+      const documents = {
+        serviceCertificate: catDocs?.skillProof,
+        experienceCertificate: catDocs?.experience,
+        citizenship: worker.documents?.citizenship,
+        drivingLicense: worker.documents?.license,
+      };
+
+      // Only include if at least one document exists
+      if (documents.serviceCertificate || documents.experienceCertificate || 
+          documents.citizenship || documents.drivingLicense) {
+        categories.push({
+          category,
+          documents,
+          status: status as 'pending' | 'verified' | 'rejected',
+        });
+      }
+    });
+
+    return categories;
+  };
+
+  // Get overall status for a worker (based on categories)
   const getOverallStatus = (worker: Worker): 'pending' | 'verified' | 'rejected' => {
-    if (typeof worker.verificationStatus === 'string') {
-      return worker.verificationStatus as 'pending' | 'verified' | 'rejected';
+    const categories = getCategoriesNeedingVerification(worker);
+    
+    if (categories.length === 0) {
+      // Fallback to old verification status
+      if (typeof worker.verificationStatus === 'string') {
+        return worker.verificationStatus as 'pending' | 'verified' | 'rejected';
+      }
+      const status = worker.verificationStatus as any;
+      return status?.overall || 'pending';
     }
-    const status = worker.verificationStatus as VerificationStatus;
-    if (status.overall) {
-      return status.overall;
-    }
-    // Check individual document statuses
-    const statuses = Object.values(status).filter(s => s !== 'pending' && s !== undefined);
-    if (statuses.length === 0) return 'pending';
+
+    const statuses = categories.map(cat => cat.status);
     if (statuses.every(s => s === 'verified')) return 'verified';
     if (statuses.some(s => s === 'rejected')) return 'rejected';
     return 'pending';
@@ -195,24 +248,30 @@ export default function DocumentVerificationPage() {
     return overallStatus === filter;
   });
 
-  const handleVerifyDocument = async (workerId: string, documentType: string, status: 'verified' | 'rejected') => {
+  const handleVerifyCategory = async (workerId: string, category: string, status: 'verified' | 'rejected') => {
     try {
+      if (status === 'rejected' && !rejectionReason.trim()) {
+        alert('Please provide a reason for rejection');
+        return;
+      }
+
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-      const response = await fetch(`${apiUrl}/api/admin/verify-document`, {
+      const response = await fetch(`${apiUrl}/api/admin/verify-category`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           workerId,
-          documentType,
+          category,
           status,
+          rejectionReason: status === 'rejected' ? rejectionReason : undefined,
         }),
       });
 
       if (response.ok) {
         const result = await response.json();
-        console.log('✅ Document verification successful:', result);
+        console.log('✅ Category verification successful:', result);
         
         // Refresh workers to get updated status
         await fetchWorkers();
@@ -222,62 +281,88 @@ export default function DocumentVerificationPage() {
           const updatedWorker = workers.find(w => w._id === workerId);
           if (updatedWorker) {
             setSelectedWorker(updatedWorker);
+            setSelectedCategory(null);
+            setRejectionReason('');
           }
         }
         
-        // The backend will emit socket events which will trigger stats refresh in workers page
-        // No need to manually refresh stats here as socket listeners handle it
-        
-        alert(`Document ${status === 'verified' ? 'approved' : 'rejected'} successfully! Stats will update automatically.`);
+        alert(`Category ${category} ${status === 'verified' ? 'approved' : 'rejected'} successfully!`);
       } else {
         const errorData = await response.json();
-        alert(errorData.message || 'Failed to verify document');
+        alert(errorData.message || 'Failed to verify category');
       }
     } catch (error) {
-      console.error('Error verifying document:', error);
-      alert('Failed to verify document. Please try again.');
+      console.error('Error verifying category:', error);
+      alert('Failed to verify category. Please try again.');
     }
   };
 
-  const DocumentViewer = ({ documentUrl, documentType }: { documentUrl: string; documentType: string }) => (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 max-w-4xl max-h-[90vh] overflow-auto">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold capitalize">{documentType.replace(/([A-Z])/g, ' $1')}</h3>
-          <button 
-            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-            onClick={() => setSelectedDocument(null)}
-          >
-            Close
-          </button>
-        </div>
-        <div className="relative">
-          <Image
-            src={documentUrl}
-            alt={documentType}
-            width={800}
-            height={600}
-            className="rounded-lg"
-            style={{ objectFit: 'contain' }}
-          />
-        </div>
-        <div className="flex gap-2 mt-4">
-          <button 
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-            onClick={() => window.open(documentUrl, '_blank')}
-          >
-            📥 Download
-          </button>
-          <button 
-            className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-            onClick={() => window.open(documentUrl, '_blank')}
-          >
-            👁 Open in New Tab
-          </button>
+  // Check if a file is a PDF
+  const isPDF = (url: string): boolean => {
+    return url.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf');
+  };
+
+  // Get document URL with proper path
+  const getDocumentUrl = (filename: string | undefined): string | null => {
+    if (!filename) return null;
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+    if (filename.startsWith('http')) return filename;
+    return `${apiUrl}/uploads/${filename}`;
+  };
+
+  const DocumentViewer = ({ documentUrl, documentType, documentName }: { 
+    documentUrl: string; 
+    documentType: string;
+    documentName: string;
+  }) => {
+    const isPdf = isPDF(documentUrl);
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6 max-w-6xl max-h-[95vh] overflow-auto w-full">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold capitalize">
+              {documentType.replace(/([A-Z])/g, ' $1')} - {documentName}
+            </h3>
+            <button 
+              className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+              onClick={() => setSelectedDocument(null)}
+            >
+              Close
+            </button>
+          </div>
+          <div className="relative w-full" style={{ minHeight: '500px' }}>
+            {isPdf ? (
+              <iframe
+                src={documentUrl}
+                className="w-full"
+                style={{ height: '80vh', border: 'none' }}
+                title={documentName}
+              />
+            ) : (
+              <Image
+                src={documentUrl}
+                alt={documentType}
+                width={1200}
+                height={800}
+                className="rounded-lg w-full"
+                style={{ objectFit: 'contain' }}
+                unoptimized
+              />
+            )}
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button 
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+              onClick={() => window.open(documentUrl, '_blank')}
+            >
+              📥 Download / Open in New Tab
+            </button>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   if (!admin) {
     return (
@@ -299,7 +384,9 @@ export default function DocumentVerificationPage() {
     <div className="container mx-auto p-6">
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Document Verification</h1>
-        <p className="text-gray-600 mt-2">Review and verify worker documents ({workers.length} workers submitted)</p>
+        <p className="text-gray-600 mt-2">
+          Review and verify worker documents by service category ({workers.length} workers submitted)
+        </p>
       </div>
 
       <div className="w-full">
@@ -336,6 +423,8 @@ export default function DocumentVerificationPage() {
           ) : (
             filteredWorkers.map((worker) => {
               const overallStatus = getOverallStatus(worker);
+              const categories = getCategoriesNeedingVerification(worker);
+              
               return (
                 <div key={worker._id} className="bg-white rounded-lg shadow-sm border p-6 cursor-pointer hover:shadow-md transition-shadow">
                   <div onClick={() => setSelectedWorker(worker)}>
@@ -354,6 +443,7 @@ export default function DocumentVerificationPage() {
                           <h3 className="text-lg font-semibold">{worker.name}</h3>
                           <p className="text-sm text-gray-600">{worker.email}</p>
                           <p className="text-xs text-gray-500">
+                            Categories: {categories.length} | 
                             Submitted: {worker.submittedAt ? new Date(worker.submittedAt).toLocaleDateString() : 
                                        worker.createdAt ? new Date(worker.createdAt).toLocaleDateString() : 'N/A'}
                           </p>
@@ -378,21 +468,25 @@ export default function DocumentVerificationPage() {
 
       {/* Worker Detail Modal */}
       {selectedWorker && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40">
-          <div className="bg-white rounded-lg p-6 max-w-4xl max-h-[90vh] overflow-auto">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40 overflow-y-auto">
+          <div className="bg-white rounded-lg p-6 max-w-6xl max-h-[95vh] overflow-auto w-full my-8">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-bold">Worker Verification Details</h2>
               <button 
                 className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
-                onClick={() => setSelectedWorker(null)}
+                onClick={() => {
+                  setSelectedWorker(null);
+                  setSelectedCategory(null);
+                  setRejectionReason('');
+                }}
               >
                 Close
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
               {/* Worker Info */}
-              <div className="bg-white rounded-lg border p-6">
+              <div className="bg-gray-50 rounded-lg border p-6">
                 <div className="mb-4">
                   <h3 className="text-lg font-semibold flex items-center">
                     <span className="mr-2">👤</span>
@@ -409,94 +503,297 @@ export default function DocumentVerificationPage() {
                     <span>{selectedWorker.phone}</span>
                   </div>
                   <div className="flex items-center">
-                    <span className="mr-2 text-gray-500">📅</span>
-                    <span>Submitted: {selectedWorker.submittedAt 
-                      ? new Date(selectedWorker.submittedAt).toLocaleDateString() 
-                      : selectedWorker.createdAt 
-                        ? new Date(selectedWorker.createdAt).toLocaleDateString() 
-                        : 'N/A'}</span>
+                    <span className="mr-2 text-gray-500">⭐</span>
+                    <span>Rating: {selectedWorker.rating || 0}/5 ({selectedWorker.completedJobs || 0} jobs)</span>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-500 mb-2">Skills:</p>
+                    <p className="text-sm text-gray-500 mb-2">Service Categories:</p>
                     <div className="flex flex-wrap gap-2">
-                      {selectedWorker.skills && selectedWorker.skills.length > 0 ? (
-                        selectedWorker.skills.map((skill, index) => (
-                          <span key={index} className="px-2 py-1 bg-gray-100 text-gray-700 rounded-md text-sm">{skill}</span>
+                      {selectedWorker.serviceCategories && selectedWorker.serviceCategories.length > 0 ? (
+                        selectedWorker.serviceCategories.map((category, index) => (
+                          <span key={index} className="px-2 py-1 bg-blue-100 text-blue-700 rounded-md text-sm">
+                            {category}
+                          </span>
                         ))
                       ) : (
-                        <span className="text-gray-500 text-sm">No skills listed</span>
+                        <span className="text-gray-500 text-sm">No categories listed</span>
                       )}
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Documents */}
-              <div className="bg-white rounded-lg border p-6">
-                <div className="mb-4">
-                  <h3 className="text-lg font-semibold flex items-center">
-                    <span className="mr-2">📄</span>
-                    Documents
-                  </h3>
-                </div>
-                <div className="space-y-4">
-                  {selectedWorker.documents && Object.entries(selectedWorker.documents).length > 0 ? (
-                    Object.entries(selectedWorker.documents).map(([docType, docUrl]) => {
-                      const status = typeof selectedWorker.verificationStatus === 'object' && selectedWorker.verificationStatus
-                        ? (selectedWorker.verificationStatus as VerificationStatus)[docType as keyof VerificationStatus]
-                        : 'pending';
-                      const docStatus = status || 'pending';
-                      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-                      const fullDocUrl = docUrl?.startsWith('http') ? docUrl : `${apiUrl}/uploads/${docUrl}`;
+              {/* General Documents (if any) */}
+              {selectedWorker.documents && Object.keys(selectedWorker.documents).length > 0 && (
+                <div className="bg-gray-50 rounded-lg border p-6">
+                  <div className="mb-4">
+                    <h3 className="text-lg font-semibold flex items-center">
+                      <span className="mr-2">📄</span>
+                      General Documents
+                    </h3>
+                  </div>
+                  <div className="space-y-3">
+                    {Object.entries(selectedWorker.documents).map(([docType, docUrl]) => {
+                      if (!docUrl) return null;
+                      const fullUrl = getDocumentUrl(docUrl);
+                      if (!fullUrl) return null;
                       
-                      return docUrl && (
-                        <div key={docType} className="border rounded-lg p-4">
-                          <div className="flex items-center justify-between mb-2">
-                            <h4 className="font-medium capitalize">
+                      return (
+                        <div key={docType} className="border rounded-lg p-3 bg-white">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-medium capitalize text-sm">
                               {docType.replace(/([A-Z])/g, ' $1')}
                             </h4>
-                            <div className="flex items-center space-x-2">
-                              {getStatusIcon(docStatus)}
-                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(docStatus)}`}>
-                                {docStatus}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex space-x-2">
                             <button 
-                              className="px-3 py-1 text-sm border border-gray-300 rounded-md hover:bg-gray-50"
-                              onClick={() => setSelectedDocument(fullDocUrl)}
+                              className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                              onClick={() => setSelectedDocument({ 
+                                url: fullUrl, 
+                                type: docType,
+                                name: docUrl 
+                              })}
                             >
                               👁 View
                             </button>
-                            {docStatus === 'pending' && (
-                              <>
-                                <button 
-                                  className="px-3 py-1 text-sm bg-green-600 text-white rounded-md hover:bg-green-700"
-                                  onClick={() => handleVerifyDocument(selectedWorker._id, docType, 'verified')}
-                                >
-                                  ✓ Approve
-                                </button>
-                                <button 
-                                  className="px-3 py-1 text-sm bg-red-600 text-white rounded-md hover:bg-red-700"
-                                  onClick={() => handleVerifyDocument(selectedWorker._id, docType, 'rejected')}
-                                >
-                                  ✗ Reject
-                                </button>
-                              </>
-                            )}
                           </div>
                         </div>
                       );
-                    })
-                  ) : (
-                    <div className="text-center py-8 text-gray-500">
-                      <span className="text-4xl mb-2 block">📄</span>
-                      <p>No documents uploaded yet</p>
-                    </div>
-                  )}
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
+            </div>
+
+            {/* Category-Based Documents */}
+            <div className="mt-6">
+              <h3 className="text-xl font-semibold mb-4 flex items-center">
+                <span className="mr-2">📋</span>
+                Service Category Documents
+              </h3>
+              
+              {getCategoriesNeedingVerification(selectedWorker).length === 0 ? (
+                <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                  <span className="text-4xl mb-2 block">📄</span>
+                  <p>No category documents uploaded yet</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {getCategoriesNeedingVerification(selectedWorker).map((catData) => {
+                    const isSelected = selectedCategory === catData.category;
+                    const docs = catData.documents;
+                    
+                    return (
+                      <div key={catData.category} className="border rounded-lg p-4 bg-gray-50">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <h4 className="text-lg font-semibold capitalize">
+                              {catData.category}
+                            </h4>
+                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(catData.status)}`}>
+                              {catData.status}
+                            </span>
+                          </div>
+                          <button
+                            className="px-3 py-1 text-sm border border-gray-300 rounded-md hover:bg-gray-50"
+                            onClick={() => setSelectedCategory(isSelected ? null : catData.category)}
+                          >
+                            {isSelected ? '▼ Hide' : '▶ Show'} Documents
+                          </button>
+                        </div>
+
+                        {isSelected && (
+                          <div className="mt-4 space-y-3 bg-white p-4 rounded-lg">
+                            {/* Citizenship */}
+                            {docs.citizenship && (
+                              <div className="border rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <h5 className="font-medium text-sm">Citizenship Document</h5>
+                                  <button 
+                                    className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                                    onClick={() => {
+                                      const url = getDocumentUrl(docs.citizenship!);
+                                      if (url) setSelectedDocument({ url, type: 'citizenship', name: docs.citizenship! });
+                                    }}
+                                  >
+                                    👁 View
+                                  </button>
+                                </div>
+                                {!isPDF(docs.citizenship) && getDocumentUrl(docs.citizenship) && (
+                                  <div className="mt-2">
+                                    <img 
+                                      src={getDocumentUrl(docs.citizenship)!} 
+                                      alt="Citizenship" 
+                                      className="w-full h-32 object-cover rounded border"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Driving License */}
+                            {docs.drivingLicense && (
+                              <div className="border rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <h5 className="font-medium text-sm">Driving License</h5>
+                                  <button 
+                                    className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                                    onClick={() => {
+                                      const url = getDocumentUrl(docs.drivingLicense!);
+                                      if (url) setSelectedDocument({ url, type: 'drivingLicense', name: docs.drivingLicense! });
+                                    }}
+                                  >
+                                    👁 View
+                                  </button>
+                                </div>
+                                {!isPDF(docs.drivingLicense) && getDocumentUrl(docs.drivingLicense) && (
+                                  <div className="mt-2">
+                                    <img 
+                                      src={getDocumentUrl(docs.drivingLicense)!} 
+                                      alt="Driving License" 
+                                      className="w-full h-32 object-cover rounded border"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Service Certificate */}
+                            {docs.serviceCertificate && (
+                              <div className="border rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <h5 className="font-medium text-sm">Service Certificate</h5>
+                                  <button 
+                                    className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                                    onClick={() => {
+                                      const url = getDocumentUrl(docs.serviceCertificate!);
+                                      if (url) setSelectedDocument({ url, type: 'serviceCertificate', name: docs.serviceCertificate! });
+                                    }}
+                                  >
+                                    👁 View
+                                  </button>
+                                </div>
+                                {!isPDF(docs.serviceCertificate) && getDocumentUrl(docs.serviceCertificate) && (
+                                  <div className="mt-2">
+                                    <img 
+                                      src={getDocumentUrl(docs.serviceCertificate)!} 
+                                      alt="Service Certificate" 
+                                      className="w-full h-32 object-cover rounded border"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                                {isPDF(docs.serviceCertificate) && (
+                                  <div className="mt-2 p-2 bg-gray-100 rounded border flex items-center gap-2">
+                                    <span className="text-2xl">📄</span>
+                                    <span className="text-sm text-gray-600">PDF Document</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Experience Certificate */}
+                            {docs.experienceCertificate && (
+                              <div className="border rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <h5 className="font-medium text-sm">Experience Certificate</h5>
+                                  <button 
+                                    className="px-2 py-1 text-xs border border-gray-300 rounded-md hover:bg-gray-50"
+                                    onClick={() => {
+                                      const url = getDocumentUrl(docs.experienceCertificate!);
+                                      if (url) setSelectedDocument({ url, type: 'experienceCertificate', name: docs.experienceCertificate! });
+                                    }}
+                                  >
+                                    👁 View
+                                  </button>
+                                </div>
+                                {!isPDF(docs.experienceCertificate) && getDocumentUrl(docs.experienceCertificate) && (
+                                  <div className="mt-2">
+                                    <img 
+                                      src={getDocumentUrl(docs.experienceCertificate)!} 
+                                      alt="Experience Certificate" 
+                                      className="w-full h-32 object-cover rounded border"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).style.display = 'none';
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                                {isPDF(docs.experienceCertificate) && (
+                                  <div className="mt-2 p-2 bg-gray-100 rounded border flex items-center gap-2">
+                                    <span className="text-2xl">📄</span>
+                                    <span className="text-sm text-gray-600">PDF Document</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Verification Actions */}
+                            {catData.status === 'pending' && (
+                              <div className="mt-4 pt-4 border-t">
+                                <div className="mb-3">
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Rejection Reason (if rejecting):
+                                  </label>
+                                  <textarea
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                                    rows={3}
+                                    placeholder="Enter reason for rejection..."
+                                    value={rejectionReason}
+                                    onChange={(e) => setRejectionReason(e.target.value)}
+                                  />
+                                </div>
+                                <div className="flex gap-2">
+                                  <button 
+                                    className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                                    onClick={() => handleVerifyCategory(selectedWorker._id, catData.category, 'verified')}
+                                  >
+                                    ✓ Approve Category
+                                  </button>
+                                  <button 
+                                    className="flex-1 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+                                    onClick={() => handleVerifyCategory(selectedWorker._id, catData.category, 'rejected')}
+                                  >
+                                    ✗ Reject Category
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {catData.status === 'rejected' && (
+                              <div className="mt-4 pt-4 border-t">
+                                <p className="text-sm text-red-600 font-medium">
+                                  This category was rejected. Worker needs to resubmit documents.
+                                </p>
+                                <button 
+                                  className="mt-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm"
+                                  onClick={() => handleVerifyCategory(selectedWorker._id, catData.category, 'verified')}
+                                >
+                                  ✓ Approve Now
+                                </button>
+                              </div>
+                            )}
+
+                            {catData.status === 'verified' && (
+                              <div className="mt-4 pt-4 border-t">
+                                <p className="text-sm text-green-600 font-medium">
+                                  ✓ This category has been verified. Worker can receive service requests.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -505,10 +802,9 @@ export default function DocumentVerificationPage() {
       {/* Document Viewer Modal */}
       {selectedDocument && (
         <DocumentViewer 
-          documentUrl={selectedDocument} 
-          documentType={Object.keys(selectedWorker?.documents || {}).find(
-            key => selectedWorker?.documents[key as keyof Document] === selectedDocument
-          ) || 'document'} 
+          documentUrl={selectedDocument.url} 
+          documentType={selectedDocument.type}
+          documentName={selectedDocument.name}
         />
       )}
     </div>

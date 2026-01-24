@@ -19,7 +19,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { getApiUrl } from '@/lib/config';
 import { socketService } from '@/lib/SocketService';
 import { useAuth } from '@/contexts/AuthContext';
-// ARCHITECTURE: User app does NOT import getDirections - only receives route via socket
+import { mapService, Location, RouteData } from '@/lib/MapService';
+// ARCHITECTURE: User app uses MapService for smooth, throttled map updates
 
 let MapComponent: any;
 let MarkerComponent: any;
@@ -109,6 +110,8 @@ export default function LiveTrackingScreen() {
   const [routeData, setRouteData] = useState<any>(null);
   const [workerData, setWorkerData] = useState<any>(null);
   const [locationTrackingStarted, setLocationTrackingStarted] = useState<boolean>(false);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [mapReady, setMapReady] = useState<boolean>(false);
   const mapRef = useRef<any>(null);
   const routeKeyRef = useRef<string>('');
   const markerKeyRef = useRef<string>('');
@@ -204,6 +207,9 @@ export default function LiveTrackingScreen() {
           console.log(' Worker data already in booking response:', data.worker);
         }
 
+        // ARCHITECTURE: Start MapService for smooth route updates when we have both locations
+        // This will be handled in the useEffect where handleMapServiceRouteUpdate is defined
+        
         // ARCHITECTURE: User app does NOT fetch routes - route comes via socket events
         // Fit map to show both locations (route received via socket)
         if (
@@ -347,6 +353,30 @@ export default function LiveTrackingScreen() {
       }
     };
 
+    // MapService route update callback - receives throttled route updates (every 3-5 seconds)
+    const handleMapServiceRouteUpdate = (route: RouteData) => {
+      console.log('🗺️ MapService route update:', {
+        points: route.coordinates.length,
+        distance: (route.distance / 1000).toFixed(2) + ' km',
+        duration: Math.ceil(route.duration / 60) + ' min',
+      });
+
+      routeKeyRef.current = `route-${Date.now()}-${route.coordinates.length}`;
+      setRouteData({
+        coordinates: route.coordinates,
+        geometry: route.geometry,
+      });
+
+      // Update distance and ETA
+      if (route.distance) {
+        setDistance(route.distance / 1000); // Convert meters to km
+        setDistanceRemaining(route.distance / 1000);
+      }
+      if (route.duration) {
+        setEta(Math.ceil(route.duration / 60)); // Convert seconds to minutes
+      }
+    };
+
     // Listen for enhanced worker location updates with distance tracking
     const handleWorkerLocation = (data: any) => {
       if (data.bookingId === bookingId || data.workerId === booking?.workerId || 
@@ -358,10 +388,13 @@ export default function LiveTrackingScreen() {
           distanceRemaining: data.distanceRemaining
         });
         
-        const newLocation = {
+        const newLocation: Location = {
           latitude: data.latitude,
           longitude: data.longitude,
+          accuracy: data.accuracy,
+          timestamp: Date.now(),
         };
+        
         // Generate stable key for marker (only update if location changed significantly)
         const locationKey = `${data.latitude.toFixed(4)}-${data.longitude.toFixed(4)}`;
         if (markerKeyRef.current !== locationKey) {
@@ -369,28 +402,32 @@ export default function LiveTrackingScreen() {
         }
         setWorkerLocation(newLocation);
         
-        // ARCHITECTURE: User app does NOT fetch routes - only receives via socket
-        // ARCHITECTURE: Camera updates ONLY every 2-3 seconds (Uber style)
-        if (Platform.OS === 'android' && mapRef.current && (navStatus === 'tracking' || navStatus === 'navigating')) {
+        // Update MapService with new worker location (throttled internally to 3-5 seconds)
+        if (booking?.location?.coordinates) {
+          mapService.updateOrigin(newLocation);
+        }
+        
+        // ARCHITECTURE: Camera updates ONLY every 3-5 seconds (Google Maps style)
+        if (mapRef.current && (navStatus === 'tracking' || navStatus === 'navigating')) {
           const now = Date.now();
           const lastCameraUpdate = (mapRef.current as any)._lastCameraUpdate || 0;
           
-          // ARCHITECTURE RULE: Camera updates every 2-3 seconds
-          if (now - lastCameraUpdate < 2500) { // 2.5 seconds
+          // ARCHITECTURE RULE: Camera updates every 3-5 seconds for smooth performance
+          if (now - lastCameraUpdate < 4000) { // 4 seconds
             return;
           }
           
           try {
             (mapRef.current as any)._lastCameraUpdate = now;
             
-            // ARCHITECTURE: Use flyTo/easeTo with duration ≥ 1000ms
+            // ARCHITECTURE: Use smooth animations with duration ≥ 1500ms (Google Maps style)
             if (mapRef.current.animateToCoordinate) {
               mapRef.current.animateToCoordinate(
                 {
                   latitude: newLocation.latitude,
                   longitude: newLocation.longitude,
                 },
-                1200 // Smooth 1.2s animation
+                1500 // Smooth 1.5s animation (Google Maps style)
               );
             } else if (mapRef.current.animateToRegion) {
               mapRef.current.animateToRegion(
@@ -400,7 +437,7 @@ export default function LiveTrackingScreen() {
                   latitudeDelta: 0.01,
                   longitudeDelta: 0.01,
                 },
-                1200
+                1500
               );
             }
           } catch (error) {
@@ -448,6 +485,23 @@ export default function LiveTrackingScreen() {
           setRouteData({
             coordinates: data.route.geometry.coordinates || [],
             geometry: data.route
+          });
+        }
+        
+        // Start MapService for smooth, throttled route updates (every 3-5 seconds)
+        if (workerLocation && booking?.location?.coordinates) {
+          mapService.startMapUpdates({
+            origin: {
+              latitude: workerLocation.latitude,
+              longitude: workerLocation.longitude,
+            },
+            destination: {
+              latitude: booking.location.coordinates.latitude,
+              longitude: booking.location.coordinates.longitude,
+            },
+            updateInterval: 4000, // 4 seconds (between 3-5 seconds)
+            enableRoute: true,
+            onRouteUpdate: handleMapServiceRouteUpdate,
           });
         }
         
@@ -625,16 +679,41 @@ export default function LiveTrackingScreen() {
       }
     };
 
-    // Listen for payment status updates
+    // Listen for payment status updates (real-time updates from socket)
     const handlePaymentStatusUpdated = (data: any) => {
-      if (data.bookingId === bookingId) {
-        console.log('💳 Payment status updated:', data);
+      if (data.bookingId === bookingId || data.booking?._id === bookingId) {
+        console.log('💳 Payment status updated via socket:', {
+          paymentStatus: data.paymentStatus,
+          userConfirmed: data.userConfirmed,
+          workerConfirmed: data.workerConfirmed,
+        });
+        
+        // Update booking state with latest payment information
         setBooking(prev => prev ? {
           ...prev,
-          paymentStatus: data.paymentStatus,
-          userConfirmedPayment: data.userConfirmed,
-          workerConfirmedPayment: data.workerConfirmed,
-        } : prev);
+          paymentStatus: data.paymentStatus || data.booking?.paymentStatus || prev.paymentStatus,
+          userConfirmedPayment: data.userConfirmed !== undefined ? data.userConfirmed : (data.booking?.userConfirmedPayment ?? prev.userConfirmedPayment),
+          workerConfirmedPayment: data.workerConfirmed !== undefined ? data.workerConfirmed : (data.booking?.workerConfirmedPayment ?? prev.workerConfirmedPayment),
+          paymentConfirmedAt: data.booking?.paymentConfirmedAt || prev.paymentConfirmedAt,
+          // Update all booking fields if full booking object is provided
+          ...(data.booking ? {
+            ...data.booking,
+            // Preserve existing fields that might not be in the update
+            _id: prev._id,
+            userId: prev.userId,
+            workerId: prev.workerId,
+          } : {}),
+        } : null);
+        
+        // Show notification if payment status changed to paid
+        if (data.paymentStatus === 'paid' || data.booking?.paymentStatus === 'paid') {
+          console.log('✅ Payment status updated to paid!');
+        }
+        
+        // Refresh booking details to ensure consistency
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 500);
       }
     };
 
@@ -674,6 +753,30 @@ export default function LiveTrackingScreen() {
       }
     };
 
+    // Start MapService if we have both locations (from initial booking load or updates)
+    const initializeMapService = () => {
+      if (booking?.workerLocation && booking?.location?.coordinates) {
+        mapService.startMapUpdates({
+          origin: {
+            latitude: booking.workerLocation.latitude,
+            longitude: booking.workerLocation.longitude,
+          },
+          destination: {
+            latitude: booking.location.coordinates.latitude,
+            longitude: booking.location.coordinates.longitude,
+          },
+          updateInterval: 4000, // 4 seconds (between 3-5 seconds)
+          enableRoute: true,
+          onRouteUpdate: handleMapServiceRouteUpdate,
+        });
+      }
+    };
+
+    // Initialize MapService when booking is loaded
+    if (booking) {
+      initializeMapService();
+    }
+
     // Register all socket listeners
     socketService.on('booking:accepted', handleBookingAccepted);
     socketService.on('location:tracking:started', handleLocationTrackingStarted);
@@ -691,6 +794,11 @@ export default function LiveTrackingScreen() {
 
     return () => {
       clearInterval(interval);
+      // Stop MapService updates
+      mapService.stopMapUpdates();
+      mapService.removeRouteCallback(handleMapServiceRouteUpdate);
+      
+      // Clean up socket listeners
       socketService.off('booking:accepted', handleBookingAccepted);
       socketService.off('location:tracking:started', handleLocationTrackingStarted);
       socketService.off('route:updated', handleRouteUpdated);
@@ -726,6 +834,8 @@ export default function LiveTrackingScreen() {
     
     try {
       const apiUrl = getApiUrl();
+      console.log('💳 Confirming payment for booking:', booking._id);
+      
       const response = await fetch(`${apiUrl}/api/bookings/${booking._id}/confirm-payment`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -737,25 +847,50 @@ export default function LiveTrackingScreen() {
 
       if (response.ok) {
         const data = await response.json();
-        Alert.alert('Success', data.message || 'Payment confirmed!');
-        // Update local state
+        console.log('✅ Payment confirmation response:', {
+          paymentStatus: data.booking.paymentStatus,
+          userConfirmed: data.booking.userConfirmedPayment,
+          workerConfirmed: data.booking.workerConfirmedPayment,
+        });
+        
+        // Update local state immediately with all payment information
         setBooking(prev => prev ? {
           ...prev,
-          userConfirmedPayment: true,
-          paymentStatus: data.booking.paymentStatus,
-          workerConfirmedPayment: data.booking.workerConfirmedPayment,
+          userConfirmedPayment: data.booking.userConfirmedPayment || true,
+          workerConfirmedPayment: data.booking.workerConfirmedPayment || false,
+          paymentStatus: data.booking.paymentStatus || 'pending',
+          paymentConfirmedAt: data.booking.paymentConfirmedAt,
+          // Update all booking fields from response to ensure consistency
+          ...data.booking,
         } : null);
-        // Refresh booking details
+        
+        // Show success message based on payment status
+        if (data.booking.paymentStatus === 'paid') {
+          Alert.alert(
+            '✅ Payment Completed!',
+            'Payment has been confirmed by both parties. Status updated to paid.',
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert(
+            '✅ Payment Confirmed',
+            data.message || 'Your payment confirmation has been recorded. Waiting for worker confirmation.',
+            [{ text: 'OK' }]
+          );
+        }
+        
+        // Refresh booking details to get latest data from backend
         setTimeout(() => {
           fetchBookingDetails();
-        }, 500);
+        }, 300);
       } else {
         const errorData = await response.json();
+        console.error('❌ Payment confirmation failed:', errorData);
         Alert.alert('Error', errorData.message || 'Failed to confirm payment');
       }
     } catch (error) {
-      console.error('Error confirming payment:', error);
-      Alert.alert('Error', 'Failed to confirm payment. Please try again.');
+      console.error('❌ Error confirming payment:', error);
+      Alert.alert('Error', 'Failed to confirm payment. Please check your internet connection and try again.');
     }
   };
 
@@ -866,14 +1001,51 @@ export default function LiveTrackingScreen() {
   // ARCHITECTURE: Memoize polyline geometry - NEVER recreate on location updates
   // Dependency on routeData ensures it only updates when route changes, not on GPS updates
   const routeCoordinates = useMemo(() => {
-    if (routeData && routeData.coordinates && routeData.coordinates.length > 0) {
-      return routeData.coordinates.map((coord: [number, number]) => ({
-        latitude: coord[1],
-        longitude: coord[0],
-      }));
+    try {
+      if (routeData && routeData.coordinates && routeData.coordinates.length > 0) {
+        // Handle both GeoJSON format [longitude, latitude] and {latitude, longitude} format
+        const coords = routeData.coordinates.map((coord: any) => {
+          if (Array.isArray(coord)) {
+            // GeoJSON format: [longitude, latitude]
+            return {
+              latitude: coord[1],
+              longitude: coord[0],
+            };
+          } else if (coord.latitude && coord.longitude) {
+            // Already in {latitude, longitude} format
+            return {
+              latitude: coord.latitude,
+              longitude: coord.longitude,
+            };
+          }
+          return null;
+        }).filter((coord: any) => coord !== null);
+        
+        console.log('✅ Route coordinates converted:', coords.length, 'points');
+        return coords;
+      }
+      
+      // Fallback: Create a simple straight-line route if we have both locations
+      if (workerLocation && booking?.location?.coordinates) {
+        console.log('⚠️ No route data, creating fallback straight-line route');
+        return [
+          {
+            latitude: workerLocation.latitude,
+            longitude: workerLocation.longitude,
+          },
+          {
+            latitude: booking.location.coordinates.latitude,
+            longitude: booking.location.coordinates.longitude,
+          },
+        ];
+      }
+      
+      return [];
+    } catch (error) {
+      console.error('❌ Error processing route coordinates:', error);
+      return [];
     }
-    return [];
-  }, [routeData?.coordinates]); // Only recreate when route coordinates array changes (not on location updates)
+  }, [routeData?.coordinates, workerLocation, booking?.location?.coordinates]);
 
   if (error) {
     return (
@@ -974,38 +1146,91 @@ export default function LiveTrackingScreen() {
       <SafeAreaView style={styles.safe}>
         {/* Map View */}
         <View style={styles.mapContainer}>
-          <MapComponent
-            ref={mapRef}
-            provider={Platform.OS === 'android' ? GOOGLE_PROVIDER : undefined}
-            style={styles.map}
-            mapType="standard"
-            initialRegion={{
-              latitude: userLocationCoords.latitude,
-              longitude: userLocationCoords.longitude,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
-            }}
-            // Remove region prop to prevent blinking - use animateToCoordinate instead
-            onRegionChangeComplete={(region: any) => {
-              // Prevent unnecessary updates
-            }}
-            showsUserLocation={false}
-            showsMyLocationButton={false}
-            loadingEnabled={true}
-            loadingIndicatorColor="#2563EB"
-            // Android-specific optimizations
-            {...(Platform.OS === 'android' && {
-              mapPadding: { top: 0, right: 0, bottom: 0, left: 0 },
-              pitchEnabled: false,
-              rotateEnabled: false,
-              scrollEnabled: true,
-              zoomEnabled: true,
-              zoomControlEnabled: false,
-              toolbarEnabled: false,
-              cacheEnabled: true,
-              liteMode: false,
-            })}
-          >
+          {mapError ? (
+            <View style={styles.mapErrorContainer}>
+              <Ionicons name="alert-circle" size={48} color="#EF4444" />
+              <Text style={styles.mapErrorText}>Map Loading Error</Text>
+              <Text style={styles.mapErrorSubtext}>{mapError}</Text>
+              <TouchableOpacity 
+                style={styles.retryButton}
+                onPress={() => {
+                  setMapError(null);
+                  setMapReady(false);
+                }}
+              >
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <MapComponent
+              ref={mapRef}
+              provider={Platform.OS === 'android' ? GOOGLE_PROVIDER : undefined}
+              style={styles.map}
+              mapType="standard"
+              initialRegion={{
+                latitude: userLocationCoords.latitude,
+                longitude: userLocationCoords.longitude,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
+              }}
+              onMapReady={() => {
+                console.log('✅ Map loaded successfully');
+                setMapReady(true);
+                setMapError(null);
+                
+                // Fit map to show both locations if available
+                if (Platform.OS === 'android' && mapRef.current?.fitToCoordinates) {
+                  const locations = [];
+                  if (currentWorkerLocation) {
+                    locations.push({
+                      latitude: currentWorkerLocation.latitude,
+                      longitude: currentWorkerLocation.longitude,
+                    });
+                  }
+                  locations.push({
+                    latitude: userLocationCoords.latitude,
+                    longitude: userLocationCoords.longitude,
+                  });
+                  
+                  if (locations.length > 1) {
+                    setTimeout(() => {
+                      try {
+                        mapRef.current?.fitToCoordinates(locations, {
+                          edgePadding: { top: 80, right: 40, bottom: 200, left: 40 },
+                          animated: true,
+                        });
+                      } catch (e) {
+                        console.warn('Map fit error:', e);
+                      }
+                    }, 500);
+                  }
+                }
+              }}
+              onError={(error: any) => {
+                console.error('❌ Map error:', error);
+                setMapError(error?.message || 'Failed to load map. Please check your internet connection.');
+              }}
+              // Remove region prop to prevent blinking - use animateToCoordinate instead
+              onRegionChangeComplete={(region: any) => {
+                // Prevent unnecessary updates
+              }}
+              showsUserLocation={false}
+              showsMyLocationButton={false}
+              loadingEnabled={true}
+              loadingIndicatorColor="#2563EB"
+              // Android-specific optimizations
+              {...(Platform.OS === 'android' && {
+                mapPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+                pitchEnabled: false,
+                rotateEnabled: false,
+                scrollEnabled: true,
+                zoomEnabled: true,
+                zoomControlEnabled: false,
+                toolbarEnabled: false,
+                cacheEnabled: true,
+                liteMode: false,
+              })}
+            >
             {/* ARCHITECTURE FIX: Components ALWAYS mounted - NO conditional rendering */}
             {/* User marker - Always mounted, coordinate updates via props */}
             <MarkerComponent
@@ -1046,29 +1271,30 @@ export default function LiveTrackingScreen() {
             </MarkerComponent>
 
             {/* Route Line - Display route received from backend (via socket) on react-native-maps Polyline */}
-            {PolylineComponent && (
+            {PolylineComponent && routeCoordinates.length > 0 && (
               <PolylineComponent
-                key="route-polyline"
+                key={`route-polyline-${routeKeyRef.current}`}
                 identifier="route-polyline"
                 coordinates={routeCoordinates}
                 strokeColor="#2563EB"
-                strokeWidth={routeCoordinates.length > 0 ? 8 : 0}
+                strokeWidth={8}
                 lineCap="round"
                 lineJoin="round"
-                geodesic={false}
+                geodesic={true}
                 tappable={false}
                 zIndex={1}
               />
             )}
             
-            {/* Loading indicator - Only show when no route data */}
-            {!routeData && (
+            {/* Loading indicator - Only show when no route data and tracking has started */}
+            {!routeData && locationTrackingStarted && (
               <View style={styles.routeLoadingContainer}>
                 <ActivityIndicator size="small" color="#2563EB" />
                 <Text style={styles.routeLoadingText}>Calculating route...</Text>
               </View>
             )}
           </MapComponent>
+          )}
 
           {/* Back Button */}
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -1428,6 +1654,26 @@ const styles = StyleSheet.create({
   map: {
     width: '100%',
     height: '100%',
+  },
+  mapErrorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+    padding: 20,
+  },
+  mapErrorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#EF4444',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  mapErrorSubtext: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 8,
+    textAlign: 'center',
   },
   backButton: {
     position: 'absolute',

@@ -31,6 +31,7 @@ const { width, height } = Dimensions.get('window');
 
 interface Booking {
   _id: string;
+  userId?: string;
   serviceName: string;
   serviceCategory: string;
   status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled' | 'rejected';
@@ -43,7 +44,7 @@ interface Booking {
   };
   price: number;
   scheduledDate?: string;
-  workerId?: {
+  workerId?: string | {
     firstName: string;
     lastName: string;
     phone?: string;
@@ -56,9 +57,34 @@ interface Booking {
   paymentStatus: 'pending' | 'paid' | 'refunded';
   userConfirmedPayment?: boolean;
   workerConfirmedPayment?: boolean;
+  paymentConfirmedAt?: string | Date;
   rating?: number;
   review?: string;
 }
+
+// Helper function to safely get worker name from workerId
+const getWorkerName = (workerId: Booking['workerId']): string => {
+  if (!workerId) return 'Worker';
+  if (typeof workerId === 'string') return 'Worker';
+  return `${workerId.firstName} ${workerId.lastName || ''}`.trim() || 'Worker';
+};
+
+// Helper function to safely get worker property
+const getWorkerProperty = <T,>(
+  workerId: Booking['workerId'],
+  property: keyof NonNullable<Exclude<Booking['workerId'], string>>,
+  defaultValue: T
+): T => {
+  if (!workerId || typeof workerId === 'string') return defaultValue;
+  const value = workerId[property];
+  return (value !== undefined && value !== null ? value : defaultValue) as T;
+};
+
+// Helper function to safely get worker phone
+const getWorkerPhone = (workerId: Booking['workerId']): string => {
+  if (!workerId || typeof workerId === 'string') return '';
+  return workerId.phone || '';
+};
 
 export default function MyBookingsScreen() {
   const { theme } = useTheme();
@@ -146,19 +172,40 @@ export default function MyBookingsScreen() {
         }
       });
       
-      // Listen for booking updates
+      // Listen for booking updates (includes payment status updates)
       socketService.on('booking:updated', (updatedBooking: any) => {
-        console.log('📝 Booking updated event received in my-bookings:', updatedBooking);
+        console.log('📝 Booking updated event received in my-bookings:', {
+          bookingId: updatedBooking._id,
+          status: updatedBooking.status,
+          paymentStatus: updatedBooking.paymentStatus,
+          userConfirmedPayment: updatedBooking.userConfirmedPayment,
+          workerConfirmedPayment: updatedBooking.workerConfirmedPayment,
+        });
+        
         // Check if this booking belongs to the current user
         if (updatedBooking.userId === user.id || String(updatedBooking.userId) === String(user.id)) {
-          // Update the specific booking in state immediately
+          // Update the specific booking in state immediately with all fields
           setBookings(prev => 
             prev.map(b => 
               b._id === updatedBooking._id 
-                ? { ...b, status: updatedBooking.status, ...updatedBooking }
+                ? { 
+                    ...b, 
+                    status: updatedBooking.status || b.status,
+                    paymentStatus: updatedBooking.paymentStatus || b.paymentStatus,
+                    userConfirmedPayment: updatedBooking.userConfirmedPayment !== undefined ? updatedBooking.userConfirmedPayment : b.userConfirmedPayment,
+                    workerConfirmedPayment: updatedBooking.workerConfirmedPayment !== undefined ? updatedBooking.workerConfirmedPayment : b.workerConfirmedPayment,
+                    paymentConfirmedAt: updatedBooking.paymentConfirmedAt || b.paymentConfirmedAt,
+                    // Update all other fields from the updated booking
+                    ...updatedBooking,
+                    // Preserve existing fields
+                    _id: b._id,
+                    userId: b.userId,
+                    workerId: b.workerId,
+                  }
                 : b
             )
           );
+          
           // Also refresh from server to ensure consistency
           setTimeout(() => {
             fetchBookings();
@@ -249,22 +296,49 @@ export default function MyBookingsScreen() {
         fetchBookings();
       });
 
-      // Listen for payment status updates
+      // Listen for payment status updates (real-time updates from socket)
       socketService.on('payment:status_updated', (data: any) => {
-        console.log('💳 Payment status updated event received:', data);
-        if (data.bookingId) {
+        console.log('💳 Payment status updated event received in my-bookings:', {
+          bookingId: data.bookingId,
+          paymentStatus: data.paymentStatus,
+          userConfirmed: data.userConfirmed,
+          workerConfirmed: data.workerConfirmed,
+        });
+        
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          // Update booking state with latest payment information
           setBookings(prev => 
             prev.map(b => 
-              b._id === data.bookingId 
+              b._id === bookingId 
                 ? { 
                     ...b, 
-                    paymentStatus: data.paymentStatus,
-                    userConfirmedPayment: data.userConfirmed,
-                    workerConfirmedPayment: data.workerConfirmed,
+                    paymentStatus: data.paymentStatus || data.booking?.paymentStatus || b.paymentStatus,
+                    userConfirmedPayment: data.userConfirmed !== undefined ? data.userConfirmed : (data.booking?.userConfirmedPayment ?? b.userConfirmedPayment),
+                    workerConfirmedPayment: data.workerConfirmed !== undefined ? data.workerConfirmed : (data.booking?.workerConfirmedPayment ?? b.workerConfirmedPayment),
+                    paymentConfirmedAt: data.booking?.paymentConfirmedAt || b.paymentConfirmedAt,
+                    // Update all booking fields if full booking object is provided
+                    ...(data.booking ? {
+                      ...data.booking,
+                      // Preserve existing fields
+                      _id: b._id,
+                      userId: b.userId,
+                      workerId: b.workerId,
+                    } : {}),
                   }
                 : b
             )
           );
+          
+          // Show notification if payment status changed to paid
+          if (data.paymentStatus === 'paid' || data.booking?.paymentStatus === 'paid') {
+            console.log('✅ Payment status updated to paid in my-bookings!');
+          }
+          
+          // Refresh to get latest data from backend to ensure consistency
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
         }
       });
     }
@@ -488,44 +562,80 @@ export default function MyBookingsScreen() {
   };
 
   const handleConfirmPayment = async (booking: Booking) => {
+    if (!user?.id) {
+      Alert.alert('Error', 'User not authenticated');
+      return;
+    }
+    
     try {
       const apiUrl = getApiUrl();
+      console.log('💳 Confirming payment for booking:', booking._id);
+      
       const response = await fetch(`${apiUrl}/api/bookings/${booking._id}/confirm-payment`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           confirmedBy: 'user',
-          userId: user?.id,
+          userId: user.id,
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        Alert.alert('Success', data.message || 'Payment confirmed!');
-        // Update local state
+        console.log('✅ Payment confirmation response:', {
+          paymentStatus: data.booking.paymentStatus,
+          userConfirmed: data.booking.userConfirmedPayment,
+          workerConfirmed: data.booking.workerConfirmedPayment,
+        });
+        
+        // Update local state immediately with all payment information
         setBookings(prev => 
           prev.map(b => 
             b._id === booking._id 
               ? { 
                   ...b, 
-                  userConfirmedPayment: true,
-                  paymentStatus: data.booking.paymentStatus,
-                  workerConfirmedPayment: data.booking.workerConfirmedPayment,
+                  userConfirmedPayment: data.booking.userConfirmedPayment || true,
+                  workerConfirmedPayment: data.booking.workerConfirmedPayment || false,
+                  paymentStatus: data.booking.paymentStatus || 'pending',
+                  paymentConfirmedAt: data.booking.paymentConfirmedAt,
+                  // Update all booking fields from response to ensure consistency
+                  ...data.booking,
+                  // Preserve existing fields
+                  _id: b._id,
+                  userId: b.userId,
+                  workerId: b.workerId,
                 }
               : b
           )
         );
-        // Refresh to get latest data
+        
+        // Show success message based on payment status
+        if (data.booking.paymentStatus === 'paid') {
+          Alert.alert(
+            '✅ Payment Completed!',
+            'Payment has been confirmed by both parties. Status updated to paid.',
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert(
+            '✅ Payment Confirmed',
+            data.message || 'Your payment confirmation has been recorded. Waiting for worker confirmation.',
+            [{ text: 'OK' }]
+          );
+        }
+        
+        // Refresh to get latest data from backend
         setTimeout(() => {
           fetchBookings();
-        }, 500);
+        }, 300);
       } else {
         const errorData = await response.json();
+        console.error('❌ Payment confirmation failed:', errorData);
         Alert.alert('Error', errorData.message || 'Failed to confirm payment');
       }
     } catch (error) {
-      console.error('Error confirming payment:', error);
-      Alert.alert('Error', 'Failed to confirm payment. Please try again.');
+      console.error('❌ Error confirming payment:', error);
+      Alert.alert('Error', 'Failed to confirm payment. Please check your internet connection and try again.');
     }
   };
 
@@ -554,7 +664,7 @@ export default function MyBookingsScreen() {
       params: {
         bookingId: booking._id,
         serviceName: booking.serviceName,
-        workerName: booking.workerId ? `${booking.workerId.firstName} ${booking.workerId.lastName}` : 'Worker',
+        workerName: getWorkerName(booking.workerId),
       },
     });
   };
@@ -768,7 +878,7 @@ export default function MyBookingsScreen() {
           showsVerticalScrollIndicator={false}
         >
           {filteredBookings.length === 0 && bookings.length > 0 ? (
-            <View style={styles.emptyContainer}>
+            <View style={styles.emptyState}>
               <Ionicons name="filter-outline" size={64} color={theme.icon} />
               <Text style={[styles.emptyTitle, { color: theme.text }]}>
                 No {activeFilter === 'all' ? '' : activeFilter === 'completed' ? 'Completed' : activeFilter === 'payment_pending' ? 'Payment Pending' : activeFilter === 'payment_confirmed' ? 'Payment Confirmed' : 'Paid'} Bookings
@@ -856,10 +966,10 @@ export default function MyBookingsScreen() {
                             {booking.workerId && (
                               <View style={styles.workerInfo}>
                                 <Ionicons name="person-circle-outline" size={20} color="#4A90E2" />
-                                <Text style={styles.workerName}>{booking.workerId ? `${booking.workerId.firstName} ${booking.workerId.lastName}` : 'No worker assigned'}</Text>
+                                <Text style={styles.workerName}>{getWorkerName(booking.workerId)}</Text>
                                 <View style={styles.ratingContainer}>
                                   <Ionicons name="star" size={12} color="#FFD700" />
-                                  <Text style={styles.ratingText}>{booking.workerId?.rating || 0}</Text>
+                                  <Text style={styles.ratingText}>{getWorkerProperty(booking.workerId, 'rating', 0)}</Text>
                                 </View>
                               </View>
                             )}
@@ -987,7 +1097,7 @@ export default function MyBookingsScreen() {
                           latitude: trackingData.workerLocation.latitude,
                           longitude: trackingData.workerLocation.longitude,
                         }}
-                        title={selectedBooking.workerId ? `${selectedBooking.workerId.firstName} ${selectedBooking.workerId.lastName}` : 'Worker'}
+                        title={getWorkerName(selectedBooking.workerId)}
                         description="Worker Location"
                       >
                         <View style={styles.workerMarker}>
@@ -1023,7 +1133,7 @@ export default function MyBookingsScreen() {
                 </View>
 
                 {/* Worker Info */}
-                {selectedBooking.workerId && (
+                {selectedBooking.workerId && typeof selectedBooking.workerId === 'object' && (
                   <View style={styles.workerCard}>
                     <View style={styles.workerAvatar}>
                       {selectedBooking.workerId.profileImage || selectedBooking.workerId.image ? (
@@ -1037,16 +1147,16 @@ export default function MyBookingsScreen() {
                     </View>
                     <View style={styles.workerDetails}>
                       <Text style={styles.workerName}>
-                        {selectedBooking.workerId.firstName} {selectedBooking.workerId.lastName}
+                        {getWorkerName(selectedBooking.workerId)}
                       </Text>
                       <Text style={styles.workerPhone}>
-                        {selectedBooking.workerId.phone || 'Worker'}
+                        {getWorkerProperty(selectedBooking.workerId, 'phone', 'Worker')}
                       </Text>
                     </View>
                     <TouchableOpacity 
                       style={styles.callButton}
                       onPress={() => {
-                        const phone = selectedBooking.workerId?.phone;
+                        const phone = getWorkerPhone(selectedBooking.workerId);
                         if (!phone) {
                           Alert.alert('No Phone Number', 'Worker phone number is not available.');
                           return;
@@ -1066,7 +1176,7 @@ export default function MyBookingsScreen() {
                             Alert.alert('Error', 'Unable to open phone dialer.');
                           });
                       }}
-                      disabled={!selectedBooking.workerId?.phone}
+                      disabled={!getWorkerPhone(selectedBooking.workerId)}
                     >
                       <Ionicons name="call" size={20} color="#4CAF50" />
                     </TouchableOpacity>

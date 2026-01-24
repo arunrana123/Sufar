@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { socketService } from '../../lib/socketService';
 
 type WorkerRequest = {
   _id: string;
@@ -58,8 +59,9 @@ export default function RequestsPage() {
       return;
     }
 
+    let parsedAdmin: any;
     try {
-      const parsedAdmin = JSON.parse(adminData);
+      parsedAdmin = JSON.parse(adminData);
       setAdmin(parsedAdmin);
     } catch {
       router.push('/auth');
@@ -67,6 +69,51 @@ export default function RequestsPage() {
     }
 
     fetchRequests();
+    
+    // Connect to Socket.IO for real-time updates
+    const adminId = parsedAdmin._id || parsedAdmin.id || 'admin-' + Date.now();
+    socketService.connect(adminId, 'admin');
+
+    // Listen for document verification updates
+    const handleVerificationUpdated = (data: any) => {
+      console.log('📢 Verification update received:', data);
+      // Refresh requests to show updated status
+      setTimeout(() => {
+        fetchRequests();
+      }, 500);
+    };
+
+    // Listen for new document submissions
+    const handleDocumentSubmitted = (worker: any) => {
+      console.log('📢 New document submission received:', worker);
+      // Refresh requests to show new submissions
+      setTimeout(() => {
+        fetchRequests();
+      }, 500);
+    };
+
+    // Wait a bit for connection to establish
+    const connectTimeout = setTimeout(() => {
+      socketService.on('document:verification:updated', handleVerificationUpdated);
+      socketService.on('category:verification:updated', handleVerificationUpdated);
+      socketService.on('document:verification:submitted', handleDocumentSubmitted);
+      socketService.on('category:verification:submitted', handleDocumentSubmitted);
+      console.log('✅ Socket.IO listeners registered for requests page');
+    }, 1000);
+    
+    // Auto-refresh every 30 seconds as backup
+    const interval = setInterval(() => {
+      fetchRequests();
+    }, 30000);
+
+    return () => {
+      clearTimeout(connectTimeout);
+      clearInterval(interval);
+      socketService.off('document:verification:updated', handleVerificationUpdated);
+      socketService.off('category:verification:updated', handleVerificationUpdated);
+      socketService.off('document:verification:submitted', handleDocumentSubmitted);
+      socketService.off('category:verification:submitted', handleDocumentSubmitted);
+    };
   }, [router]);
 
   const fetchRequests = async () => {
@@ -302,13 +349,59 @@ export default function RequestsPage() {
             experience: parseInt(worker.experience) || 0,
             rating: worker.rating || 0,
             isAvailable: worker.isActive || false,
-            verificationStatus: worker.verificationStatus === 'verified' ? 'approved' : (worker.verificationStatus === 'rejected' ? 'rejected' : 'pending'),
-            documents: worker.documents ? Object.entries(worker.documents).map(([name, url]: [string, any]) => ({
-              name,
-              type: url?.split('.').pop() || 'pdf',
-              url: url || '',
-              uploadedAt: worker.submittedAt || new Date().toISOString(),
-            })) : [],
+            verificationStatus: (() => {
+              // Check category verification status first (new system)
+              if (worker.categoryVerificationStatus && Object.keys(worker.categoryVerificationStatus).length > 0) {
+                const categoryStatuses = Object.values(worker.categoryVerificationStatus);
+                if (categoryStatuses.every((s: any) => s === 'verified')) return 'approved';
+                if (categoryStatuses.some((s: any) => s === 'rejected')) return 'rejected';
+                return 'pending';
+              }
+              // Fallback to general verification status
+              if (typeof worker.verificationStatus === 'object' && worker.verificationStatus !== null) {
+                const status = worker.verificationStatus as any;
+                return status.overall === 'verified' ? 'approved' : (status.overall === 'rejected' ? 'rejected' : 'pending');
+              }
+              return worker.verificationStatus === 'verified' ? 'approved' : (worker.verificationStatus === 'rejected' ? 'rejected' : 'pending');
+            })(),
+            documents: (() => {
+              const docs: any[] = [];
+              // Add general documents
+              if (worker.documents) {
+                Object.entries(worker.documents).forEach(([name, url]: [string, any]) => {
+                  if (url) {
+                    docs.push({
+                      name: name.replace(/([A-Z])/g, ' $1').trim(),
+                      type: url?.toString().split('.').pop() || 'pdf',
+                      url: url || '',
+                      uploadedAt: worker.submittedAt || new Date().toISOString(),
+                    });
+                  }
+                });
+              }
+              // Add category documents
+              if (worker.categoryDocuments) {
+                Object.entries(worker.categoryDocuments).forEach(([category, catDocs]: [string, any]) => {
+                  if (catDocs?.skillProof) {
+                    docs.push({
+                      name: `${category} - Service Certificate`,
+                      type: catDocs.skillProof?.toString().split('.').pop() || 'pdf',
+                      url: catDocs.skillProof || '',
+                      uploadedAt: worker.submittedAt || new Date().toISOString(),
+                    });
+                  }
+                  if (catDocs?.experience) {
+                    docs.push({
+                      name: `${category} - Experience Certificate`,
+                      type: catDocs.experience?.toString().split('.').pop() || 'pdf',
+                      url: catDocs.experience || '',
+                      uploadedAt: worker.submittedAt || new Date().toISOString(),
+                    });
+                  }
+                });
+              }
+              return docs;
+            })(),
             personalInfo: {
               address: '',
               city: worker.currentLocation?.city || '',
@@ -345,37 +438,109 @@ export default function RequestsPage() {
 
   const handleVerifyRequest = async (requestId: string, action: 'approve' | 'reject') => {
     try {
-      // Update request status
-      setRequests(prev => prev.map(request => 
-        request._id === requestId 
-          ? { 
-              ...request, 
-              verificationStatus: action === 'approve' ? 'approved' : 'rejected',
-              updatedAt: new Date().toISOString()
-            }
-          : request
-      ));
-
-      // Close modal if open
-      if (selectedRequest?._id === requestId) {
-        setSelectedRequest(null);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const status = action === 'approve' ? 'verified' : 'rejected';
+      
+      // Find the request to get worker details
+      const request = requests.find(r => r._id === requestId);
+      if (!request) {
+        alert('Request not found');
+        return;
       }
 
-      // Try to sync with backend
+      // Try to update worker verification status
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-        const status = action === 'approve' ? 'verified' : 'rejected';
-        await fetch(`${apiUrl}/api/workers/${requestId}/status`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status }),
-        });
-        console.log(`Request ${action}d successfully`);
-      } catch (backendError) {
-        console.warn('Backend sync failed, but action completed locally:', backendError);
+        // First, try to get the worker to check their document structure
+        const workerResponse = await fetch(`${apiUrl}/api/admin/workers`);
+        if (workerResponse.ok) {
+          const workers = await workerResponse.json();
+          const worker = workers.find((w: any) => w._id === requestId);
+          
+          if (worker) {
+            // Check if worker has category documents (new system)
+            if (worker.categoryDocuments && Object.keys(worker.categoryDocuments).length > 0) {
+              // Verify the first category
+              const firstCategory = Object.keys(worker.categoryDocuments)[0];
+              const categoryResponse = await fetch(`${apiUrl}/api/admin/verify-category`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  workerId: requestId,
+                  category: firstCategory,
+                  status,
+                  rejectionReason: action === 'reject' ? 'Request rejected by admin' : undefined,
+                }),
+              });
+
+              if (categoryResponse.ok) {
+                console.log(`✅ Category ${firstCategory} ${action}d successfully`);
+                await fetchRequests();
+                if (selectedRequest?._id === requestId) {
+                  setSelectedRequest(null);
+                }
+                alert(`Request ${action === 'approve' ? 'approved' : 'rejected'} successfully!`);
+                return;
+              }
+            }
+            
+            // Fallback: Update overall verification status via verify-document
+            // Update all document types to the same status
+            const documentTypes = ['profilePhoto', 'certificate', 'citizenship', 'license'];
+            let updateSuccess = false;
+            
+            for (const docType of documentTypes) {
+              try {
+                const docResponse = await fetch(`${apiUrl}/api/admin/verify-document`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    workerId: requestId,
+                    documentType: docType,
+                    status,
+                  }),
+                });
+                
+                if (docResponse.ok) {
+                  updateSuccess = true;
+                }
+              } catch (e) {
+                console.warn(`Failed to update ${docType}:`, e);
+              }
+            }
+            
+            if (updateSuccess) {
+              console.log(`✅ Request ${action}d successfully`);
+              await fetchRequests();
+              if (selectedRequest?._id === requestId) {
+                setSelectedRequest(null);
+              }
+              alert(`Request ${action === 'approve' ? 'approved' : 'rejected'} successfully!`);
+              return;
+            }
+          }
+        }
+        
+        // If all else fails, show error
+        throw new Error('Could not update worker verification status');
+      } catch (backendError: any) {
+        console.error('Error updating request verification:', backendError);
+        
+        // Fallback: Update local state
+        setRequests(prev => prev.map(r => 
+          r._id === requestId 
+            ? { 
+                ...r, 
+                verificationStatus: action === 'approve' ? 'approved' : 'rejected',
+                updatedAt: new Date().toISOString()
+              }
+            : r
+        ));
+        
+        alert(`Request ${action}d locally, but could not sync with backend. Please refresh the page.`);
       }
     } catch (error) {
       console.error('Error updating request verification:', error);
+      alert('Failed to update request. Please try again.');
     }
   };
 
