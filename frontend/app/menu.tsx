@@ -1,4 +1,4 @@
-import { SafeAreaView, StyleSheet, View, Pressable } from 'react-native';
+import { SafeAreaView, StyleSheet, View, Pressable, TouchableOpacity } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -37,9 +37,12 @@ export default function MenuScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
-          <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={28} color="#fff" />
-          </Pressable>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
           <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Menu</ThemedText>
           <View style={{ width: 40 }} />
         </View>
@@ -82,10 +85,10 @@ export default function MenuScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   safe: { flex: 1 },
-  backBtn: {
+  backButton: {
     padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 20,
+    marginLeft: -8,
+    marginRight: 4,
   },
   header: {
     flexDirection: 'row',
