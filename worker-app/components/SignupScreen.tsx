@@ -118,6 +118,30 @@ export default function SignupScreen({ onSignupSuccess, onSwitchToLogin }: Signu
     setLoading(true);
 
     try {
+      // Extract service categories from skills
+      // Known service categories that match common skill names
+      const knownServiceCategories = [
+        'Plumber', 'Electrician', 'Carpenter', 'Cleaner', 'Mechanic', 
+        'AC Repair', 'Painter', 'Mason', 'Cook', 'Driver', 'Security', 
+        'Beautician', 'Technician', 'Delivery', 'Gardener'
+      ];
+      
+      const skillsArray = skills.split(',').map(skill => skill.trim()).filter(skill => skill);
+      const serviceCategories: string[] = [];
+      
+      // Check if any skill matches a known service category (case-insensitive)
+      skillsArray.forEach(skill => {
+        const matchedCategory = knownServiceCategories.find(
+          category => category.toLowerCase() === skill.toLowerCase()
+        );
+        if (matchedCategory && !serviceCategories.includes(matchedCategory)) {
+          serviceCategories.push(matchedCategory);
+        }
+      });
+      
+      console.log('📋 Signup - Skills:', skillsArray);
+      console.log('📋 Signup - Extracted serviceCategories:', serviceCategories);
+
       const apiUrl = getApiUrl();
       const response = await fetch(`${apiUrl}/api/workers/register`, {
         method: 'POST',
@@ -129,7 +153,8 @@ export default function SignupScreen({ onSignupSuccess, onSwitchToLogin }: Signu
           email,
           phone,
           password,
-          skills: skills.split(',').map(skill => skill.trim()).filter(skill => skill),
+          skills: skillsArray,
+          serviceCategories: serviceCategories, // Send service categories to backend
         }),
       });
 
