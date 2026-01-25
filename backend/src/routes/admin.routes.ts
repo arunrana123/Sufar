@@ -318,14 +318,21 @@ router.post('/verify-category', async (req, res) => {
     // Emit Socket.IO event
     const io = getIO(req);
     if (io) {
-      io.emit('category:verification:updated', {
+      const updateData = {
         workerId: String(workerId),
         category,
         status,
         rejectionReason: status === 'rejected' ? rejectionReason : undefined,
         timestamp: new Date().toISOString(),
-      });
-      console.log(`📢 Category verification updated event emitted: ${category} ${status}`);
+      };
+      
+      // Emit to specific worker room for targeted delivery (workers join their userId room)
+      io.to(String(workerId)).emit('category:verification:updated', updateData);
+      
+      // Emit globally for admin dashboard and other clients
+      io.emit('category:verification:updated', updateData);
+      
+      console.log(`📢 Category verification updated event emitted: ${category} ${status} to worker ${workerId}`);
     }
 
     res.json({
