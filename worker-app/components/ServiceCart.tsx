@@ -29,6 +29,9 @@ export default function ServiceCart({
   onRemoveService,
   onAddService,
 }: ServiceCartProps) {
+  // Debug log
+  console.log('📦 ServiceCart rendered with services:', services.length, 'Services:', services.map(s => ({ name: s.name, category: s.category })));
+  
   const getCategoryIcon = (category: string) => {
     const icons: {[key: string]: string} = {
       'Plumber': 'water',
@@ -97,6 +100,7 @@ export default function ServiceCart({
           </TouchableOpacity>
         </View>
       ) : (
+        <>
         <ScrollView style={styles.servicesList} showsVerticalScrollIndicator={false}>
           {Object.entries(groupedServices).map(([category, categoryServices]) => (
             <View key={category} style={styles.categoryGroup}>
@@ -132,9 +136,28 @@ export default function ServiceCart({
             </View>
           ))}
         </ScrollView>
+        {/* Add Service Button - Shows below services list */}
+        <TouchableOpacity style={styles.addServiceButton} onPress={onAddService}>
+          <Ionicons name="add-circle-outline" size={20} color="#FF7A2C" />
+          <Text style={styles.addServiceButtonText}>
+            {services.length === 1 
+              ? 'Add Your Second Service' 
+              : services.length === 2
+              ? 'Add Your Third Service'
+              : `Add Your ${getOrdinalNumber(services.length + 1)} Service`}
+          </Text>
+        </TouchableOpacity>
+        </>
       )}
     </View>
   );
+}
+
+// Helper function to get ordinal number (1st, 2nd, 3rd, 4th, etc.)
+const getOrdinalNumber = (num: number): string => {
+  const suffix = ['th', 'st', 'nd', 'rd'];
+  const v = num % 100;
+  return num + (suffix[(v - 20) % 10] || suffix[v] || suffix[0]);
 }
 
 const styles = StyleSheet.create({
@@ -221,6 +244,27 @@ const styles = StyleSheet.create({
   },
   servicesList: {
     maxHeight: 300,
+  },
+  addServiceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginTop: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: '#FFF5F0',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FF7A2C',
+    borderStyle: 'dashed',
+  },
+  addServiceButtonText: {
+    color: '#FF7A2C',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 8,
   },
   categoryGroup: {
     marginBottom: 16,
