@@ -1,4 +1,5 @@
 import { Platform, Alert } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { getApiUrl } from './config';
 
 /**
@@ -19,7 +20,24 @@ interface RequestOptions extends RequestInit {
 }
 
 /**
+ * Check if device has network connectivity
+ */
+export const checkNetworkConnectivity = async (): Promise<{ connected: boolean; type: string }> => {
+  try {
+    const state = await NetInfo.fetch();
+    return {
+      connected: state.isConnected ?? false,
+      type: state.type || 'unknown',
+    };
+  } catch (error) {
+    console.log('⚠️ Network connectivity check failed:', error);
+    return { connected: false, type: 'unknown' };
+  }
+};
+
+/**
  * Check if server is reachable before making requests
+ * Made more lenient - shorter timeout and doesn't block if it fails
  */
 export const checkServerHealth = async (apiUrl?: string): Promise<boolean> => {
   const url = apiUrl || getApiUrl();
@@ -28,18 +46,24 @@ export const checkServerHealth = async (apiUrl?: string): Promise<boolean> => {
   
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout for health check
+    // Reduced timeout to 3 seconds - don't wait too long
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
     
     const response = await fetch(healthEndpoint, {
       method: 'GET',
       signal: controller.signal,
       cache: 'no-cache',
+      // Add timeout headers for Android
+      headers: {
+        'Connection': 'close',
+      },
     });
     
     clearTimeout(timeoutId);
     // Any response (even 404) means server is reachable
     return response.status < 500; // 2xx, 3xx, 4xx all mean server responded
   } catch (error: any) {
+    // Don't log as error - health check failure is expected if server is down
     console.log('⚠️ Server health check failed:', error.message || error);
     return false;
   }
@@ -54,6 +78,7 @@ const sleep = (ms: number): Promise<void> => {
 
 /**
  * Robust fetch with automatic retry and exponential backoff
+ * Enhanced for Android network issues
  */
 export const robustFetch = async (
   url: string,
@@ -79,12 +104,55 @@ export const robustFetch = async (
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-      const response = await fetch(url, {
+      // Enhanced fetch options for Android compatibility
+      const existingHeaders = options.headers || {};
+      const headersObj = typeof existingHeaders === 'object' && !Array.isArray(existingHeaders) && !(existingHeaders instanceof Headers)
+        ? existingHeaders as Record<string, string>
+        : {};
+      
+      const fetchOptions: RequestInit = {
         ...options,
         signal: controller.signal,
         cache: 'no-cache',
         credentials: 'omit',
-      });
+        // Add headers for better Android compatibility
+        headers: {
+          ...headersObj,
+          'Connection': 'close',
+          'Accept': 'application/json',
+          'Content-Type': headersObj['Content-Type'] || 'application/json',
+          // Android-specific headers
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+        },
+      };
+
+      // Try fetch with enhanced options
+      let response: Response;
+      try {
+        response = await fetch(url, fetchOptions);
+      } catch (fetchError: any) {
+        // On Android, sometimes fetch fails with TypeError
+        // Try one more time with minimal options
+        if (Platform.OS === 'android' && attempt < maxRetries && (
+          fetchError.name === 'TypeError' || 
+          fetchError.message?.includes('Network request failed')
+        )) {
+          console.log('⚠️ Android fetch failed, retrying with minimal options...');
+          const minimalOptions: RequestInit = {
+            method: options.method || 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: options.body,
+            signal: controller.signal,
+          };
+          response = await fetch(url, minimalOptions);
+        } else {
+          throw fetchError;
+        }
+      }
 
       clearTimeout(timeoutId);
 
@@ -123,6 +191,8 @@ export const robustFetch = async (
       // Retry on network errors with exponential backoff
       if (
         error.message?.includes('Network request failed') ||
+        error.message?.includes('Failed to connect') ||
+        error.message?.includes('Unable to resolve host') ||
         error.name === 'TypeError' ||
         error.name === 'AbortError'
       ) {
@@ -144,6 +214,7 @@ export const robustFetch = async (
 
 /**
  * Login-specific fetch with enhanced error handling
+ * Made more robust for connection issues with network connectivity checks
  */
 export const loginRequest = async (
   endpoint: string,
@@ -152,17 +223,32 @@ export const loginRequest = async (
 ): Promise<Response> => {
   const url = apiUrl || getApiUrl();
   const fullUrl = `${url}${endpoint}`;
-  const maxRetries = 3;
+  const maxRetries = 4; // Increased retries for login
+  const serverIP = url.split('://')[1]?.split(':')[0] || 'unknown';
 
-  // First, check server health (quick check, don't block if it fails)
-  console.log('🏥 Checking server health...');
-  const isHealthy = await checkServerHealth(url);
-  if (!isHealthy) {
-    console.warn('⚠️ Server health check failed - server may not be running or reachable');
-    console.warn('   Proceeding with login attempt anyway (will retry automatically)...');
+  // Check network connectivity (non-blocking - don't fail if check is wrong)
+  console.log('📶 Checking network connectivity...');
+  const networkStatus = await checkNetworkConnectivity();
+  
+  if (!networkStatus.connected) {
+    console.warn('⚠️ Network check reports no connection, but proceeding anyway (check may be incorrect)');
+    // Don't throw error - NetInfo can be wrong, let the actual fetch determine if connection exists
   } else {
-    console.log('✅ Server health check passed');
+    console.log(`✅ Network connected (${networkStatus.type})`);
   }
+
+  // Check server health in parallel (non-blocking) - don't wait for it
+  console.log('🏥 Checking server health (non-blocking)...');
+  checkServerHealth(url).then(isHealthy => {
+    if (isHealthy) {
+      console.log('✅ Server health check passed');
+    } else {
+      console.warn('⚠️ Server health check failed - proceeding with login attempt anyway');
+    }
+  }).catch(() => {
+    // Ignore health check errors - proceed with login
+    console.warn('⚠️ Server health check error - proceeding with login attempt');
+  });
 
   try {
     const response = await robustFetch(fullUrl, {
@@ -174,37 +260,48 @@ export const loginRequest = async (
       body: JSON.stringify(body),
       retry: {
         maxRetries: maxRetries,
-        initialDelay: 1000,
-        maxDelay: 8000,
+        initialDelay: 1500, // Slightly longer initial delay
+        maxDelay: 10000,
         backoffMultiplier: 2,
-        timeout: 30000,
+        timeout: 35000, // Increased timeout for login (35 seconds)
       },
     });
 
     return response;
   } catch (error: any) {
     // Enhanced error handling for login
-    const serverIP = url.split('://')[1]?.split(':')[0] || 'unknown';
     const isAndroid = Platform.OS === 'android';
     const appName = 'worker-app';
 
     // Check if it's a timeout error
     if (error.message?.includes('timeout') || error.name === 'AbortError' || error.message?.includes('timeout after')) {
       throw new Error(
-        `⏱️ Connection Timeout\n\nAll ${maxRetries + 1} attempts timed out.\n\n🔍 Troubleshooting:\n\n1️⃣ Check if backend is running:\n   cd backend\n   bun run dev\n   (Should show: "Server running on port 5001")\n\n2️⃣ Test in phone browser:\n   Open: http://${serverIP}:5001/health\n   (Should show JSON response)\n\n3️⃣ Network checks:\n   • Device and computer on same WiFi\n   • Computer IP is ${serverIP}\n   • Firewall allows port 5001\n   • Try restarting backend server`
+        `⏱️ Connection Timeout\n\nAll ${maxRetries + 1} attempts timed out.\n\n🔍 Quick Fix:\n\n1️⃣ Make sure backend is running:\n   cd backend && bun run dev\n\n2️⃣ Test in phone browser:\n   http://${serverIP}:5001/health\n\n3️⃣ Check network:\n   • Same WiFi network\n   • IP: ${serverIP}\n   • Port 5001 open`
       );
     }
 
     // Check if it's a network error
-    if (error.message?.includes('Network request failed') || error.name === 'TypeError' || error.message?.includes('Cannot connect')) {
+    if (
+      error.message?.includes('Network request failed') || 
+      error.message?.includes('Failed to connect') ||
+      error.message?.includes('Unable to resolve host') ||
+      error.name === 'TypeError' || 
+      error.message?.includes('Cannot connect')
+    ) {
+      // Try to get more diagnostic info
+      const networkInfo = await checkNetworkConnectivity();
+      const networkInfoText = networkInfo.connected 
+        ? `Network: Connected (${networkInfo.type})` 
+        : `Network: Not Connected`;
+
       const suggestions = isAndroid
-        ? `🔴 Connection Failed After ${maxRetries + 1} Retries\n\n📋 Step-by-Step Fix:\n\n1️⃣ Start Backend Server:\n   cd backend\n   bun run dev\n   (Wait for: "Server running on port 5001")\n\n2️⃣ Test Server in Phone Browser:\n   Open: http://${serverIP}:5001/health\n   (If this fails, server is not reachable)\n\n3️⃣ Rebuild App (if needed):\n   cd ${appName}\n   bunx expo prebuild --clean\n   bunx expo run:android\n\n4️⃣ Verify Network:\n   • Device and computer on same WiFi\n   • Computer IP is ${serverIP}\n   • Firewall allows port 5001\n   • Backend terminal shows no errors`
-        : `🔴 Connection Failed After ${maxRetries + 1} Retries\n\n📋 Step-by-Step Fix:\n\n1️⃣ Start Backend Server:\n   cd backend\n   bun run dev\n   (Wait for: "Server running on port 5001")\n\n2️⃣ Test Server in Phone Browser:\n   Open: http://${serverIP}:5001/health\n   (If this fails, server is not reachable)\n\n3️⃣ Verify Network:\n   • Device and computer on same network\n   • Computer IP is ${serverIP}\n   • Firewall allows port 5001\n   • Backend terminal shows no errors`;
+        ? `🔴 Cannot Connect to Server\n\n${networkInfoText}\n\n📋 Fix Steps:\n\n1️⃣ Start Backend Server:\n   cd backend\n   bun run dev\n   (Wait for "Server running on port 5001")\n\n2️⃣ Test in Phone Browser:\n   Open: http://${serverIP}:5001/health\n   (Must show JSON response)\n\n3️⃣ If Browser Test Fails:\n   • Check WiFi: Device & PC same network\n   • Verify IP: ${serverIP}\n   • Check firewall: Allow port 5001\n   • Restart backend server\n\n4️⃣ If Browser Test Works:\n   • App may need rebuild\n   • Try: cd ${appName} && bunx expo prebuild --clean`
+        : `🔴 Cannot Connect to Server\n\n${networkInfoText}\n\n📋 Fix Steps:\n\n1️⃣ Start Backend Server:\n   cd backend\n   bun run dev\n   (Wait for "Server running on port 5001")\n\n2️⃣ Test in Phone Browser:\n   Open: http://${serverIP}:5001/health\n   (Must show JSON response)\n\n3️⃣ If Browser Test Fails:\n   • Check network: Device & PC same network\n   • Verify IP: ${serverIP}\n   • Check firewall: Allow port 5001\n   • Restart backend server`;
 
       throw new Error(`Cannot connect to server at ${url}\n\n${suggestions}`);
     }
 
-    // Generic error
+    // Generic error - preserve original message
     throw error;
   }
 };
