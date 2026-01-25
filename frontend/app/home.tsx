@@ -45,7 +45,7 @@ export default function HomeScreen() {
     } else {
       setProfileImage(null);
     }
-  }, [user?.profilePhoto]);
+  }, [user?.profilePhoto, user?.firstName, user?.lastName, user?.email]);
 
   // Updates profile image when user changes or re-authenticates
   // Triggered by: User ID change or profile photo update
@@ -93,7 +93,7 @@ export default function HomeScreen() {
       };
       
       updateLocation();
-    }, [selectedLocation])
+    }, [selectedLocation, user])
   );
 
   const locations = AVAILABLE_LOCATIONS;
