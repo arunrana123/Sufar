@@ -5,6 +5,7 @@
 
 import { Platform } from 'react-native';
 import { notificationSoundService } from './NotificationSoundService';
+import { settingsService } from './SettingsService';
 
 // expo-notifications was removed from Expo Go in SDK 53
 // We'll skip push notifications and use NotificationSoundService for local sounds instead
@@ -194,14 +195,33 @@ class PushNotificationService {
   }
 
   /**
-   * Schedule a local notification
+   * Schedule a local notification (respects user settings)
    */
   public async scheduleLocalNotification(
     title: string,
     body: string,
     data?: any,
-    sound: boolean = true
+    sound: boolean = true,
+    workerId?: string
   ) {
+    // Check settings if workerId is provided
+    if (workerId) {
+      const notificationType = data?.type || 'general';
+      const shouldShow = await settingsService.shouldShowNotification(
+        workerId,
+        notificationType === 'booking' || notificationType === 'job' ? 'booking' :
+        notificationType === 'message' ? 'message' : 'general'
+      );
+      
+      if (!shouldShow) {
+        return; // Don't show notification if disabled in settings
+      }
+      
+      // Check if sound should play
+      const shouldPlaySound = await settingsService.shouldPlaySound(workerId);
+      sound = sound && shouldPlaySound;
+    }
+
     // Try to load notifications module if not already loaded
     if (!Notifications) {
       Notifications = loadNotificationsModule();
@@ -269,9 +289,9 @@ export const pushNotificationService = {
     if (!_instance) _instance = PushNotificationService.getInstance();
     return _instance.registerForPushNotifications();
   },
-  scheduleLocalNotification: async (title: string, body: string, data?: any, sound: boolean = true) => {
+  scheduleLocalNotification: async (title: string, body: string, data?: any, sound: boolean = true, workerId?: string) => {
     if (!_instance) _instance = PushNotificationService.getInstance();
-    return _instance.scheduleLocalNotification(title, body, data, sound);
+    return _instance.scheduleLocalNotification(title, body, data, sound, workerId);
   },
   cancelAllNotifications: async () => {
     if (!_instance) _instance = PushNotificationService.getInstance();
