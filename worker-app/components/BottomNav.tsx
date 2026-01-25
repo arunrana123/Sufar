@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Modal } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Modal, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, usePathname, useSegments } from 'expo-router';
 import QRGenerator from './QRGenerator';
+import { useAuth } from '@/contexts/AuthContext';
+import { isFullyVerified } from '@/lib/permissions';
 
 export default function BottomNav() {
   const pathname = usePathname();
   const segments = useSegments();
   const [showQRModal, setShowQRModal] = useState(false);
+  const { worker } = useAuth();
 
   // Debug: Log pathname and segments to see what we're getting
   useEffect(() => {
@@ -111,11 +114,36 @@ export default function BottomNav() {
           const active = isActive(item);
           
           if (item.isQR) {
+            // Check if worker is verified before allowing QR access
+            const handleQRPress = () => {
+              // Check if worker is fully verified (overall + has verified services)
+              const fullyVerified = isFullyVerified(worker);
+              
+              if (!fullyVerified) {
+                Alert.alert(
+                  'Verification Required',
+                  'Please verify the required documents first. Once you submit your documents and get verified by admin, you will be ready to go and can access your QR code.',
+                  [
+                    { 
+                      text: 'Go to Verification', 
+                      onPress: () => router.push('/document-verification'),
+                      style: 'default'
+                    },
+                    { text: 'OK', style: 'cancel' }
+                  ]
+                );
+                return;
+              }
+              
+              // Worker is verified, show QR code
+              setShowQRModal(true);
+            };
+            
             return (
               <TouchableOpacity
                 key={item.key}
                 style={styles.qrNavItem}
-                onPress={() => setShowQRModal(true)}
+                onPress={handleQRPress}
               >
                 <View style={styles.qrIconContainer}>
                   <Ionicons name={item.icon as any} size={28} color="#fff" />
