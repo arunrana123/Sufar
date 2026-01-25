@@ -27,6 +27,9 @@ export interface IBooking extends Document {
   userConfirmedPayment?: boolean;
   workerConfirmedPayment?: boolean;
   paymentConfirmedAt?: Date;
+  rewardPointsUsed?: number;
+  discountAmount?: number;
+  finalAmount?: number;
   rating?: number;
   review?: string;
   workerNotes?: string;
@@ -75,6 +78,9 @@ const BookingSchema: Schema = new Schema({
   userConfirmedPayment: { type: Boolean, default: false },
   workerConfirmedPayment: { type: Boolean, default: false },
   paymentConfirmedAt: { type: Date },
+  rewardPointsUsed: { type: Number, default: 0 },
+  discountAmount: { type: Number, default: 0 },
+  finalAmount: { type: Number },
   rating: { type: Number, min: 1, max: 5 },
   review: { type: String },
   workerNotes: { type: String },
