@@ -439,6 +439,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
           ? new mongoose.Types.ObjectId(booking.userId)
           : booking.userId;
 
+        // Create notification for USER (customer)
         userNotification = await Notification.create({
           userId: userObjectId,
           title: 'Service Completed',
@@ -452,12 +453,38 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
             status: 'completed',
           },
         });
-        console.log('✅ Work completed notification created:', userNotification._id);
+        console.log('✅ Work completed notification created for user:', userNotification._id);
         
-        // Set worker status back to 'available' and update completedJobs count
+        // Create notification for WORKER who completed the job
         if (booking.workerId) {
           try {
             const workerId = typeof booking.workerId === 'object' ? (booking.workerId as any)._id : booking.workerId;
+            const workerObjectId = typeof workerId === 'string' 
+              ? new mongoose.Types.ObjectId(workerId)
+              : workerId;
+
+            // Create notification for worker
+            const workerNotif = await Notification.create({
+              userId: workerObjectId, // Worker ID stored in userId field
+              title: 'Job Completed',
+              message: `You have successfully completed the ${booking.serviceName} job. Great work!`,
+              type: 'job',
+              isRead: false,
+              data: {
+                bookingId: booking._id,
+                serviceName: booking.serviceName,
+                workerId: workerId,
+                status: 'completed',
+              },
+            });
+            console.log('✅ Job completed notification created for worker:', workerNotif._id);
+
+            // Emit notification to worker
+            if (io) {
+              io.to(String(workerId)).emit('notification:new', workerNotif.toObject());
+              io.to('worker').emit('notification:new', workerNotif.toObject());
+              console.log('✅ Job completed notification sent to worker:', workerId);
+            }
             
             // Count actual completed bookings for this worker
             const completedBookingsCount = await Booking.countDocuments({
@@ -489,7 +516,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
               rating: Math.round(avgRating * 10) / 10,
             });
           } catch (workerStatusError) {
-            console.error('⚠️ Error updating worker stats:', workerStatusError);
+            console.error('⚠️ Error updating worker stats or creating notification:', workerStatusError);
           }
         }
       }
@@ -1006,17 +1033,19 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
     await booking.populate('userId', 'firstName lastName profilePhoto');
     await booking.populate('workerId', 'name phone email currentLocation.coordinates');
 
-    // Create notification for USER (customer) only - NOT for worker
+    // Create notifications for both USER (customer) and WORKER
     const io = req.app.get('io');
     let userNotification = null;
+    let workerNotification = null;
 
-    // IMPORTANT: Create notification FIRST before emitting socket events
+    // IMPORTANT: Create notifications FIRST before emitting socket events
     try {
       // Ensure userId is in correct format (ObjectId)
       const userObjectId = typeof booking.userId === 'string' 
         ? new mongoose.Types.ObjectId(booking.userId)
         : booking.userId;
 
+      // Create notification for USER (customer)
       userNotification = await Notification.create({
         userId: userObjectId, // This is the USER (customer), not worker
         title: 'Booking Accepted',
@@ -1035,8 +1064,34 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
         userId: userObjectId,
         message: userNotification.message,
       });
+
+      // Create notification for WORKER who accepted the booking
+      if (workerId) {
+        const workerObjectId = typeof workerId === 'string' 
+          ? new mongoose.Types.ObjectId(workerId)
+          : workerId;
+
+        workerNotification = await Notification.create({
+          userId: workerObjectId, // Worker ID stored in userId field
+          title: 'Job Request Accepted',
+          message: `You have accepted a ${booking.serviceName} booking. Navigate to the location to start.`,
+          type: 'job',
+          isRead: false,
+          data: {
+            bookingId: booking._id,
+            serviceName: booking.serviceName,
+            workerId: workerId,
+            status: 'accepted',
+          },
+        });
+        console.log('✅ Worker notification created successfully:', {
+          notificationId: workerNotification._id,
+          workerId: workerObjectId,
+          message: workerNotification.message,
+        });
+      }
     } catch (notifError) {
-      console.error('⚠️ Error creating user notification:', notifError);
+      console.error('⚠️ Error creating notifications:', notifError);
       // Continue even if notification creation fails - still emit socket events
     }
 
@@ -1089,6 +1144,20 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
         }
       } else {
         console.warn('⚠️ No notification object to send - notification creation may have failed');
+      }
+
+      // Send notification:new event to worker who accepted the booking
+      if (workerNotification && booking.workerId) {
+        const workerNotificationData = workerNotification.toObject();
+        console.log('📬 Sending notification:new to worker:', booking.workerId);
+        
+        // Emit to worker's specific room
+        io.to(String(booking.workerId)).emit('notification:new', workerNotificationData);
+        console.log('✅ notification:new event emitted to worker room:', booking.workerId);
+        
+        // Also emit to 'worker' room as backup
+        io.to('worker').emit('notification:new', workerNotificationData);
+        console.log('✅ notification:new event also emitted to worker room (backup)');
       }
 
       // SECOND: Send booking:accepted event (for live tracking updates)
