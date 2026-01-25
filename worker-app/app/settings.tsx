@@ -10,15 +10,25 @@ import {
   Switch,
   SafeAreaView,
   Alert,
+  Vibration,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { getApiUrl } from '@/lib/config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import LocationService from '@/lib/LocationService';
+import MockLocationService from '@/lib/MockLocationService';
+import { notificationSoundService } from '@/lib/NotificationSoundService';
+import { pushNotificationService } from '@/lib/PushNotificationService';
+import { settingsService } from '@/lib/SettingsService';
 
 export default function SettingsScreen() {
   const { worker } = useAuth();
+  
+  // Location services
+  const locationService = LocationService.getInstance();
+  const mockLocationService = MockLocationService.getInstance();
   
   // Settings state
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
@@ -36,28 +46,47 @@ export default function SettingsScreen() {
   // Load saved settings
   useEffect(() => {
     loadSettings();
-  }, []);
+    
+    // Periodic refresh of location tracking status (every 5 seconds)
+    const intervalId = setInterval(() => {
+      if (worker?.id) {
+        const isTracking = locationService.isLocationTracking() || mockLocationService.isLocationTracking();
+        setLocationTracking(isTracking);
+      }
+    }, 5000);
+    
+    return () => clearInterval(intervalId);
+  }, [worker?.id]);
 
   const loadSettings = async () => {
     try {
-      const settings = await AsyncStorage.getItem(`worker_settings_${worker?.id}`);
+      if (!worker?.id) return;
+      
+      // Load from settings service
+      const settings = await settingsService.loadSettings(worker.id);
       if (settings) {
-        const parsed = JSON.parse(settings);
-        setNotificationsEnabled(parsed.notificationsEnabled ?? true);
-        setSoundEnabled(parsed.soundEnabled ?? true);
-        setVibrationEnabled(parsed.vibrationEnabled ?? true);
-        setLocationTracking(parsed.locationTracking ?? true);
-        setAutoAccept(parsed.autoAccept ?? false);
-        setShowOnlineStatus(parsed.showOnlineStatus ?? true);
-        setLanguage(parsed.language || 'English');
-        setTheme(parsed.theme || 'Light');
+        setNotificationsEnabled(settings.notificationsEnabled ?? true);
+        setBookingNotifications(settings.bookingNotifications ?? true);
+        setMessageNotifications(settings.messageNotifications ?? true);
+        setSoundEnabled(settings.soundEnabled ?? true);
+        setVibrationEnabled(settings.vibrationEnabled ?? true);
+        setLocationTracking(settings.locationTracking ?? true);
+        setAutoAccept(settings.autoAccept ?? false);
+        setShowOnlineStatus(settings.showOnlineStatus ?? true);
+        setLanguage(settings.language || 'English');
+        setTheme(settings.theme || 'Light');
+        setPromotionalEmails(settings.promotionalEmails ?? false);
       }
+      
+      // Check actual location tracking status
+      const isTracking = locationService.isLocationTracking() || mockLocationService.isLocationTracking();
+      setLocationTracking(isTracking);
     } catch (error) {
       console.error('Error loading settings:', error);
     }
   };
 
-  const saveSettings = async () => {
+  const saveSettings = async (showAlert: boolean = false) => {
     try {
       const settings = {
         notificationsEnabled,
@@ -73,15 +102,174 @@ export default function SettingsScreen() {
         theme,
       };
       await AsyncStorage.setItem(`worker_settings_${worker?.id}`, JSON.stringify(settings));
-      Alert.alert('Success', 'Settings saved successfully');
+      
+      // Clear settings cache so it reloads
+      if (worker?.id) {
+        settingsService.clearCache(worker.id);
+      }
+      
+      // Also save to backend if worker ID exists
+      if (worker?.id) {
+        try {
+          const apiUrl = getApiUrl();
+          await fetch(`${apiUrl}/api/workers/${worker.id}/settings`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings),
+          }).catch(err => console.warn('Failed to sync settings to backend:', err));
+        } catch (err) {
+          console.warn('Backend sync failed, settings saved locally:', err);
+        }
+      }
+      
+      if (showAlert) {
+        Alert.alert('Success', 'Settings saved successfully');
+      }
     } catch (error) {
       console.error('Error saving settings:', error);
-      Alert.alert('Error', 'Failed to save settings');
+      if (showAlert) {
+        Alert.alert('Error', 'Failed to save settings');
+      }
     }
   };
 
+  // Auto-save when settings change
+  useEffect(() => {
+    if (worker?.id) {
+      saveSettings(false); // Auto-save without alert
+    }
+  }, [
+    notificationsEnabled,
+    bookingNotifications,
+    messageNotifications,
+    soundEnabled,
+    vibrationEnabled,
+    locationTracking,
+    promotionalEmails,
+    autoAccept,
+    showOnlineStatus,
+    language,
+    theme,
+  ]);
+
   const handleSave = () => {
-    saveSettings();
+    saveSettings(true); // Show alert on manual save
+  };
+
+  // Handle notification settings changes
+  const handleNotificationsToggle = (value: boolean) => {
+    setNotificationsEnabled(value);
+    if (!value) {
+      // Disable all notification types when main toggle is off
+      setBookingNotifications(false);
+      setMessageNotifications(false);
+      setSoundEnabled(false);
+      setVibrationEnabled(false);
+    }
+  };
+
+  // Handle location tracking toggle
+  const handleLocationTrackingToggle = async (value: boolean) => {
+    if (!worker?.id) {
+      Alert.alert('Error', 'Worker information not available');
+      return;
+    }
+
+    setLocationTracking(value);
+    
+    if (value) {
+      // Start location tracking
+      try {
+        locationService.setWorkerId(worker.id);
+        mockLocationService.setWorkerId(worker.id);
+        
+        let success = await locationService.startTracking();
+        if (!success) {
+          success = await mockLocationService.startTracking();
+        }
+        
+        if (success) {
+          // Update availability status to available
+          await locationService.updateAvailabilityStatus('available', worker.id) ||
+                 await mockLocationService.updateAvailabilityStatus('available', worker.id);
+          Alert.alert('Success', 'Location tracking enabled');
+        } else {
+          setLocationTracking(false);
+          Alert.alert('Error', 'Failed to start location tracking. Please check location permissions.');
+        }
+      } catch (error) {
+        console.error('Error starting location tracking:', error);
+        setLocationTracking(false);
+        Alert.alert('Error', 'Failed to enable location tracking');
+      }
+    } else {
+      // Stop location tracking
+      try {
+        locationService.stopTracking();
+        mockLocationService.stopTracking();
+        
+        // Update availability status to busy
+        await locationService.updateAvailabilityStatus('busy', worker.id) ||
+               await mockLocationService.updateAvailabilityStatus('busy', worker.id);
+        
+        Alert.alert('Success', 'Location tracking disabled');
+      } catch (error) {
+        console.error('Error stopping location tracking:', error);
+        Alert.alert('Error', 'Failed to disable location tracking');
+      }
+    }
+  };
+
+  // Handle sound toggle
+  const handleSoundToggle = (value: boolean) => {
+    setSoundEnabled(value);
+    if (value) {
+      // Test sound
+      notificationSoundService.playNotificationSound('booking', 'new');
+    }
+  };
+
+  // Handle vibration toggle
+  const handleVibrationToggle = (value: boolean) => {
+    setVibrationEnabled(value);
+    if (value) {
+      // Test vibration
+      Vibration.vibrate(200);
+    }
+  };
+
+  // Handle auto-accept toggle
+  const handleAutoAcceptToggle = (value: boolean) => {
+    setAutoAccept(value);
+    if (value) {
+      Alert.alert(
+        'Auto Accept Enabled',
+        'You will automatically accept all booking requests. You can disable this anytime.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
+  // Handle show online status toggle
+  const handleShowOnlineStatusToggle = async (value: boolean) => {
+    if (!worker?.id) {
+      Alert.alert('Error', 'Worker information not available');
+      return;
+    }
+
+    setShowOnlineStatus(value);
+    
+    // Update visibility in backend
+    try {
+      const apiUrl = getApiUrl();
+      await fetch(`${apiUrl}/api/workers/${worker.id}/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showOnlineStatus: value }),
+      }).catch(err => console.warn('Failed to update online status visibility:', err));
+    } catch (error) {
+      console.error('Error updating online status visibility:', error);
+    }
   };
 
   return (
@@ -118,7 +306,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={notificationsEnabled}
-                onValueChange={setNotificationsEnabled}
+                onValueChange={handleNotificationsToggle}
                 trackColor={{ false: '#E0E0E0', true: '#4CAF50' }}
                 thumbColor={notificationsEnabled ? '#fff' : '#f4f3f4'}
               />
@@ -168,7 +356,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={soundEnabled}
-                onValueChange={setSoundEnabled}
+                onValueChange={handleSoundToggle}
                 trackColor={{ false: '#E0E0E0', true: '#F3E5F5' }}
                 thumbColor={soundEnabled ? '#fff' : '#f4f3f4'}
                 disabled={!notificationsEnabled}
@@ -185,7 +373,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={vibrationEnabled}
-                onValueChange={setVibrationEnabled}
+                onValueChange={handleVibrationToggle}
                 trackColor={{ false: '#E0E0E0', true: '#EFEBE9' }}
                 thumbColor={vibrationEnabled ? '#fff' : '#f4f3f4'}
                 disabled={!notificationsEnabled}
@@ -207,7 +395,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={locationTracking}
-                onValueChange={setLocationTracking}
+                onValueChange={handleLocationTrackingToggle}
                 trackColor={{ false: '#E0E0E0', true: '#E8F5E8' }}
                 thumbColor={locationTracking ? '#2E7D32' : '#f4f3f4'}
               />
@@ -228,7 +416,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={autoAccept}
-                onValueChange={setAutoAccept}
+                onValueChange={handleAutoAcceptToggle}
                 trackColor={{ false: '#E0E0E0', true: '#4CAF50' }}
                 thumbColor={autoAccept ? '#fff' : '#f4f3f4'}
               />
@@ -244,7 +432,7 @@ export default function SettingsScreen() {
               </View>
               <Switch
                 value={showOnlineStatus}
-                onValueChange={setShowOnlineStatus}
+                onValueChange={handleShowOnlineStatusToggle}
                 trackColor={{ false: '#E0E0E0', true: '#4CAF50' }}
                 thumbColor={showOnlineStatus ? '#fff' : '#f4f3f4'}
               />
@@ -326,6 +514,25 @@ export default function SettingsScreen() {
             </View>
           </View>
 
+          {/* Security Settings */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Security</Text>
+            
+            <TouchableOpacity 
+              style={styles.settingItem}
+              onPress={() => router.push('/security')}
+            >
+              <View style={styles.settingLeft}>
+                <Ionicons name="shield-outline" size={22} color="#FF7A2C" />
+                <View style={styles.settingTextContainer}>
+                  <Text style={styles.settingTitle}>PIN & Biometric</Text>
+                  <Text style={styles.settingDescription}>Setup PIN and biometric authentication</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#999" />
+            </TouchableOpacity>
+          </View>
+
           {/* Account Actions */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Account</Text>
@@ -335,7 +542,7 @@ export default function SettingsScreen() {
               onPress={() => {
                 Alert.alert(
                   'Clear Cache',
-                  'This will clear all cached data. Continue?',
+                  'This will clear all cached data except your settings. Continue?',
                   [
                     { text: 'Cancel', style: 'cancel' },
                     {
@@ -343,9 +550,27 @@ export default function SettingsScreen() {
                       style: 'destructive',
                       onPress: async () => {
                         try {
+                          if (!worker?.id) {
+                            Alert.alert('Error', 'Worker information not available');
+                            return;
+                          }
+                          
+                          // Save current settings before clearing
+                          const settingsKey = `worker_settings_${worker.id}`;
+                          const currentSettings = await AsyncStorage.getItem(settingsKey);
+                          
+                          // Clear all cache
                           await AsyncStorage.clear();
-                          Alert.alert('Success', 'Cache cleared successfully');
+                          
+                          // Restore settings
+                          if (currentSettings) {
+                            await AsyncStorage.setItem(settingsKey, currentSettings);
+                            settingsService.clearCache(worker.id);
+                          }
+                          
+                          Alert.alert('Success', 'Cache cleared successfully. Your settings have been preserved.');
                         } catch (error) {
+                          console.error('Error clearing cache:', error);
                           Alert.alert('Error', 'Failed to clear cache');
                         }
                       },
