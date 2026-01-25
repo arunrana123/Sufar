@@ -21,7 +21,7 @@ import { canGoOnline, getVerificationMessage, checkWorkerPermission } from '@/li
 import { detectLocation, AVAILABLE_LOCATIONS } from '@/lib/LocationDetector';
 
 export default function HomeScreen() {
-  const { worker } = useAuth();
+  const { worker, updateWorker } = useAuth();
   const [selectedLocation, setSelectedLocation] = useState('Kathmandu');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -73,9 +73,10 @@ export default function HomeScreen() {
     
     try {
       const apiUrl = getApiUrl();
-      console.log('📡 Fetching worker services from:', `${apiUrl}/api/workers/${worker.id}`);
+      const url = `${apiUrl}/api/workers/${worker.id}`;
+      console.log('📡 Fetching worker services from:', url);
       
-      const response = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
+      const response = await fetch(url, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -84,40 +85,76 @@ export default function HomeScreen() {
 
       if (response.ok) {
         const workerData = await response.json();
-        console.log('📦 Worker data received:', {
+        console.log('📦 Worker data received from backend:', {
           id: workerData._id,
           name: workerData.name,
           serviceCategories: workerData.serviceCategories,
+          serviceCategoriesType: typeof workerData.serviceCategories,
+          serviceCategoriesLength: workerData.serviceCategories?.length || 0,
+          rawServiceCategories: JSON.stringify(workerData.serviceCategories),
         });
         
-        const serviceCategories = workerData.serviceCategories || [];
+        // Handle serviceCategories - could be array, string, or undefined
+        let serviceCategories: string[] = [];
+        if (Array.isArray(workerData.serviceCategories)) {
+          serviceCategories = workerData.serviceCategories
+            .filter((cat: any) => cat && String(cat).trim().length > 0)
+            .map((cat: any) => String(cat).trim());
+        } else if (typeof workerData.serviceCategories === 'string' && workerData.serviceCategories.trim().length > 0) {
+          serviceCategories = [workerData.serviceCategories.trim()];
+        }
+        
+        console.log('📋 Processed serviceCategories:', serviceCategories, 'Count:', serviceCategories.length);
         
         if (serviceCategories.length > 0) {
           // Convert all service categories to services format
           const allServices = serviceCategories.map((category: string, index: number) => ({
             id: `service-${category}-${index}-${Date.now()}`,
-            name: `${category} Service`,
+            name: category,
             category: category,
-            price: 0, // Default price, can be updated later
+            price: 0,
             priceType: 'hour' as const,
             description: `Professional ${category} services`,
           }));
           
-          setServices(allServices);
-          console.log('✅ Fetched and set services:', allServices.length, 'Services:', allServices.map((s: { category: string }) => s.category));
+          // FORCE update services - use new array to trigger re-render
+          console.log('✅ FORCED: Setting services from backend:', allServices.map((s: { category: string }) => s.category));
+          setServices([...allServices]); // Use spread to force new array reference
+          
+          // Always update worker context with latest serviceCategories from backend
+          if (worker) {
+            updateWorker({
+              ...worker,
+              serviceCategories: [...serviceCategories], // Use spread to force new array
+            } as any);
+            console.log('✅ Updated worker context with serviceCategories:', serviceCategories);
+          }
         } else {
           // No services registered yet
+          console.log('⚠️ WARNING: No services found in backend response!');
+          console.log('   Raw serviceCategories value:', workerData.serviceCategories);
+          console.log('   Type:', typeof workerData.serviceCategories);
+          console.log('   Full workerData:', JSON.stringify(workerData, null, 2));
           setServices([]);
-          console.log('ℹ️ No services registered yet - serviceCategories is empty');
+          
+          // Clear serviceCategories from context if backend says there are none
+          if (worker && worker.serviceCategories && worker.serviceCategories.length > 0) {
+            updateWorker({
+              ...worker,
+              serviceCategories: [],
+            } as any);
+          }
         }
       } else {
         const errorText = await response.text();
         console.error('❌ Failed to fetch worker services:', response.status, errorText);
-        setServices([]);
+        // Don't clear services on error, keep existing ones
+        console.log('⚠️ Keeping existing services due to fetch error');
       }
     } catch (error) {
       console.error('❌ Error fetching worker services:', error);
-      setServices([]);
+      // Don't clear services on error, keep existing ones
+      console.log('⚠️ Keeping existing services due to network error');
     }
   };
 
@@ -188,13 +225,145 @@ export default function HomeScreen() {
   // Triggered by: Worker ID changes or component mounts
   useEffect(() => {
     if (worker?.id) {
-      console.log('🔄 Worker ID detected, fetching services...');
+      console.log('🔄 Worker ID detected, fetching services...', {
+        workerId: worker.id,
+        hasServiceCategories: !!worker.serviceCategories,
+        serviceCategoriesCount: worker.serviceCategories?.length || 0,
+        serviceCategories: worker.serviceCategories,
+      });
+      
+      // FIRST: Use serviceCategories from context immediately for instant display
+      if (worker.serviceCategories && Array.isArray(worker.serviceCategories) && worker.serviceCategories.length > 0) {
+        console.log('📦 Setting services IMMEDIATELY from worker context:', worker.serviceCategories);
+        const immediateServices = worker.serviceCategories
+          .filter((cat: any) => cat && String(cat).trim().length > 0)
+          .map((category: string, index: number) => ({
+            id: `service-${category}-${index}-${Date.now()}`,
+            name: category,
+            category: category,
+            price: 0,
+            priceType: 'hour' as const,
+            description: `Professional ${category} services`,
+          }));
+        console.log('✅ IMMEDIATELY setting services from context:', immediateServices.length, 'services:', immediateServices.map(s => s.category));
+        // FORCE set services - this will trigger re-render
+        setServices([...immediateServices]);
+      } else {
+        console.log('⚠️ No serviceCategories in worker context, will fetch from backend');
+        // Still fetch to ensure we have latest data
+      }
+      
+      // THEN: Fetch from backend to get the latest data and update (always fetch)
       fetchWorkerServices();
     } else {
       console.log('⚠️ No worker ID, clearing services');
       setServices([]);
     }
   }, [worker?.id]);
+
+  // Monitor worker serviceCategories changes and update services immediately
+  useEffect(() => {
+    console.log('🔍 Monitoring worker serviceCategories:', {
+      hasWorker: !!worker,
+      hasServiceCategories: !!worker?.serviceCategories,
+      serviceCategoriesCount: worker?.serviceCategories?.length || 0,
+      serviceCategories: worker?.serviceCategories,
+      currentServicesCount: services.length,
+      currentServices: services.map(s => s.category),
+    });
+
+    if (worker?.serviceCategories && Array.isArray(worker.serviceCategories) && worker.serviceCategories.length > 0) {
+      console.log('📦 Worker context has serviceCategories, FORCING update services:', worker.serviceCategories);
+      // Convert service categories to services format - filter out empty values
+      const allServices = worker.serviceCategories
+        .filter((cat: any) => cat && String(cat).trim().length > 0)
+        .map((category: string, index: number) => ({
+          id: `service-${category}-${index}-${Date.now()}`,
+          name: category, // Use category name directly (e.g., "Plumber")
+          category: category,
+          price: 0,
+          priceType: 'hour' as const,
+          description: `Professional ${category} services`,
+        }));
+      
+      console.log('✅ FORCED update services from worker context:', allServices.length, 'Services:', allServices.map(s => s.category));
+      // Use spread operator to create new array reference and force re-render
+      setServices([...allServices]);
+    } else if (worker?.id && services.length === 0) {
+      // If no serviceCategories in context and no services displayed, fetch from backend
+      console.log('📡 No serviceCategories in context and services empty, fetching from backend...');
+      fetchWorkerServices();
+    }
+  }, [worker?.serviceCategories, worker?.id]);
+
+  // Listen for profile updates via socket
+  useEffect(() => {
+    if (!worker?.id) return;
+
+    const handleProfileUpdate = (data: any) => {
+      if (data.workerId === worker.id) {
+        console.log('📢 Profile update received:', data);
+        // Update worker context with new profile data
+        updateWorker({
+          ...worker,
+          ...(data.name && { name: data.name }),
+          ...(data.email && { email: data.email }),
+          ...(data.phone && { phone: data.phone }),
+          ...(data.profileImage && { profileImage: data.profileImage }),
+        } as any);
+      }
+    };
+
+    socketService.on('worker:profile_updated', handleProfileUpdate);
+
+    return () => {
+      socketService.off('worker:profile_updated', handleProfileUpdate);
+    };
+  }, [worker?.id]);
+
+  // Refresh profile data when screen comes into focus (e.g., returning from profile screen)
+  useFocusEffect(
+    useCallback(() => {
+      if (worker?.id) {
+        console.log('🔄 Home screen focused, refreshing worker data...');
+        // Fetch latest worker data from backend
+        const refreshWorkerData = async () => {
+          try {
+            const apiUrl = getApiUrl();
+            const response = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+            });
+
+            if (response.ok) {
+              const workerData = await response.json();
+              console.log('✅ Worker data refreshed:', {
+                name: workerData.name,
+                email: workerData.email,
+                profileImage: workerData.profileImage ? 'present' : 'missing',
+              });
+              
+              // Update worker context with latest data
+              updateWorker({
+                ...worker,
+                name: workerData.name,
+                email: workerData.email,
+                phone: workerData.phone,
+                profileImage: workerData.profileImage,
+                skills: workerData.skills,
+              } as any);
+            }
+          } catch (error) {
+            console.error('❌ Error refreshing worker data:', error);
+          }
+        };
+
+        refreshWorkerData();
+      }
+    }, [worker?.id])
+  );
 
   // Fetch unread notification count from backend
   const fetchUnreadCount = useCallback(async () => {
@@ -236,12 +405,144 @@ export default function HomeScreen() {
     return () => clearInterval(interval);
   }, [fetchUnreadCount]);
 
-  // Refresh count when screen comes into focus
+  // Check if services need verification after login
+  useEffect(() => {
+    if (worker?.id && worker?.serviceCategories && worker.serviceCategories.length > 0) {
+      // Check if any service categories need verification (no status or rejected)
+      const needsVerification = worker.serviceCategories.some((category: string) => {
+        const status = worker.categoryVerificationStatus?.[category];
+        return !status || status === 'rejected';
+      });
+
+      if (needsVerification) {
+        // Wait a bit for the home screen to render first
+        setTimeout(() => {
+          Alert.alert(
+            'Document Verification Required',
+            `You have ${worker.serviceCategories.length} service${worker.serviceCategories.length > 1 ? 's' : ''} (${worker.serviceCategories.join(', ')}) that need document verification. Please submit required documents to verify these services before you can start accepting jobs.`,
+            [
+              { text: 'Later', style: 'cancel' },
+              { 
+                text: 'Verify Now', 
+                onPress: () => {
+                  router.push('/document-verification');
+                }
+              },
+            ]
+          );
+        }, 2000); // Wait 2 seconds after login to show the prompt
+      }
+    }
+  }, [worker?.id, worker?.serviceCategories]);
+
+  // Refresh count and services when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       fetchUnreadCount();
-    }, [fetchUnreadCount])
+      // Also refresh services when screen comes into focus (especially after returning from document verification)
+      if (worker?.id) {
+        console.log('🔄 Screen focused, refreshing services...');
+        // First check worker context for immediate display
+        if (worker.serviceCategories && worker.serviceCategories.length > 0) {
+          console.log('📦 Screen focused, using serviceCategories from context:', worker.serviceCategories);
+          const immediateServices = worker.serviceCategories.map((category: string, index: number) => ({
+            id: `service-${category}-${index}-${Date.now()}`,
+            name: category,
+            category: category,
+            price: 0,
+            priceType: 'hour' as const,
+            description: `Professional ${category} services`,
+          }));
+          setServices(immediateServices);
+          console.log('✅ Set services from context on focus:', immediateServices.map(s => s.name));
+        }
+        // Then fetch from backend to ensure we have latest data
+        fetchWorkerServices();
+      }
+    }, [fetchUnreadCount, worker?.id, worker?.serviceCategories])
   );
+
+  // Socket listener for service updates
+  useEffect(() => {
+    if (!worker?.id) return;
+
+    const handleServiceUpdate = (data: any) => {
+      console.log('📢 Socket: Service update received:', data);
+      if (data.workerId === worker.id && data.serviceCategories) {
+        console.log('✅ Socket: Updating services from socket event:', data.serviceCategories);
+        const updatedServices = Array.isArray(data.serviceCategories) 
+          ? data.serviceCategories
+              .filter((cat: any) => cat && String(cat).trim().length > 0)
+              .map((category: string, index: number) => ({
+                id: `service-${category}-${index}-${Date.now()}`,
+                name: category,
+                category: category,
+                price: 0,
+                priceType: 'hour' as const,
+                description: `Professional ${category} services`,
+              }))
+          : [];
+        
+        setServices(updatedServices);
+        updateWorker({
+          ...worker,
+          serviceCategories: data.serviceCategories,
+        } as any);
+        console.log('✅ Socket: Services updated from socket:', updatedServices.map(s => s.category));
+      }
+    };
+
+    socketService.on('worker:service_updated', handleServiceUpdate);
+    socketService.on('worker:stats_updated', handleServiceUpdate);
+
+    return () => {
+      socketService.off('worker:service_updated', handleServiceUpdate);
+      socketService.off('worker:stats_updated', handleServiceUpdate);
+    };
+  }, [worker?.id]);
+
+  // Socket listener for service updates - MUST be before other socket listeners
+  useEffect(() => {
+    if (!worker?.id) return;
+
+    const handleServiceUpdate = (data: any) => {
+      console.log('📢 Socket: Service update received:', data);
+      if (data.workerId === worker.id && data.serviceCategories) {
+        console.log('✅ Socket: Updating services from socket event:', data.serviceCategories);
+        const updatedCategories = Array.isArray(data.serviceCategories) 
+          ? data.serviceCategories.filter((cat: any) => cat && String(cat).trim().length > 0)
+          : [];
+        
+        const updatedServices = updatedCategories.map((category: string, index: number) => ({
+          id: `service-${category}-${index}-${Date.now()}`,
+          name: category,
+          category: category,
+          price: 0,
+          priceType: 'hour' as const,
+          description: `Professional ${category} services`,
+        }));
+        
+        console.log('✅ Socket: FORCING services update:', updatedServices.map(s => s.category));
+        setServices(updatedServices);
+        updateWorker({
+          ...worker,
+          serviceCategories: updatedCategories,
+        } as any);
+      }
+    };
+
+    socketService.on('worker:service_updated', handleServiceUpdate);
+    socketService.on('worker:stats_updated', (data: any) => {
+      if (data.workerId === worker.id && data.serviceCategories) {
+        handleServiceUpdate(data);
+      }
+    });
+
+    return () => {
+      socketService.off('worker:service_updated', handleServiceUpdate);
+      socketService.off('worker:stats_updated', handleServiceUpdate);
+    };
+  }, [worker?.id]);
 
   // Initialize socket connection and booking request listener
   // Triggered by: Worker logs in, component mounts with worker ID
@@ -517,45 +818,100 @@ export default function HomeScreen() {
         return;
       }
       
+      // FIRST: Update local state immediately
       setServices(prev => [...prev, ...newServices]);
       
-      // Show success notification
-      const serviceCount = newServices.length;
-      const serviceNames = newServices.map(s => s.category).join(', ');
-      setToast({
-        visible: true,
-        message: serviceCount > 1 
-          ? `Successfully added ${serviceCount} services: ${serviceNames}`
-          : `Service "${newServices[0].name}" added successfully!`,
-        title: serviceCount > 1 ? 'Services Added' : 'Service Added',
-        type: 'success',
-      });
-      
-      // Always require document verification for newly added services
+      // SECOND: Sync service categories with backend IMMEDIATELY to save them
       const newCategories = newServices.map(s => s.category);
+      const allCategories = [...new Set([...previousCategories, ...newCategories])];
       
-      if (newCategories.length > 0) {
-        // Show alert to navigate to document verification after a short delay
-        setTimeout(() => {
-          Alert.alert(
-            'Document Verification Required',
-            `You've added new service categories (${newCategories.join(', ')}). Please submit required documents to verify these services before you can start accepting jobs.`,
-            [
-              { text: 'Later', style: 'cancel' },
-              { 
-                text: 'Verify Now', 
-                onPress: () => {
-                  router.push('/document-verification');
-                }
-              },
-            ]
-          );
-        }, 1500); // Wait for toast to show first
+      // Update worker context immediately
+      if (worker) {
+        updateWorker({
+          ...worker,
+          serviceCategories: allCategories,
+        } as any);
+        console.log('✅ Updated worker context with new serviceCategories:', allCategories);
+      }
+      
+      // Sync with backend immediately
+      try {
+        const apiUrl = getApiUrl();
+        console.log('💾 Saving service categories to backend:', allCategories);
+        const response = await fetch(`${apiUrl}/api/workers/update-service-categories`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            workerId: worker?.id,
+            serviceCategories: allCategories,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('✅ Service categories synced with backend successfully:', result);
+          
+          // Emit socket event to notify other screens
+          socketService.emit('worker:service_updated', {
+            workerId: worker?.id,
+            serviceCategories: allCategories,
+          });
+          
+          // Show success notification
+          const serviceCount = newServices.length;
+          const serviceNames = newServices.map(s => s.category).join(', ');
+          setToast({
+            visible: true,
+            message: serviceCount > 1 
+              ? `Successfully added ${serviceCount} services: ${serviceNames}`
+              : `Service "${newServices[0].name}" added successfully!`,
+            title: serviceCount > 1 ? 'Services Added' : 'Service Added',
+            type: 'success',
+          });
+          
+          // Always require document verification for newly added services
+          if (newCategories.length > 0) {
+            // Show alert to navigate to document verification after a short delay
+            setTimeout(() => {
+              Alert.alert(
+                'Document Verification Required',
+                `You've added new service categories (${newCategories.join(', ')}). Please submit required documents to verify these services before you can start accepting jobs.`,
+                [
+                  { text: 'Later', style: 'cancel' },
+                  { 
+                    text: 'Verify Now', 
+                    onPress: () => {
+                      // Ensure services are saved before navigating
+                      console.log('🚀 Navigating to document verification with services:', allCategories);
+                      router.push('/document-verification');
+                    }
+                  },
+                ]
+              );
+            }, 1500); // Wait for toast to show first
+          }
+        } else {
+          const errorText = await response.text();
+          console.error('❌ Failed to sync service categories with backend:', response.status, errorText);
+          setToast({
+            visible: true,
+            message: 'Services added locally, but failed to save to server. Please try again.',
+            title: 'Warning',
+            type: 'warning',
+          });
+        }
+      } catch (error) {
+        console.error('❌ Error syncing service categories:', error);
+        setToast({
+          visible: true,
+          message: 'Services added locally, but failed to save to server. Please try again.',
+          title: 'Warning',
+          type: 'warning',
+        });
       }
     }
-    
-    // Sync service categories with backend
-    await syncServiceCategoriesWithBackend();
   };
 
   const handleRemoveService = async (serviceId: string) => {
@@ -586,7 +942,7 @@ export default function HomeScreen() {
           <Pressable onPress={() => router.push('/(tabs)/profile')}>
             {worker?.profileImage ? (
               <Image 
-                key={worker.profileImage}
+                key={`profile-${worker.profileImage}-${worker.name || ''}`} // Force re-render when profile image or name changes
                 source={{ uri: worker.profileImage }} 
                 style={styles.avatar}
                 resizeMode="cover"
@@ -730,6 +1086,14 @@ export default function HomeScreen() {
             </View>
 
             {/* Service Cart */}
+            {(() => {
+              console.log('🎯 RENDERING ServiceCart - Current services state:', {
+                count: services.length,
+                services: services.map(s => ({ id: s.id, name: s.name, category: s.category })),
+                workerServiceCategories: worker?.serviceCategories,
+              });
+              return null;
+            })()}
             <ServiceCart
               services={services}
               onRemoveService={handleRemoveService}
