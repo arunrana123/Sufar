@@ -292,11 +292,50 @@ export default function MyBookingsScreen() {
         }
       });
       
-      // Listen for booking cancellations/deletions
+      // Listen for booking cancellations
       socketService.on('booking:cancelled', (data: any) => {
         console.log('🚫 Booking cancelled event received in my-bookings:', data);
-        // Refresh bookings to remove cancelled booking
-        fetchBookings();
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          // Update booking status to cancelled
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === bookingId 
+                ? { ...b, status: 'cancelled' }
+                : b
+            )
+          );
+          // Refresh to get latest data
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        } else {
+          // Refresh all bookings if bookingId not found
+          fetchBookings();
+        }
+      });
+
+      // Listen for booking rejected
+      socketService.on('booking:rejected', (data: any) => {
+        console.log('❌ Booking rejected event received in my-bookings:', data);
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          // Update booking status to rejected
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === bookingId 
+                ? { ...b, status: 'rejected' }
+                : b
+            )
+          );
+          // Refresh to get latest data
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        } else {
+          // Refresh all bookings if bookingId not found
+          fetchBookings();
+        }
       });
       
       socketService.on('booking:deleted', (data: any) => {
@@ -356,6 +395,7 @@ export default function MyBookingsScreen() {
       socketService.off('booking:accepted');
       socketService.off('booking:updated');
       socketService.off('booking:cancelled');
+      socketService.off('booking:rejected');
       socketService.off('booking:deleted');
       socketService.off('work:started');
       socketService.off('work:completed');
