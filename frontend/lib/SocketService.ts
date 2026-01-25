@@ -60,6 +60,9 @@ export interface SocketEvents {
 
   // Payment events
   'payment:status_updated': (data: { bookingId: string; paymentStatus: string; userConfirmed: boolean; workerConfirmed: boolean; booking?: any }) => void;
+  
+  // Reward points events
+  'reward:points_updated': (data: { userId: string; pointsEarned: number; totalPoints: number; bookingId: string }) => void;
 
   // Notification events
   'notification:new': (notification: any) => void;
