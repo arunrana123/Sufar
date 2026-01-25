@@ -41,6 +41,15 @@ router.patch("/:id/read", async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Notification not found" });
     }
 
+    // Emit real-time event for notification read
+    const io = req.app.get('io');
+    if (io && notification.userId) {
+      io.to(String(notification.userId)).emit('notification:read', { 
+        notificationId: id,
+        userId: notification.userId 
+      });
+    }
+
     return res.json({ message: "Notification marked as read", notification });
   } catch (err) {
     console.error('Mark notification read error:', err);
@@ -86,10 +95,30 @@ router.patch("/user/:userId/mark-all-read", async (req: Request, res: Response) 
       ? new mongoose.Types.ObjectId(userId) 
       : userId;
     
+    // Get all unread notifications before updating
+    const unreadNotifications = await Notification.find({ 
+      userId: userIdObj, 
+      isRead: false 
+    });
+    
     const result = await Notification.updateMany(
       { userId: userIdObj, isRead: false },
       { isRead: true }
     );
+
+    // Emit real-time event for all notifications read
+    const io = req.app.get('io');
+    if (io) {
+      // Emit individual read events for each notification
+      unreadNotifications.forEach((notif) => {
+        io.to(String(userId)).emit('notification:read', { 
+          notificationId: notif._id,
+          userId: userId 
+        });
+      });
+      // Also emit a general cleared event
+      io.to(String(userId)).emit('notifications:all-read', { userId });
+    }
 
     return res.json({ 
       message: "All notifications marked as read", 
