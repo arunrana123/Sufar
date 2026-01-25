@@ -246,9 +246,12 @@ export default function SearchServicesScreen() {
       <SafeAreaView style={styles.safe}>
         {/* Header */}
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
-          <Pressable onPress={() => router.push('/home')} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={28} color="#fff" />
-          </Pressable>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
           <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Search Services</ThemedText>
           <View style={{ width: 40 }} />
         </View>
@@ -428,8 +431,8 @@ const styles = StyleSheet.create({
   },
   backButton: {
     padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 20,
+    marginLeft: -8,
+    marginRight: 4,
   },
   headerTitle: {
     fontSize: 24,
