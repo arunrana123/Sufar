@@ -1231,6 +1231,29 @@ export default function ProfileScreen() {
                 </View>
               );
             })()}
+
+            {/* Earning and Reward Buttons - Below Badge */}
+            <View style={styles.actionButtonsContainer}>
+              <TouchableOpacity 
+                style={styles.earningButton}
+                onPress={() => {
+                  router.push('/earnings');
+                }}
+              >
+                <Ionicons name="cash" size={20} color="#fff" />
+                <Text style={styles.earningButtonText}>Earning</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.rewardButton}
+                onPress={() => {
+                  router.push('/rewards');
+                }}
+              >
+                <Ionicons name="gift" size={20} color="#fff" />
+                <Text style={styles.rewardButtonText}>Reward</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Profile Details */}
@@ -1341,111 +1364,118 @@ export default function ProfileScreen() {
                 return (!docs.skillProof || !docs.experience) || status === 'rejected';
               });
 
-              if (needsDocuments.length > 0) {
-                return (
-                  <>
-                    <View style={styles.sectionHeaderWithIcon}>
-                      <View style={styles.sectionHeaderLeft}>
-                        <Ionicons name="document-outline" size={24} color="#FF7A2C" />
-                        <Text style={styles.sectionTitle}>Document Verification</Text>
-                      </View>
+              return (
+                <>
+                  <View style={styles.sectionHeaderWithIcon}>
+                    <View style={styles.sectionHeaderLeft}>
+                      <Ionicons name="document-outline" size={24} color="#FF7A2C" />
+                      <Text style={styles.sectionTitle}>Document Verification</Text>
+                    </View>
+                    {needsDocuments.length > 0 && (
                       <View style={styles.verificationBadge}>
                         <Text style={styles.verificationBadgeText}>{needsDocuments.length}</Text>
                       </View>
-                    </View>
+                    )}
+                  </View>
+                  {needsDocuments.length > 0 ? (
                     <Text style={styles.sectionSubtitle}>
                       {needsDocuments.length} service{needsDocuments.length > 1 ? 's' : ''} need{needsDocuments.length === 1 ? 's' : ''} document verification
                     </Text>
-                    
-                    <TouchableOpacity
-                      style={styles.verifyNowButton}
-                      onPress={() => router.push('/document-verification')}
-                    >
-                      <Ionicons name="document-text-outline" size={20} color="#fff" />
-                      <Text style={styles.verifyNowButtonText}>Verify Now</Text>
-                      <Ionicons name="chevron-forward" size={20} color="#fff" />
-                    </TouchableOpacity>
-                  </>
-                );
-              }
-              return null;
+                  ) : (
+                    <Text style={styles.sectionSubtitle}>
+                      All services are verified and ready to receive requests.
+                    </Text>
+                  )}
+                  
+                  <TouchableOpacity
+                    style={styles.verifyNowButton}
+                    onPress={() => router.push('/document-verification')}
+                  >
+                    <Ionicons name="document-text-outline" size={20} color="#fff" />
+                    <Text style={styles.verifyNowButtonText}>Verify Now</Text>
+                    <Ionicons name="chevron-forward" size={20} color="#fff" />
+                  </TouchableOpacity>
+                </>
+              );
             })()}
+          </View>
 
-            {/* Verification Updates - Under Document Verification */}
-            {hasSubmitted && (
-              <View style={{ marginTop: 20 }}>
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Verification Updates</Text>
-                  <View style={styles.notificationHeaderActions}>
-                    <TouchableOpacity 
-                      style={styles.refreshButton}
-                      onPress={fetchNotifications}
-                    >
-                      <Ionicons name="refresh" size={20} color="#FF7A2C" />
-                    </TouchableOpacity>
-                    <TouchableOpacity 
-                      style={styles.notificationToggle}
-                      onPress={() => setShowNotifications(!showNotifications)}
-                    >
-                      <Ionicons 
-                        name={showNotifications ? "chevron-up" : "chevron-down"} 
-                        size={20} 
-                        color="#FF7A2C" 
-                      />
-                    </TouchableOpacity>
-                  </View>
+          {/* Verification Updates Section */}
+          {hasSubmitted && (
+            <View style={styles.detailsSection}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Verification Updates</Text>
+                <View style={styles.notificationHeaderActions}>
+                  <TouchableOpacity 
+                    style={styles.refreshButton}
+                    onPress={fetchNotifications}
+                  >
+                    <Ionicons name="refresh" size={20} color="#FF7A2C" />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.notificationToggle}
+                    onPress={() => setShowNotifications(!showNotifications)}
+                  >
+                    <Ionicons 
+                      name={showNotifications ? "chevron-up" : "chevron-down"} 
+                      size={20} 
+                      color="#FF7A2C" 
+                    />
+                  </TouchableOpacity>
                 </View>
+              </View>
 
-                {showNotifications && (
-                  <View style={styles.notificationsContainer}>
-                    {notifications.length === 0 ? (
-                      <Text style={styles.noNotificationsText}>
-                        No verification updates yet
-                      </Text>
-                    ) : (
-                      notifications
-                        .filter(notification => 
-                          notification.type === 'verification_submitted' || 
-                          notification.type === 'document_verification' || 
-                          notification.type === 'verification_complete'
-                        )
-                        .map((notification, index) => (
-                          <View key={index} style={styles.notificationItem}>
-                            <View style={styles.notificationHeader}>
-                              <Ionicons 
-                                name={
-                                  notification.type === 'verification_complete' ? 'checkmark-circle' :
-                                  notification.data?.status === 'verified' ? 'checkmark-circle' :
-                                  notification.data?.status === 'rejected' ? 'close-circle' :
-                                  'time'
-                                } 
-                                size={20} 
-                                color={
-                                  notification.type === 'verification_complete' ? '#4CAF50' :
-                                  notification.data?.status === 'verified' ? '#4CAF50' :
-                                  notification.data?.status === 'rejected' ? '#F44336' :
-                                  '#FF9800'
-                                } 
-                              />
-                              <Text style={styles.notificationTitle}>
-                                {notification.title}
-                              </Text>
-                              <Text style={styles.notificationTime}>
-                                {new Date(notification.createdAt).toLocaleDateString()}
-                              </Text>
-                            </View>
-                            <Text style={styles.notificationMessage}>
-                              {notification.message}
+              {showNotifications && (
+                <View style={styles.notificationsContainer}>
+                  {notifications.length === 0 ? (
+                    <Text style={styles.noNotificationsText}>
+                      No verification updates yet
+                    </Text>
+                  ) : (
+                    notifications
+                      .filter(notification => 
+                        notification.type === 'verification_submitted' || 
+                        notification.type === 'document_verification' || 
+                        notification.type === 'verification_complete'
+                      )
+                      .map((notification, index) => (
+                        <View key={index} style={styles.notificationItem}>
+                          <View style={styles.notificationHeader}>
+                            <Ionicons 
+                              name={
+                                notification.type === 'verification_complete' ? 'checkmark-circle' :
+                                notification.data?.status === 'verified' ? 'checkmark-circle' :
+                                notification.data?.status === 'rejected' ? 'close-circle' :
+                                'time'
+                              } 
+                              size={20} 
+                              color={
+                                notification.type === 'verification_complete' ? '#4CAF50' :
+                                notification.data?.status === 'verified' ? '#4CAF50' :
+                                notification.data?.status === 'rejected' ? '#F44336' :
+                                '#FF9800'
+                              } 
+                            />
+                            <Text style={styles.notificationTitle}>
+                              {notification.title}
+                            </Text>
+                            <Text style={styles.notificationTime}>
+                              {new Date(notification.createdAt).toLocaleDateString()}
                             </Text>
                           </View>
-                        ))
-                    )}
-                  </View>
-                )}
-              </View>
-            )}
+                          <Text style={styles.notificationMessage}>
+                            {notification.message}
+                          </Text>
+                        </View>
+                      ))
+                  )}
+                </View>
+              )}
+            </View>
+          )}
 
-            {/* Uploaded Documents - Link to dedicated page */}
+          {/* Uploaded Documents - Link to dedicated page */}
+          <View style={styles.detailsSection}>
             <TouchableOpacity
               style={styles.viewDocumentsButton}
               onPress={() => router.push('/uploaded-documents')}
@@ -1616,6 +1646,62 @@ const styles = StyleSheet.create({
   },
   logoutButton: {
     padding: 8,
+  },
+  actionButtonsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 20,
+    paddingHorizontal: 20,
+  },
+  earningButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FF7A2C',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  earningButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  rewardButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FF7A2C',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  rewardButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   scrollView: {
     flex: 1,
