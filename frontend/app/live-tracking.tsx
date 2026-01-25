@@ -720,16 +720,24 @@ export default function LiveTrackingScreen() {
     // Listen for booking status updates (from backend status endpoint)
     const handleBookingUpdated = (updatedBooking: any) => {
       if (updatedBooking._id === bookingId || updatedBooking.id === bookingId) {
-        console.log(' Booking updated event received in live-tracking:', updatedBooking);
+        console.log('📝 Booking updated event received in live-tracking:', {
+          bookingId: updatedBooking._id,
+          status: updatedBooking.status,
+          paymentStatus: updatedBooking.paymentStatus,
+        });
         
-        // Update booking state immediately
+        // Update booking state immediately with all fields
         setBooking(prev => prev ? { 
           ...prev, 
           ...updatedBooking,
           status: updatedBooking.status || prev.status,
+          paymentStatus: updatedBooking.paymentStatus || prev.paymentStatus,
+          userConfirmedPayment: updatedBooking.userConfirmedPayment !== undefined ? updatedBooking.userConfirmedPayment : prev.userConfirmedPayment,
+          workerConfirmedPayment: updatedBooking.workerConfirmedPayment !== undefined ? updatedBooking.workerConfirmedPayment : prev.workerConfirmedPayment,
+          paymentConfirmedAt: updatedBooking.paymentConfirmedAt || prev.paymentConfirmedAt,
         } : null);
         
-        // Update work status based on booking status
+        // Update work status and navigation status based on booking status
         if (updatedBooking.status) {
           if (updatedBooking.status === 'accepted') {
             setNavStatus('accepted');
@@ -743,10 +751,54 @@ export default function LiveTrackingScreen() {
             }
           } else if (updatedBooking.status === 'completed') {
             setWorkStatus('completed');
+          } else if (updatedBooking.status === 'cancelled' || updatedBooking.status === 'rejected') {
+            // Handle cancelled/rejected status
+            setNavStatus('ended');
+            Alert.alert(
+              updatedBooking.status === 'cancelled' ? 'Booking Cancelled' : 'Booking Rejected',
+              updatedBooking.status === 'cancelled' 
+                ? 'This booking has been cancelled.' 
+                : 'No worker is available for this booking.',
+              [{ text: 'OK', onPress: () => router.back() }]
+            );
           }
         }
         
         // Refresh booking details to get latest data
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 300);
+      }
+    };
+
+    // Listen for booking cancelled
+    const handleBookingCancelled = (data: any) => {
+      if (data.bookingId === bookingId || data.booking?._id === bookingId) {
+        console.log('🚫 Booking cancelled event received in live-tracking:', data);
+        setBooking(prev => prev ? { ...prev, status: 'cancelled' } : null);
+        setNavStatus('ended');
+        Alert.alert(
+          'Booking Cancelled',
+          'This booking has been cancelled.',
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+        setTimeout(() => {
+          fetchBookingDetails();
+        }, 300);
+      }
+    };
+
+    // Listen for booking rejected
+    const handleBookingRejected = (data: any) => {
+      if (data.bookingId === bookingId || data.booking?._id === bookingId) {
+        console.log('❌ Booking rejected event received in live-tracking:', data);
+        setBooking(prev => prev ? { ...prev, status: 'rejected' } : null);
+        setNavStatus('ended');
+        Alert.alert(
+          'Booking Rejected',
+          'No worker is available for this booking.',
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
         setTimeout(() => {
           fetchBookingDetails();
         }, 300);
@@ -779,6 +831,8 @@ export default function LiveTrackingScreen() {
 
     // Register all socket listeners
     socketService.on('booking:accepted', handleBookingAccepted);
+    socketService.on('booking:cancelled', handleBookingCancelled);
+    socketService.on('booking:rejected', handleBookingRejected);
     socketService.on('location:tracking:started', handleLocationTrackingStarted);
     socketService.on('route:updated', handleRouteUpdated);
     socketService.on('worker:location', handleWorkerLocation);
@@ -788,6 +842,7 @@ export default function LiveTrackingScreen() {
     socketService.on('work:started', handleWorkStarted);
     socketService.on('work:completed', handleWorkCompleted);
     socketService.on('booking:updated', handleBookingUpdated);
+    socketService.on('payment:status_updated', handlePaymentStatusUpdated);
 
     // Poll for updates every 30 seconds (backup)
     const interval = setInterval(fetchBookingDetails, 30000);
@@ -800,6 +855,8 @@ export default function LiveTrackingScreen() {
       
       // Clean up socket listeners
       socketService.off('booking:accepted', handleBookingAccepted);
+      socketService.off('booking:cancelled', handleBookingCancelled);
+      socketService.off('booking:rejected', handleBookingRejected);
       socketService.off('location:tracking:started', handleLocationTrackingStarted);
       socketService.off('route:updated', handleRouteUpdated);
       socketService.off('worker:location', handleWorkerLocation);
