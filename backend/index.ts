@@ -503,11 +503,12 @@ app.post('/api/workers/upload-documents', upload.fields([
 
 // NEW: Service category document upload route
 // Handles all documents for service category verification: drivingLicense, citizenship, serviceCertificate, experienceCertificate
+// experienceCertificate can be multiple files (for multi-page documents)
 app.post('/api/workers/upload-service-documents', upload.fields([
   { name: 'drivingLicense', maxCount: 1 },
   { name: 'citizenship', maxCount: 1 },
   { name: 'serviceCertificate', maxCount: 1 },
-  { name: 'experienceCertificate', maxCount: 1 }
+  { name: 'experienceCertificate', maxCount: 10 } // Allow up to 10 images for experience certificate
 ]), async (req, res) => {
   try {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
@@ -519,9 +520,10 @@ app.post('/api/workers/upload-service-documents', upload.fields([
     }
 
     // Check required documents
-    if (!files.citizenship?.[0] || !files.serviceCertificate?.[0] || !files.experienceCertificate?.[0]) {
+    // experienceCertificate can be single or multiple files
+    if (!files.citizenship?.[0] || !files.serviceCertificate?.[0] || !files.experienceCertificate || files.experienceCertificate.length === 0) {
       return res.status(400).json({ 
-        message: 'Citizenship, Service Certificate, and Experience Certificate are required' 
+        message: 'Citizenship, Service Certificate, and at least one Experience Certificate image are required' 
       });
     }
 
@@ -546,11 +548,17 @@ app.post('/api/workers/upload-service-documents', upload.fields([
     };
 
     // Update category-specific documents
+    // Handle multiple experience certificate files (store as array of filenames)
+    const experienceFiles = files.experienceCertificate || [];
+    const experienceFilenames = experienceFiles.map(f => f.filename).filter(Boolean);
+    
     const categoryDocuments = {
       ...existingCategoryDocuments,
       [category]: {
         skillProof: files.serviceCertificate?.[0]?.filename,
-        experience: files.experienceCertificate?.[0]?.filename,
+        experience: experienceFilenames.length === 1 
+          ? experienceFilenames[0] 
+          : experienceFilenames, // Store as array if multiple files
       }
     };
 
@@ -572,7 +580,9 @@ app.post('/api/workers/upload-service-documents', upload.fields([
       drivingLicense: files.drivingLicense?.[0]?.filename,
       citizenship: files.citizenship?.[0]?.filename,
       serviceCertificate: files.serviceCertificate?.[0]?.filename,
-      experienceCertificate: files.experienceCertificate?.[0]?.filename,
+      experienceCertificate: experienceFilenames.length > 1 
+        ? `${experienceFilenames.length} files: ${experienceFilenames.join(', ')}`
+        : experienceFilenames[0],
     });
 
     const updatedWorker = await WorkerUser.findByIdAndUpdate(
@@ -615,7 +625,7 @@ app.post('/api/workers/upload-service-documents', upload.fields([
             drivingLicense: files.drivingLicense?.[0]?.filename,
             citizenship: files.citizenship?.[0]?.filename,
             serviceCertificate: files.serviceCertificate?.[0]?.filename,
-            experienceCertificate: files.experienceCertificate?.[0]?.filename,
+            experienceCertificate: experienceFilenames,
           },
           submittedAt: new Date().toISOString(),
         },
@@ -628,6 +638,7 @@ app.post('/api/workers/upload-service-documents', upload.fields([
 
     // Emit Socket.IO event
     if (io) {
+      // Emit to admin dashboard
       io.to('admin').emit('category:verification:submitted', {
         workerId: String(workerId),
         workerName: worker.name,
@@ -636,11 +647,21 @@ app.post('/api/workers/upload-service-documents', upload.fields([
           drivingLicense: files.drivingLicense?.[0]?.filename,
           citizenship: files.citizenship?.[0]?.filename,
           serviceCertificate: files.serviceCertificate?.[0]?.filename,
-          experienceCertificate: files.experienceCertificate?.[0]?.filename,
+          experienceCertificate: experienceFilenames,
         },
         timestamp: new Date().toISOString(),
       });
       
+      // Emit to worker for confirmation (workers join their userId room)
+      io.to(String(workerId)).emit('category:verification:submitted', {
+        workerId: String(workerId),
+        category,
+        status: 'pending',
+        message: 'Your documents have been submitted for verification',
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Emit globally for other clients
       io.emit('document:verification:submitted', {
         workerId: String(workerId),
         category,
