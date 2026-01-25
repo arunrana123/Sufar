@@ -4,7 +4,7 @@ export interface INotification extends Document {
   userId: mongoose.Schema.Types.ObjectId; // Reference to the User who should receive the notification
   title: string;
   message: string;
-  type: 'booking' | 'payment' | 'worker' | 'system' | 'promotion' | 'worker_approved' | 'worker_denied' | 'general' | 'document_verification' | 'verification_submitted' | 'verification_complete';
+  type: 'booking' | 'payment' | 'worker' | 'system' | 'promotion' | 'worker_approved' | 'worker_denied' | 'general' | 'document_verification' | 'verification_submitted' | 'verification_complete' | 'job';
   isRead: boolean;
   data?: any; // Additional data for the notification
   imageUrl?: string; // Optional image URL
@@ -17,7 +17,7 @@ const NotificationSchema: Schema = new Schema({
   message: { type: String, required: true, trim: true },
   type: { 
     type: String, 
-    enum: ['booking', 'payment', 'worker', 'system', 'promotion', 'worker_approved', 'worker_denied', 'general', 'document_verification', 'verification_submitted', 'verification_complete'], 
+    enum: ['booking', 'payment', 'worker', 'system', 'promotion', 'worker_approved', 'worker_denied', 'general', 'document_verification', 'verification_submitted', 'verification_complete', 'job'], 
     default: 'general' 
   },
   isRead: { type: Boolean, default: false },
