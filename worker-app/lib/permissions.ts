@@ -48,6 +48,30 @@ export const canAcceptBookings = (worker: Worker | null): boolean => {
 };
 
 /**
+ * Checks if worker has at least one verified service category
+ * Requirements: Must have at least one service category with 'verified' status
+ */
+export const hasVerifiedService = (worker: Worker | null): boolean => {
+  if (!worker || !worker.serviceCategories || worker.serviceCategories.length === 0) {
+    return false;
+  }
+  
+  return worker.serviceCategories.some((category: string) => {
+    const status = worker.categoryVerificationStatus?.[category];
+    return status === 'verified';
+  });
+};
+
+/**
+ * Checks if worker is fully verified (overall + has verified services)
+ * Requirements: Overall verification status is 'verified' AND has at least one verified service category
+ */
+export const isFullyVerified = (worker: Worker | null): boolean => {
+  if (!worker) return false;
+  return isVerified(worker) && hasVerifiedService(worker);
+};
+
+/**
  * Checks if worker needs to upload documents
  * Returns true if any required document is missing
  */
