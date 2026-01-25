@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { router } from 'expo-router';
+import { isFullyVerified } from '@/lib/permissions';
 import QRCode from 'react-native-qrcode-svg';
 
 const { width } = Dimensions.get('window');
@@ -24,9 +26,12 @@ export default function QRGenerator({ onClose }: QRGeneratorProps) {
   const { worker } = useAuth();
   const [qrCode, setQrCode] = useState<string>('');
 
+  // Check if worker is fully verified (overall + has verified services)
+  const isWorkerVerified = isFullyVerified(worker);
+
   useEffect(() => {
-    if (worker) {
-      // Generate QR data for worker verification
+    if (worker && isWorkerVerified) {
+      // Only generate QR code if worker is verified
       const verificationData = {
         type: 'worker_verification',
         workerId: worker.id,
@@ -44,7 +49,7 @@ export default function QRGenerator({ onClose }: QRGeneratorProps) {
       
       setQrCode(JSON.stringify(verificationData));
     }
-  }, [worker]);
+  }, [worker, isWorkerVerified]);
 
   const handleShare = async () => {
     try {
@@ -77,6 +82,42 @@ export default function QRGenerator({ onClose }: QRGeneratorProps) {
           <Text style={styles.errorText}>Worker data not available</Text>
           <TouchableOpacity style={styles.button} onPress={onClose}>
             <Text style={styles.buttonText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show verification required message if worker is not verified
+  if (!isWorkerVerified) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.headerButton} onPress={onClose}>
+            <Ionicons name="close" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Verification Required</Text>
+          <View style={styles.headerButton} />
+        </View>
+        
+        <View style={styles.errorContainer}>
+          <Ionicons name="document-text-outline" size={80} color="#FF7A2C" />
+          <Text style={styles.errorTitle}>Verification Required</Text>
+          <Text style={styles.errorText}>
+            Please verify the required documents first. Once you submit your documents and get verified by admin, you will be ready to go and can access your QR code.
+          </Text>
+          <TouchableOpacity 
+            style={styles.button} 
+            onPress={() => {
+              onClose();
+              router.push('/document-verification');
+            }}
+          >
+            <Ionicons name="document-text" size={20} color="#fff" style={{ marginRight: 8 }} />
+            <Text style={styles.buttonText}>Go to Document Verification</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={onClose}>
+            <Text style={styles.secondaryButtonText}>Close</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -374,5 +415,28 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 20,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  secondaryButton: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#FF7A2C',
+    marginTop: 12,
+  },
+  secondaryButtonText: {
+    color: '#FF7A2C',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
