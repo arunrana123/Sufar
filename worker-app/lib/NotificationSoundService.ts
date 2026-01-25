@@ -5,6 +5,7 @@
 
 import { Platform, Vibration } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { settingsService } from './SettingsService';
 
 // Dynamic import for expo-av
 let AudioModule: any = null;
@@ -50,12 +51,33 @@ class NotificationSoundService {
   /**
    * Play notification sound based on notification type
    */
-  public async playNotificationSound(notificationType: string, status?: string) {
+  public async playNotificationSound(notificationType: string, status?: string, workerId?: string) {
     try {
-      // Vibrate first
-      if (Platform.OS !== 'web') {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        Vibration.vibrate(200);
+      // Check settings if workerId is provided
+      if (workerId) {
+        const shouldPlaySound = await settingsService.shouldPlaySound(workerId);
+        const shouldVibrate = await settingsService.shouldVibrate(workerId);
+        
+        if (!shouldPlaySound && !shouldVibrate) {
+          return; // Don't play anything if both are disabled
+        }
+        
+        // Vibrate if enabled
+        if (shouldVibrate && Platform.OS !== 'web') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          Vibration.vibrate(200);
+        }
+        
+        // Only play sound if enabled
+        if (!shouldPlaySound) {
+          return; // Skip sound if disabled
+        }
+      } else {
+        // Default behavior if no workerId (for backward compatibility)
+        if (Platform.OS !== 'web') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          Vibration.vibrate(200);
+        }
       }
 
       // Determine sound based on type and status
