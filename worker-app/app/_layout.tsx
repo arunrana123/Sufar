@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { pushNotificationService } from '../lib/PushNotificationService';
 import GlobalBookingAlert from '../components/GlobalBookingAlert';
+import SecurityGate from '../components/SecurityGate';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -25,6 +26,7 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
   const { isAuthenticated, isLoading } = useAuth();
   const [splashCompleted, setSplashCompleted] = useState(false);
+  const [securityPassed, setSecurityPassed] = useState(false);
 
   // Hide expo splash screen once component mounts
   useEffect(() => {
@@ -63,6 +65,13 @@ function RootLayoutNav() {
     }
   }, [isLoading]);
 
+  // Reset security gate when authentication changes
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setSecurityPassed(false);
+    }
+  }, [isAuthenticated]);
+
   // Always show splash screen first - no authentication checks
   if (!splashCompleted) {
     return (
@@ -83,12 +92,17 @@ function RootLayoutNav() {
     );
   }
 
-  // After splash, show auth screen if not authenticated, otherwise show main app
+  // After splash, show auth screen if not authenticated
   if (!isAuthenticated) {
     return <AuthScreen />;
   }
 
-  // If authenticated, show main app
+  // If authenticated but security not passed, show security gate
+  if (isAuthenticated && !securityPassed) {
+    return <SecurityGate onSuccess={() => setSecurityPassed(true)} />;
+  }
+
+  // If authenticated and security passed, show main app
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <View style={{ flex: 1 }}>
@@ -99,7 +113,10 @@ function RootLayoutNav() {
           <Stack.Screen name="job-navigation" options={{ headerShown: false }} />
           <Stack.Screen name="document-verification" options={{ headerShown: false }} />
           <Stack.Screen name="uploaded-documents" options={{ headerShown: false }} />
+          <Stack.Screen name="earnings" options={{ headerShown: false }} />
+          <Stack.Screen name="rewards" options={{ headerShown: false }} />
           <Stack.Screen name="settings" options={{ headerShown: false }} />
+          <Stack.Screen name="security" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         {/* Global booking alert - shows on ANY screen when new request arrives */}
