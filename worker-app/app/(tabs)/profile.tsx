@@ -133,78 +133,132 @@ export default function ProfileScreen() {
     
     try {
       const apiUrl = getApiUrl();
+      const workerUrl = `${apiUrl}/api/workers/${worker.id}`;
       
-      // Fetch worker data
-      const workerResponse = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-cache',
-      });
+      console.log('📊 Fetching worker stats from:', workerUrl);
       
-      if (workerResponse.ok) {
-        const workerData = await workerResponse.json();
+      // Fetch worker data with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      try {
+        const workerResponse = await fetch(workerUrl, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-cache',
+          signal: controller.signal,
+        });
         
-        // Also fetch actual booking stats to verify/calculate real data
-        try {
-          const bookingsResponse = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            cache: 'no-cache',
-          });
+        clearTimeout(timeoutId);
+        
+        if (workerResponse.ok) {
+          const workerData = await workerResponse.json();
           
-          if (bookingsResponse.ok) {
-            const completedBookings = await bookingsResponse.json();
-            const actualCompletedJobs = Array.isArray(completedBookings) ? completedBookings.length : 0;
+          // Also fetch actual booking stats to verify/calculate real data
+          try {
+            const bookingsUrl = `${apiUrl}/api/bookings/worker/${worker.id}?status=completed`;
+            const bookingsController = new AbortController();
+            const bookingsTimeoutId = setTimeout(() => bookingsController.abort(), 10000);
             
-            // Calculate real average rating from bookings with ratings
-            const ratedBookings = Array.isArray(completedBookings) 
-              ? completedBookings.filter((b: any) => b.rating && b.rating > 0)
-              : [];
-            
-            const totalRating = ratedBookings.reduce((sum: number, b: any) => sum + (b.rating || 0), 0);
-            const actualRating = ratedBookings.length > 0 ? totalRating / ratedBookings.length : 0;
-            
-            // Use calculated values if they differ from worker data (more accurate)
-            const realRating = actualRating > 0 ? actualRating : (workerData.rating || 0);
-            const realCompletedJobs = actualCompletedJobs > 0 ? actualCompletedJobs : (workerData.completedJobs || 0);
-            
-            console.log('📊 Worker stats fetched:', { 
-              rating: realRating.toFixed(1), 
-              completedJobs: realCompletedJobs,
-              fromBookings: actualRating > 0 || actualCompletedJobs > 0,
+            const bookingsResponse = await fetch(bookingsUrl, {
+              method: 'GET',
+              headers: { 'Content-Type': 'application/json' },
+              cache: 'no-cache',
+              signal: bookingsController.signal,
             });
             
-            setWorkerRating(realRating);
-            setCompletedJobs(realCompletedJobs);
+            clearTimeout(bookingsTimeoutId);
             
-            // Also update worker context if data changed
-            if (realRating !== (worker as any)?.rating || realCompletedJobs !== (worker as any)?.completedJobs) {
-              updateWorker({
-                ...worker,
-                rating: realRating,
+            if (bookingsResponse.ok) {
+              const completedBookings = await bookingsResponse.json();
+              const actualCompletedJobs = Array.isArray(completedBookings) ? completedBookings.length : 0;
+              
+              // Calculate real average rating from bookings with ratings
+              const ratedBookings = Array.isArray(completedBookings) 
+                ? completedBookings.filter((b: any) => b.rating && b.rating > 0)
+                : [];
+              
+              const totalRating = ratedBookings.reduce((sum: number, b: any) => sum + (b.rating || 0), 0);
+              const actualRating = ratedBookings.length > 0 ? totalRating / ratedBookings.length : 0;
+              
+              // Use calculated values if they differ from worker data (more accurate)
+              const realRating = actualRating > 0 ? actualRating : (workerData.rating || 0);
+              const realCompletedJobs = actualCompletedJobs > 0 ? actualCompletedJobs : (workerData.completedJobs || 0);
+              
+              console.log('📊 Worker stats fetched:', { 
+                rating: realRating.toFixed(1), 
                 completedJobs: realCompletedJobs,
-              } as any);
+                fromBookings: actualRating > 0 || actualCompletedJobs > 0,
+              });
+              
+              setWorkerRating(realRating);
+              setCompletedJobs(realCompletedJobs);
+              
+              // Also update worker context if data changed
+              if (realRating !== (worker as any)?.rating || realCompletedJobs !== (worker as any)?.completedJobs) {
+                updateWorker({
+                  ...worker,
+                  rating: realRating,
+                  completedJobs: realCompletedJobs,
+                } as any);
+              }
+            } else {
+              // Fallback to worker data if bookings fetch fails
+              console.warn('⚠️ Bookings fetch failed, using worker data. Status:', bookingsResponse.status);
+              const realRating = workerData.rating || 0;
+              const realCompletedJobs = workerData.completedJobs || 0;
+              
+              setWorkerRating(realRating);
+              setCompletedJobs(realCompletedJobs);
             }
-          } else {
-            // Fallback to worker data if bookings fetch fails
+          } catch (bookingsError: any) {
+            if (bookingsError.name === 'AbortError') {
+              console.warn('⚠️ Bookings fetch timed out, using worker data');
+            } else {
+              console.warn('⚠️ Could not fetch booking stats, using worker data:', bookingsError?.message || bookingsError);
+            }
+            // Fallback to worker data
             const realRating = workerData.rating || 0;
             const realCompletedJobs = workerData.completedJobs || 0;
             
             setWorkerRating(realRating);
             setCompletedJobs(realCompletedJobs);
           }
-        } catch (bookingsError) {
-          console.warn('Could not fetch booking stats, using worker data:', bookingsError);
-          // Fallback to worker data
-          const realRating = workerData.rating || 0;
-          const realCompletedJobs = workerData.completedJobs || 0;
+        } else {
+          console.warn('⚠️ Worker fetch failed. Status:', workerResponse.status);
+          // Use existing worker data from context as fallback
+          const realRating = (worker as any)?.rating || 0;
+          const realCompletedJobs = (worker as any)?.completedJobs || 0;
           
           setWorkerRating(realRating);
           setCompletedJobs(realCompletedJobs);
         }
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        
+        if (fetchError.name === 'AbortError') {
+          console.warn('⚠️ Worker stats fetch timed out, using cached data');
+        } else if (fetchError.message?.includes('Network request failed')) {
+          console.warn('⚠️ Network request failed. Check server connection and API URL:', apiUrl);
+        } else {
+          console.warn('⚠️ Error fetching worker stats:', fetchError?.message || fetchError);
+        }
+        
+        // Use existing worker data from context as fallback
+        const realRating = (worker as any)?.rating || 0;
+        const realCompletedJobs = (worker as any)?.completedJobs || 0;
+        
+        setWorkerRating(realRating);
+        setCompletedJobs(realCompletedJobs);
       }
-    } catch (error) {
-      console.error('Error fetching worker stats:', error);
+    } catch (error: any) {
+      console.error('❌ Error in fetchWorkerStats:', error?.message || error);
+      // Use existing worker data from context as fallback
+      const realRating = (worker as any)?.rating || 0;
+      const realCompletedJobs = (worker as any)?.completedJobs || 0;
+      
+      setWorkerRating(realRating);
+      setCompletedJobs(realCompletedJobs);
     }
   };
 
