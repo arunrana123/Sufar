@@ -59,8 +59,50 @@ export default function UploadedDocumentsScreen() {
   useEffect(() => {
     if (worker?.id) {
       loadVerificationData();
+      
+      // Connect to socket for live updates
+      const { socketService } = require('@/lib/SocketService');
+      socketService.connect(worker.id, 'worker');
+      
+      // Listen for verification status updates
+      const handleVerificationUpdate = (data: any) => {
+        if (data.workerId === worker.id) {
+          console.log('📢 Verification update received in uploaded-documents:', data);
+          // Reload verification data
+          setTimeout(() => {
+            loadVerificationData();
+          }, 1000);
+        }
+      };
+      
+      // Listen for category verification updates
+      const handleCategoryVerificationUpdate = (data: any) => {
+        if (data.workerId === worker.id) {
+          console.log('📢 Category verification update received:', data);
+          setCategoryVerificationStatus(prev => ({
+            ...prev,
+            [data.category]: data.status,
+          }));
+          // Reload verification data
+          setTimeout(() => {
+            loadVerificationData();
+          }, 1000);
+        }
+      };
+      
+      socketService.on('document:verification:updated', handleVerificationUpdate);
+      socketService.on('category:verification:updated', handleCategoryVerificationUpdate);
+      socketService.on('category:verification:submitted', handleVerificationUpdate);
+      socketService.on('document:verification:submitted', handleVerificationUpdate);
+      
+      return () => {
+        socketService.off('document:verification:updated', handleVerificationUpdate);
+        socketService.off('category:verification:updated', handleCategoryVerificationUpdate);
+        socketService.off('category:verification:submitted', handleVerificationUpdate);
+        socketService.off('document:verification:submitted', handleVerificationUpdate);
+      };
     }
-  }, [worker]);
+  }, [worker?.id]);
 
   const loadVerificationData = async () => {
     if (!worker?.id) {
@@ -139,16 +181,32 @@ export default function UploadedDocumentsScreen() {
                 uri: `${apiUrl}/uploads/${catDocs.skillProof}`,
               });
             }
+            // Handle experience certificate (can be single file or array)
             if (catDocs.experience) {
               const status = workerData.categoryVerificationStatus?.[category] || 'pending';
-              docs.push({
-                type: 'experienceCertificate',
-                fileName: catDocs.experience,
-                status,
-                uploadedAt: workerData.submittedAt || new Date().toISOString(),
-                category,
-                uri: `${apiUrl}/uploads/${catDocs.experience}`,
-              });
+              if (Array.isArray(catDocs.experience)) {
+                // Multiple experience certificate files
+                catDocs.experience.forEach((fileName: string, index: number) => {
+                  docs.push({
+                    type: 'experienceCertificate',
+                    fileName: fileName,
+                    status,
+                    uploadedAt: workerData.submittedAt || new Date().toISOString(),
+                    category: `${category} (Image ${index + 1})`,
+                    uri: `${apiUrl}/uploads/${fileName}`,
+                  });
+                });
+              } else {
+                // Single experience certificate file
+                docs.push({
+                  type: 'experienceCertificate',
+                  fileName: catDocs.experience,
+                  status,
+                  uploadedAt: workerData.submittedAt || new Date().toISOString(),
+                  category,
+                  uri: `${apiUrl}/uploads/${catDocs.experience}`,
+                });
+              }
             }
           });
         }
@@ -203,12 +261,17 @@ export default function UploadedDocumentsScreen() {
   // Group documents by category
   const generalDocs = uploadedDocuments.filter(doc => !doc.category);
   const categoryDocs: { [key: string]: UploadedDocument[] } = {};
+  
   uploadedDocuments.forEach(doc => {
     if (doc.category) {
-      if (!categoryDocs[doc.category]) {
-        categoryDocs[doc.category] = [];
+      // Extract base category name (remove "Image X" suffix if present)
+      const baseCategory = doc.category.includes(' (Image') 
+        ? doc.category.split(' (Image')[0]
+        : doc.category;
+      if (!categoryDocs[baseCategory]) {
+        categoryDocs[baseCategory] = [];
       }
-      categoryDocs[doc.category].push(doc);
+      categoryDocs[baseCategory].push(doc);
     }
   });
 
@@ -267,13 +330,29 @@ export default function UploadedDocumentsScreen() {
           </View>
         )}
 
-        {/* Category Documents */}
-        {Object.entries(categoryDocs).map(([category, docs]) => (
-          <View key={category} style={styles.section}>
-            <Text style={styles.sectionTitle}>{category}</Text>
-            {docs.map((doc, index) => {
-              const status = categoryVerificationStatus[category] || 'pending';
-              return (
+        {/* Category Documents - Organized by Category */}
+        {Object.entries(categoryDocs).map(([category, docs]) => {
+          const categoryStatus = categoryVerificationStatus[category] || 'pending';
+          return (
+            <View key={category} style={styles.section}>
+              <View style={styles.categoryHeader}>
+                <View style={styles.categoryHeaderLeft}>
+                  <Ionicons name="briefcase" size={20} color="#FF7A2C" />
+                  <Text style={styles.sectionTitle}>{category}</Text>
+                </View>
+                <View style={[
+                  styles.statusBadge,
+                  categoryStatus === 'verified' && styles.statusBadgeVerified,
+                  categoryStatus === 'rejected' && styles.statusBadgeRejected,
+                  categoryStatus === 'pending' && styles.statusBadgePending,
+                ]}>
+                  <Text style={styles.statusText}>
+                    {categoryStatus === 'verified' ? 'Verified' : 
+                     categoryStatus === 'rejected' ? 'Rejected' : 'Pending Review'}
+                  </Text>
+                </View>
+              </View>
+              {docs.map((doc, index) => (
                 <TouchableOpacity
                   key={index}
                   style={styles.uploadedDocCard}
@@ -292,22 +371,12 @@ export default function UploadedDocumentsScreen() {
                       </Text>
                     </View>
                   </View>
-                  <View style={[
-                    styles.statusBadge,
-                    status === 'verified' && styles.statusBadgeVerified,
-                    status === 'rejected' && styles.statusBadgeRejected,
-                    status === 'pending' && styles.statusBadgePending,
-                  ]}>
-                    <Text style={styles.statusText}>
-                      {status === 'verified' ? 'Verified' : 
-                       status === 'rejected' ? 'Rejected' : 'Pending'}
-                    </Text>
-                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#999" />
                 </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
+              ))}
+            </View>
+          );
+        })}
 
         {/* Empty State */}
         {uploadedDocuments.length === 0 && (
@@ -435,6 +504,21 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 16,
+  },
+  categoryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  categoryHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
   },
   uploadedDocCard: {
     backgroundColor: '#fff',
