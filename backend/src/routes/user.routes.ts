@@ -7,9 +7,43 @@ import crypto from 'crypto';
 import { logAdminActivity } from "./dashboard.routes";
 import { OAuth2Client } from 'google-auth-library';
 import { sendUserOTPEmail } from '../utils/userEmailService';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 const router = Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Multer configuration for profile photo uploads
+const profilePhotoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'profile-photo-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const uploadProfilePhoto = multer({
+  storage: profilePhotoStorage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit for profile photos
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
 
 // Health check endpoint
 router.get('/health', (_req: Request, res: Response) => {
@@ -19,7 +53,8 @@ router.get('/health', (_req: Request, res: Response) => {
 // Register new user (basic, no hashing yet; add hashing later)
 router.post("/register", async (req: Request, res: Response) => {
   try {
-    const { username, firstName, lastName, email, password } = req.body;
+    const body = req.body || {};
+    const { username, firstName, lastName, email, password } = body;
     if (!username || !firstName || !lastName || !email || !password) {
       return res.status(400).json({ message: "Missing required fields" });
     }
@@ -52,7 +87,9 @@ router.post("/register", async (req: Request, res: Response) => {
 // Login (basic, compares plain passwords; add hashing later)
 router.post('/login', async (req: Request, res: Response) => {
   try {
-    const { identifier, password } = req.body as { identifier?: string; password?: string };
+    const body = req.body || {};
+    const identifier = body.identifier;
+    const password = body.password;
     if (!identifier || !password) {
       return res.status(400).json({ message: 'Missing credentials' });
     }
@@ -195,25 +232,237 @@ router.post('/reset-password', async (req: Request, res: Response) => {
   }
 });
 
+// Update profile photo - MUST come before /:id route to avoid route conflict
+router.patch('/profile-photo', uploadProfilePhoto.single('profilePhoto'), async (req: Request, res: Response) => {
+  try {
+    // Log request body for debugging
+    console.log('Profile photo upload request body:', req.body);
+    console.log('Profile photo upload file:', (req as any).file);
+    console.log('Request body keys:', Object.keys(req.body || {}));
+    console.log('userId from body:', req.body?.userId);
+    console.log('userId type:', typeof req.body?.userId);
+    
+    // Try to get userId from body (FormData fields should be in req.body with multer)
+    let userId = req.body?.userId;
+    
+    // If userId is an array (sometimes FormData can create arrays), take the first element
+    if (Array.isArray(userId)) {
+      userId = userId[0];
+    }
+    
+    // Convert to string if it's not already
+    if (userId !== undefined && userId !== null) {
+      userId = String(userId);
+    }
+    
+    if (!userId || userId.trim() === '') {
+      console.error('Invalid userId:', userId);
+      console.error('Full req.body:', JSON.stringify(req.body, null, 2));
+      // Clean up uploaded file if userId is missing
+      if ((req as any).file) {
+        fs.unlinkSync((req as any).file.path);
+      }
+      return res.status(400).json({ message: 'User ID is required and must be a valid string' });
+    }
+    
+    // Trim whitespace
+    userId = userId.trim();
+
+    const file = (req as any).file;
+    
+    // If no file uploaded, check if profilePhoto was sent as a string (for backward compatibility)
+    if (!file) {
+      const profilePhoto = req.body?.profilePhoto;
+      if (profilePhoto) {
+        let user;
+        try {
+          user = await User.findByIdAndUpdate(
+            userId,
+            { profilePhoto: profilePhoto || undefined },
+            { new: true }
+          );
+        } catch (findError: any) {
+          if (findError.name === 'CastError' || findError.message?.includes('ObjectId')) {
+            console.error('Invalid user ID format:', userId);
+            return res.status(400).json({ message: 'Invalid user ID format' });
+          }
+          throw findError;
+        }
+
+        if (!user) {
+          return res.status(404).json({ message: 'User not found' });
+        }
+
+        return res.json({ 
+          message: 'Profile photo updated', 
+          profilePhoto: user.profilePhoto 
+        });
+      } else {
+        return res.status(400).json({ message: 'No profile photo provided' });
+      }
+    }
+
+    // File was uploaded - save the file path/URL
+    // Construct URL using request protocol and host
+    const protocol = req.protocol || 'http';
+    const host = req.get('host') || 'localhost:5001';
+    const apiUrl = `${protocol}://${host}`;
+    const profilePhotoUrl = `${apiUrl}/uploads/${file.filename}`;
+
+    // Delete old profile photo if it exists
+    let user;
+    try {
+      user = await User.findById(userId);
+    } catch (findError: any) {
+      // Clean up uploaded file on error
+      fs.unlinkSync(file.path);
+      
+      // Check if it's an ObjectId validation error
+      if (findError.name === 'CastError' || findError.message?.includes('ObjectId')) {
+        console.error('Invalid user ID format:', userId);
+        return res.status(400).json({ message: 'Invalid user ID format' });
+      }
+      throw findError; // Re-throw if it's a different error
+    }
+    if (user?.profilePhoto) {
+      try {
+        // Extract filename from old photo URL
+        const oldPhotoUrl = user.profilePhoto;
+        const urlParts = oldPhotoUrl.split('/uploads/');
+        if (urlParts.length > 1) {
+          const oldFilename = urlParts[1];
+          const oldPhotoFullPath = path.join(uploadsDir, oldFilename);
+          if (fs.existsSync(oldPhotoFullPath)) {
+            fs.unlinkSync(oldPhotoFullPath);
+            console.log(`Deleted old profile photo: ${oldFilename}`);
+          }
+        }
+      } catch (err) {
+        console.error('Error deleting old profile photo:', err);
+      }
+    }
+
+    // Update user with new profile photo URL
+    // Let mongoose handle ID validation - it will throw an error if invalid
+    let updatedUser;
+    try {
+      updatedUser = await User.findByIdAndUpdate(
+        userId,
+        { profilePhoto: profilePhotoUrl },
+        { new: true }
+      );
+    } catch (findError: any) {
+      // Clean up uploaded file on error
+      fs.unlinkSync(file.path);
+      
+      // Check if it's an ObjectId validation error
+      if (findError.name === 'CastError' || findError.message?.includes('ObjectId')) {
+        console.error('Invalid user ID format:', userId);
+        return res.status(400).json({ message: 'Invalid user ID format' });
+      }
+      throw findError; // Re-throw if it's a different error
+    }
+
+    if (!updatedUser) {
+      // Clean up uploaded file if user not found
+      fs.unlinkSync(file.path);
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    console.log(`Profile photo updated for user: ${userId}, file: ${file.filename}`);
+
+    return res.json({ 
+      message: 'Profile photo updated successfully', 
+      profilePhoto: updatedUser.profilePhoto,
+      profileImageUrl: updatedUser.profilePhoto // Alias for compatibility
+    });
+  } catch (err: any) {
+    console.error('Profile photo update error:', err);
+    console.error('Error details:', {
+      message: err.message,
+      stack: err.stack,
+      userId: req.body?.userId,
+      hasFile: !!(req as any).file,
+    });
+    
+    // Clean up uploaded file on error
+    if ((req as any).file) {
+      try {
+        fs.unlinkSync((req as any).file.path);
+        console.log('Cleaned up uploaded file after error');
+      } catch (unlinkErr) {
+        console.error('Error cleaning up file:', unlinkErr);
+      }
+    }
+    
+    // Provide more specific error messages
+    let errorMessage = 'Failed to update profile photo';
+    if (err.message?.includes('ObjectId')) {
+      errorMessage = 'Invalid user ID format';
+    } else if (err.message) {
+      errorMessage = err.message;
+    }
+    
+    return res.status(500).json({ 
+      message: errorMessage,
+      error: err.message || String(err)
+    });
+  }
+});
+
 // Update user profile
 router.patch('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, email, phone, address } = req.body;
+    
+    // Safely extract fields from req.body
+    const body = req.body || {};
+    const firstName = body.firstName;
+    const lastName = body.lastName;
+    const email = body.email;
+    const phone = body.phone;
+    const address = body.address;
 
     // Build update object with only provided fields
     const updateData: any = {};
-    if (firstName !== undefined) updateData.firstName = firstName.trim();
-    if (lastName !== undefined) updateData.lastName = lastName.trim();
-    if (email !== undefined) updateData.email = email.toLowerCase().trim();
-    if (phone !== undefined) updateData.phone = phone.trim() || undefined;
-    if (address !== undefined) updateData.address = address.trim() || undefined;
+    if (firstName !== undefined && firstName !== null) updateData.firstName = String(firstName).trim();
+    if (lastName !== undefined && lastName !== null) updateData.lastName = String(lastName).trim();
+    if (email !== undefined && email !== null) updateData.email = String(email).toLowerCase().trim();
+    if (phone !== undefined && phone !== null) {
+      const phoneStr = String(phone).trim();
+      updateData.phone = phoneStr || undefined;
+    }
+    if (address !== undefined && address !== null) {
+      const addressStr = String(address).trim();
+      updateData.address = addressStr || undefined;
+    }
 
-    const user = await User.findByIdAndUpdate(
-      id,
-      updateData,
-      { new: true, runValidators: true }
-    );
+    // Validate user ID is provided
+    if (!id || typeof id !== 'string' || id.trim() === '') {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    // Check if there's any data to update
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: 'No fields provided to update' });
+    }
+
+    // Let mongoose handle ID validation
+    let user;
+    try {
+      user = await User.findByIdAndUpdate(
+        id.trim(),
+        updateData,
+        { new: true, runValidators: true }
+      );
+    } catch (findError: any) {
+      // Check if it's an ObjectId validation error
+      if (findError.name === 'CastError' || findError.message?.includes('ObjectId')) {
+        console.error('Invalid user ID format:', id);
+        return res.status(400).json({ message: 'Invalid user ID format' });
+      }
+      throw findError; // Re-throw if it's a different error
+    }
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -233,38 +482,29 @@ router.patch('/:id', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Profile update error:', err);
+    console.error('Error details:', {
+      message: err.message,
+      stack: err.stack,
+      body: req.body,
+      params: req.params,
+    });
+    
     if (err.code === 11000) {
       return res.status(409).json({ message: 'Email already exists' });
     }
-    return res.status(500).json({ message: 'Failed to update profile', error: err.message });
-  }
-});
-
-// Update profile photo
-router.patch('/profile-photo', async (req: Request, res: Response) => {
-  try {
-    const { userId, profilePhoto } = req.body as { userId?: string; profilePhoto?: string | null };
-    if (!userId) {
-      return res.status(400).json({ message: 'User ID is required' });
+    
+    // Provide more specific error message
+    let errorMessage = 'Failed to update profile';
+    if (err.message?.includes('validation')) {
+      errorMessage = 'Validation error: ' + err.message;
+    } else if (err.message) {
+      errorMessage = err.message;
     }
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { profilePhoto: profilePhoto || undefined },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    return res.json({ 
-      message: 'Profile photo updated', 
-      profilePhoto: user.profilePhoto 
+    
+    return res.status(500).json({ 
+      message: errorMessage, 
+      error: err.message || String(err) 
     });
-  } catch (err) {
-    console.error('Profile photo update error:', err);
-    return res.status(500).json({ message: 'Failed to update profile photo' });
   }
 });
 
