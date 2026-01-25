@@ -110,22 +110,37 @@ export const robustFetch = async (
         ? existingHeaders as Record<string, string>
         : {};
       
+      // Check if body is FormData - if so, don't set Content-Type (let browser set it with boundary)
+      const isFormData = options.body instanceof FormData;
+      
       const fetchOptions: RequestInit = {
         ...options,
         signal: controller.signal,
         cache: 'no-cache',
         credentials: 'omit',
         // Add headers for better Android compatibility
-        headers: {
-          ...headersObj,
-          'Connection': 'close',
-          'Accept': 'application/json',
-          'Content-Type': headersObj['Content-Type'] || 'application/json',
-          // Android-specific headers
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0',
-        },
+        headers: isFormData
+          ? {
+              // For FormData, only include non-Content-Type headers
+              ...headersObj,
+              'Connection': 'close',
+              'Accept': 'application/json',
+              // DO NOT set Content-Type for FormData - browser will set it with boundary
+              // Android-specific headers
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0',
+            }
+          : {
+              ...headersObj,
+              'Connection': 'close',
+              'Accept': 'application/json',
+              'Content-Type': headersObj['Content-Type'] || 'application/json',
+              // Android-specific headers
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0',
+            },
       };
 
       // Try fetch with enhanced options
@@ -140,11 +155,17 @@ export const robustFetch = async (
           fetchError.message?.includes('Network request failed')
         )) {
           console.log('⚠️ Android fetch failed, retrying with minimal options...');
+          const isFormDataRetry = options.body instanceof FormData;
           const minimalOptions: RequestInit = {
             method: options.method || 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: isFormDataRetry
+              ? {
+                  // For FormData, only include Authorization if present
+                  ...(headersObj['Authorization'] ? { 'Authorization': headersObj['Authorization'] } : {}),
+                }
+              : {
+                  'Content-Type': 'application/json',
+                },
             body: options.body,
             signal: controller.signal,
           };
