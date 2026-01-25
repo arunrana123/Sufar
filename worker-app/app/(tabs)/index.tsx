@@ -1,6 +1,7 @@
 // WORKER HOME SCREEN - Main dashboard with availability toggle, service management, and location tracking
 // Features: Toggle online/offline status, GPS location tracking, add/edit services, incoming booking requests banner, helpful tooltips
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Pressable, SafeAreaView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,7 +24,7 @@ export default function HomeScreen() {
   const { worker } = useAuth();
   const [selectedLocation, setSelectedLocation] = useState('Kathmandu');
   const [showLocationDropdown, setShowLocationDropdown] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(3);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [isAvailable, setIsAvailable] = useState(false);
   const [isLocationTracking, setIsLocationTracking] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<{latitude: number, longitude: number} | null>(null);
@@ -195,6 +196,53 @@ export default function HomeScreen() {
     }
   }, [worker?.id]);
 
+  // Fetch unread notification count from backend
+  const fetchUnreadCount = useCallback(async () => {
+    if (!worker?.id) {
+      setUnreadCount(0);
+      return;
+    }
+    
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/notifications/user/${worker.id}/unread-count`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const count = data.count || 0;
+        setUnreadCount(count);
+        console.log('📊 Unread notification count:', count);
+      } else {
+        console.warn('Failed to fetch unread count, using 0');
+        setUnreadCount(0);
+      }
+    } catch (error) {
+      console.error('Error fetching unread count:', error);
+      setUnreadCount(0);
+    }
+  }, [worker?.id]);
+
+  // Fetch unread count on mount and when worker changes
+  useEffect(() => {
+    fetchUnreadCount();
+    
+    // Refresh count every 10 seconds
+    const interval = setInterval(fetchUnreadCount, 10000);
+    return () => clearInterval(interval);
+  }, [fetchUnreadCount]);
+
+  // Refresh count when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      fetchUnreadCount();
+    }, [fetchUnreadCount])
+  );
+
   // Initialize socket connection and booking request listener
   // Triggered by: Worker logs in, component mounts with worker ID
   useEffect(() => {
@@ -227,6 +275,58 @@ export default function HomeScreen() {
         updateServiceInList(updatedService);
       });
 
+      // Listen for new notifications to update count in real-time
+      const handleNewNotification = (notification: any) => {
+        console.log('📬 New notification received:', notification);
+        if (notification.userId === worker.id || String(notification.userId) === String(worker.id)) {
+          // Increment count immediately
+          setUnreadCount(prev => prev + 1);
+          // Also refresh from backend to ensure accuracy
+          setTimeout(() => fetchUnreadCount(), 500);
+        }
+      };
+
+      // Listen for notification read events to update count
+      const handleNotificationRead = (data: any) => {
+        console.log('✅ Notification read event received:', data);
+        // Decrement count immediately
+        setUnreadCount(prev => Math.max(0, prev - 1));
+        // Refresh from backend to ensure accuracy
+        setTimeout(() => fetchUnreadCount(), 500);
+      };
+
+      // Listen for notification deleted events
+      const handleNotificationDeleted = (data: any) => {
+        console.log('🗑️ Notification deleted event received:', data);
+        // Refresh count from backend
+        setTimeout(() => fetchUnreadCount(), 500);
+      };
+
+      // Listen for all notifications cleared
+      const handleNotificationsCleared = (data: any) => {
+        console.log('🗑️ All notifications cleared event received:', data);
+        if (data.userId === worker.id || String(data.userId) === String(worker.id)) {
+          setUnreadCount(0);
+        }
+      };
+
+      // Listen for all notifications marked as read
+      const handleAllNotificationsRead = (data: any) => {
+        console.log('✅ All notifications read event received:', data);
+        if (data.userId === worker.id || String(data.userId) === String(worker.id)) {
+          setUnreadCount(0);
+          // Refresh from backend to ensure accuracy
+          setTimeout(() => fetchUnreadCount(), 500);
+        }
+      };
+
+      // Set up notification socket listeners
+      socketService.on('notification:new', handleNewNotification);
+      socketService.on('notification:read', handleNotificationRead);
+      socketService.on('notification:deleted', handleNotificationDeleted);
+      socketService.on('notifications:cleared', handleNotificationsCleared);
+      socketService.on('notifications:all-read', handleAllNotificationsRead);
+
       // Ensure location tracking starts so backend location updates succeed
       startLocationTracking();
     }
@@ -237,6 +337,11 @@ export default function HomeScreen() {
       locationService.stopTracking();
       bookingRequestListener.stopListening();
       socketService.off('service:updated');
+      socketService.off('notification:new');
+      socketService.off('notification:read');
+      socketService.off('notification:deleted');
+      socketService.off('notifications:cleared');
+      socketService.off('notifications:all-read');
     };
   }, [worker?.id]);
 
