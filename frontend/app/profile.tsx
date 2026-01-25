@@ -1,6 +1,6 @@
 // PROFILE SCREEN - User profile management with photo upload, account settings, and logout
 // Features: Edit profile info, upload/change profile photo (expo-image-picker), update account via API
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import BottomNav from '@/components/BottomNav';
 import { getApiUrl } from '@/lib/config';
+import { socketService } from '@/lib/SocketService';
 
 export default function ProfileScreen() {
   const { theme } = useTheme();
@@ -33,6 +34,75 @@ export default function ProfileScreen() {
     username: user?.username || '',
     email: user?.email || '',
   });
+  const [rewardPoints, setRewardPoints] = useState<number>((user as any)?.rewardPoints || 0);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Sync formData when user data changes
+  useEffect(() => {
+    if (user && !isEditing) {
+      setFormData({
+        firstName: user?.firstName || '',
+        lastName: user?.lastName || '',
+        username: user?.username || '',
+        email: user?.email || '',
+      });
+      setProfileImage(user?.profilePhoto || null);
+    }
+  }, [user, isEditing]);
+
+  // Fetch and update reward points
+  useEffect(() => {
+    const fetchRewardPoints = async () => {
+      if (!user?.id) return;
+      
+      try {
+        const apiUrl = getApiUrl();
+        const response = await fetch(`${apiUrl}/api/users/${user.id}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        
+        if (response.ok) {
+          const userData = await response.json();
+          const points = userData.rewardPoints || 0;
+          setRewardPoints(points);
+          
+          // Update user context
+          if (userData.rewardPoints !== undefined) {
+            updateUser({ ...user, rewardPoints: points } as any);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching reward points:', error);
+      }
+    };
+
+    fetchRewardPoints();
+    
+    // Connect to socket for real-time updates
+    if (user?.id) {
+      socketService.connect(user.id, 'user');
+      
+      // Listen for reward points updates
+      const handleRewardPointsUpdate = (data: any) => {
+        if (data.userId === user.id) {
+          console.log('🎁 Reward points updated:', data);
+          setRewardPoints(data.totalPoints);
+          updateUser({ ...user, rewardPoints: data.totalPoints } as any);
+        }
+      };
+      
+      socketService.on('reward:points_updated', handleRewardPointsUpdate);
+      
+      // Refresh every 10 seconds for live updates
+      const intervalId = setInterval(fetchRewardPoints, 10000);
+      
+      return () => {
+        clearInterval(intervalId);
+        socketService.off('reward:points_updated', handleRewardPointsUpdate);
+      };
+    }
+  }, [user?.id]);
 
   const pickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -88,24 +158,57 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.firstName || !formData.lastName || !formData.email) {
       Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
 
-    if (user) {
+    if (!user?.id) {
+      Alert.alert('Error', 'User not found');
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/users/${user.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          firstName: formData.firstName.trim(),
+          lastName: formData.lastName.trim(),
+          email: formData.email.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to update profile');
+      }
+
+      const updatedUserData = await response.json();
+      
+      // Update user context with the response from backend
       const updatedUser = {
         ...user,
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        username: formData.username,
-        email: formData.email,
+        firstName: updatedUserData.firstName,
+        lastName: updatedUserData.lastName,
+        email: updatedUserData.email,
+        phone: updatedUserData.phone,
+        profilePhoto: updatedUserData.profilePhoto,
       };
 
       updateUser(updatedUser);
       setIsEditing(false);
       Alert.alert('Success', 'Profile updated successfully!');
+    } catch (error: any) {
+      console.error('Error updating profile:', error);
+      Alert.alert('Error', error.message || 'Failed to update profile. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -180,6 +283,15 @@ export default function ProfileScreen() {
               {user?.firstName} {user?.lastName}
             </Text>
             <Text style={[styles.imageEmail, { color: theme.secondary }]}>{user?.email || ''}</Text>
+            
+            {/* Reward Points Display */}
+            <View style={[styles.rewardPointsContainer, { backgroundColor: theme.primary + '15', borderColor: theme.primary }]}>
+              <Ionicons name="star" size={20} color={theme.primary} />
+              <Text style={[styles.rewardPointsLabel, { color: theme.text }]}>Reward Points:</Text>
+              <Text style={[styles.rewardPointsValue, { color: theme.primary }]}>
+                {rewardPoints.toLocaleString()}
+              </Text>
+            </View>
           </View>
 
           {/* Profile Details */}
@@ -260,11 +372,21 @@ export default function ProfileScreen() {
             {/* Edit Buttons */}
             {isEditing && (
               <View style={styles.buttonContainer}>
-                <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
+                <TouchableOpacity 
+                  style={styles.cancelButton} 
+                  onPress={handleCancel}
+                  disabled={isSaving}
+                >
                   <Text style={styles.cancelButtonText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-                  <Text style={styles.saveButtonText}>Save Changes</Text>
+                <TouchableOpacity 
+                  style={[styles.saveButton, isSaving && styles.saveButtonDisabled]} 
+                  onPress={handleSave}
+                  disabled={isSaving}
+                >
+                  <Text style={styles.saveButtonText}>
+                    {isSaving ? 'Saving...' : 'Save Changes'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -445,6 +567,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
+  saveButtonDisabled: {
+    opacity: 0.6,
+  },
   saveButtonText: {
     color: '#fff',
     fontSize: 16,
@@ -468,6 +593,25 @@ const styles = StyleSheet.create({
   },
   dangerText: {
     color: '#EF4444',
+  },
+  rewardPointsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 2,
+    marginTop: 12,
+  },
+  rewardPointsLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  rewardPointsValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
   },
 });
 
