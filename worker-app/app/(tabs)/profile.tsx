@@ -415,7 +415,21 @@ export default function ProfileScreen() {
             });
 
             if (response.ok) {
+              const result = await response.json();
               console.log('✅ Profile image saved to backend successfully');
+              
+              // Update context with new profile image
+              updateWorker({
+                ...worker,
+                profileImage: imageUri,
+              } as any);
+              
+              // Emit socket event to notify other screens
+              socketService.emit('worker:profile_updated', {
+                workerId: worker.id,
+                profileImage: imageUri,
+              });
+              
               setPendingImageUpdate(false);
             } else {
               console.log('⚠️ Backend save failed');
@@ -1196,20 +1210,69 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name || !formData.email || !formData.phone) {
       Alert.alert('Error', 'Please fill in all required fields');
       return;
     }
 
-    updateWorker({
-      name: formData.name,
-      email: formData.email,
-      phone: formData.phone,
-      skills: formData.skills.split(',').map(s => s.trim()).filter(s => s),
-    });
-    setIsEditing(false);
-    Alert.alert('Success', 'Profile updated successfully!');
+    if (!worker?.id) {
+      Alert.alert('Error', 'Worker information not available');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/workers/update-profile`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${worker?.token || ''}`,
+        },
+        body: JSON.stringify({
+          workerId: worker.id,
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          skills: formData.skills.split(',').map(s => s.trim()).filter(s => s),
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Profile updated successfully:', result);
+        
+        // Update worker context with new data
+        updateWorker({
+          ...worker,
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          skills: formData.skills.split(',').map(s => s.trim()).filter(s => s),
+        } as any);
+        
+        // Emit socket event to notify other screens
+        socketService.emit('worker:profile_updated', {
+          workerId: worker.id,
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+        });
+        
+        setIsEditing(false);
+        Alert.alert('Success', 'Profile updated successfully!');
+      } else {
+        const errorText = await response.text();
+        console.error('❌ Profile update failed:', response.status, errorText);
+        Alert.alert('Error', 'Failed to update profile. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('❌ Error updating profile:', error);
+      Alert.alert('Error', 'Failed to update profile. Please check your connection and try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCancel = () => {
