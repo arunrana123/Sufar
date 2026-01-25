@@ -151,6 +151,8 @@ export default function NotificationsScreen() {
       }
       const updated = [notification, ...prev];
       saveNotifications(updated);
+      const newUnreadCount = updated.filter((n) => !(n.read || n.isRead)).length;
+      console.log('📊 New notification added, unread count:', newUnreadCount);
       return updated;
     });
   };
@@ -391,6 +393,24 @@ export default function NotificationsScreen() {
           setNotifications((prev) => {
             const updated = prev.filter((n) => n._id !== data.notificationId && n.id !== data.notificationId);
             saveNotifications(updated);
+            console.log('📊 Unread count after deletion:', updated.filter((n) => !(n.read || n.isRead)).length);
+            return updated;
+          });
+        }
+      };
+      
+      // Listen for notification read events (from other screens or devices)
+      const handleNotificationRead = (data: any) => {
+        console.log('✅ Notification read event received:', data);
+        if (data.notificationId) {
+          setNotifications((prev) => {
+            const updated = prev.map((n) => 
+              (n._id === data.notificationId || n.id === data.notificationId) 
+                ? { ...n, read: true, isRead: true } 
+                : n
+            );
+            saveNotifications(updated);
+            console.log('📊 Unread count after read event:', updated.filter((n) => !(n.read || n.isRead)).length);
             return updated;
           });
         }
@@ -402,6 +422,21 @@ export default function NotificationsScreen() {
         if (data.userId === worker.id || data.userId === String(worker.id)) {
           setNotifications([]);
           AsyncStorage.removeItem(NOTIFICATIONS_STORAGE_KEY);
+          console.log('📊 All notifications cleared, unread count: 0');
+        }
+      };
+      
+      // Listen for all notifications marked as read
+      const handleAllNotificationsRead = (data: any) => {
+        console.log('✅ All notifications read event received:', data);
+        if (data.userId === worker.id || String(data.userId) === String(worker.id)) {
+          // Mark all as read in local state
+          setNotifications((prev) => {
+            const updated = prev.map((n) => ({ ...n, read: true, isRead: true }));
+            saveNotifications(updated);
+            console.log('📊 All notifications marked as read, unread count: 0');
+            return updated;
+          });
         }
       };
 
@@ -414,7 +449,9 @@ export default function NotificationsScreen() {
       socketService.on('category:verification:submitted', handleCategoryVerificationUpdate);
       socketService.on('notification:new', handleBackendNotification);
       socketService.on('notification:deleted', handleNotificationDeleted);
+      socketService.on('notification:read', handleNotificationRead);
       socketService.on('notifications:cleared', handleNotificationsCleared);
+      socketService.on('notifications:all-read', handleAllNotificationsRead);
 
       // Register for push notifications
       pushNotificationService.registerForPushNotifications().then((token) => {
@@ -432,7 +469,9 @@ export default function NotificationsScreen() {
         socketService.off('category:verification:submitted', handleCategoryVerificationUpdate);
         socketService.off('notification:new', handleBackendNotification);
         socketService.off('notification:deleted', handleNotificationDeleted);
+        socketService.off('notification:read', handleNotificationRead);
         socketService.off('notifications:cleared', handleNotificationsCleared);
+        socketService.off('notifications:all-read', handleAllNotificationsRead);
       };
     }
   }, [worker?.id]);
@@ -452,7 +491,55 @@ export default function NotificationsScreen() {
     return new Date(timestamp).toLocaleDateString();
   };
 
+  // Calculate unread count in real-time from notifications array
   const unreadCount = notifications.filter((n) => !(n.read || n.isRead)).length;
+
+  // Fetch unread count from backend
+  const fetchUnreadCount = async () => {
+    if (!worker?.id) return 0;
+    
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/notifications/user/${worker.id}/unread-count`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.count || 0;
+      }
+    } catch (error) {
+      console.error('Error fetching unread count:', error);
+    }
+    return 0;
+  };
+
+  // Update unread count when notifications change
+  useEffect(() => {
+    if (worker?.id) {
+      // Sync with backend count periodically
+      const syncCount = async () => {
+        const backendCount = await fetchUnreadCount();
+        const localCount = notifications.filter((n) => !(n.read || n.isRead)).length;
+        
+        // Use the higher count (backend might have more recent data)
+        if (backendCount !== localCount) {
+          console.log('📊 Unread count sync:', { backendCount, localCount });
+          // If backend has more, reload notifications
+          if (backendCount > localCount) {
+            loadNotifications(true);
+          }
+        }
+      };
+      
+      // Sync every 10 seconds
+      const interval = setInterval(syncCount, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [notifications, worker?.id]);
 
   const markAsRead = async (id: string) => {
     try {
@@ -470,6 +557,8 @@ export default function NotificationsScreen() {
 
           if (response.ok) {
             console.log('✅ Notification marked as read in backend:', notification._id);
+            // Emit socket event to notify other screens
+            socketService.emit('notification:read', { notificationId: notification._id });
           }
         } catch (apiError) {
           console.error('Error marking as read in backend:', apiError);
@@ -477,12 +566,14 @@ export default function NotificationsScreen() {
         }
       }
 
-      // Update local state
+      // Update local state immediately for instant UI feedback
       const updated = notifications.map((n) => 
         (n.id === id || n._id === id) ? { ...n, read: true, isRead: true } : n
       );
       setNotifications(updated);
       saveNotifications(updated);
+      
+      console.log('📊 Unread count updated:', updated.filter((n) => !(n.read || n.isRead)).length);
     } catch (error) {
       console.error('Error marking notification as read:', error);
     }
@@ -503,6 +594,13 @@ export default function NotificationsScreen() {
 
           if (response.ok) {
             console.log('✅ All notifications marked as read in backend');
+            // Emit socket event to notify other screens
+            const unreadNotifications = notifications.filter((n) => !(n.read || n.isRead));
+            unreadNotifications.forEach((n) => {
+              if (n._id) {
+                socketService.emit('notification:read', { notificationId: n._id });
+              }
+            });
           }
         } catch (apiError) {
           console.error('Error marking all as read in backend:', apiError);
@@ -510,10 +608,12 @@ export default function NotificationsScreen() {
         }
       }
 
-      // Update local state
+      // Update local state immediately for instant UI feedback
       const updated = notifications.map((n) => ({ ...n, read: true, isRead: true }));
       setNotifications(updated);
       saveNotifications(updated);
+      
+      console.log('📊 All notifications marked as read, unread count: 0');
     } catch (error) {
       console.error('Error marking all as read:', error);
     }
@@ -675,6 +775,7 @@ export default function NotificationsScreen() {
 
         <ScrollView
           style={styles.content}
+          contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={loading} onRefresh={() => loadNotifications(true)} />
@@ -858,6 +959,10 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 20,
+    flexGrow: 1,
   },
   section: {
     paddingTop: 20,
