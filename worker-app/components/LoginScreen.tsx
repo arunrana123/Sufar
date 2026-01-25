@@ -267,6 +267,8 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
             skills: data.worker.skills || [],
             token: data.token,
             profileImage: storedWorkerData?.profileImage || data.worker.profileImage || data.worker.profilePhoto || null,
+            serviceCategories: data.worker.serviceCategories || [], // Include service categories from backend
+            categoryVerificationStatus: data.worker.categoryVerificationStatus || null,
             documents: storedWorkerData?.documents || data.worker.documents || null,
             verificationStatus: storedWorkerData?.verificationStatus || data.worker.verificationStatus || null,
             verificationSubmitted: storedWorkerData?.verificationSubmitted || data.worker.verificationSubmitted || false,
