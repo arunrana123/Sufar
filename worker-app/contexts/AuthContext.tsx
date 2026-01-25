@@ -108,9 +108,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
       
       // Merge: use stored profileImage if it exists, otherwise use login data
+      // Always use latest serviceCategories from backend login data
       const mergedData: Worker = {
         ...workerData,
         profileImage: existingData.profileImage || workerData.profileImage || undefined,
+        serviceCategories: workerData.serviceCategories || existingData.serviceCategories || [], // Prefer backend data
+        categoryVerificationStatus: workerData.categoryVerificationStatus || existingData.categoryVerificationStatus || undefined,
         documents: existingData.documents || workerData.documents || undefined,
         verificationStatus: existingData.verificationStatus || workerData.verificationStatus || undefined,
         verificationSubmitted: existingData.verificationSubmitted || workerData.verificationSubmitted || false,
