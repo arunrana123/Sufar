@@ -67,11 +67,31 @@ app.use(cors({
   origin: true, // Allow all origins for mobile apps
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  maxAge: 86400, // 24 hours
 }));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Support URL-encoded bodies
 app.use('/uploads', express.static(uploadsDir));
+
+// Add request logging middleware for debugging
+app.use((req, res, next) => {
+  if (req.path.includes('upload-service-documents')) {
+    console.log('📥 Incoming request:', {
+      method: req.method,
+      path: req.path,
+      headers: {
+        'content-type': req.headers['content-type'],
+        'authorization': req.headers['authorization'] ? 'present' : 'missing',
+      },
+      bodyKeys: req.body ? Object.keys(req.body) : [],
+      files: req.files ? Object.keys(req.files as any) : [],
+    });
+  }
+  next();
+});
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
@@ -504,18 +524,32 @@ app.post('/api/workers/upload-documents', upload.fields([
 // NEW: Service category document upload route
 // Handles all documents for service category verification: drivingLicense, citizenship, serviceCertificate, experienceCertificate
 // experienceCertificate can be multiple files (for multi-page documents)
-app.post('/api/workers/upload-service-documents', upload.fields([
+// Add error handling middleware before multer to catch errors
+app.post('/api/workers/upload-service-documents', (req, res, next) => {
+  console.log('📥 Upload route hit - before multer');
+  console.log('📋 Content-Type:', req.headers['content-type']);
+  console.log('📋 Content-Length:', req.headers['content-length']);
+  next();
+}, upload.fields([
   { name: 'drivingLicense', maxCount: 1 },
   { name: 'citizenship', maxCount: 1 },
   { name: 'serviceCertificate', maxCount: 1 },
   { name: 'experienceCertificate', maxCount: 10 } // Allow up to 10 images for experience certificate
 ]), async (req, res) => {
+  console.log('📥 Received upload-service-documents request');
+  console.log('📋 Request body fields:', Object.keys(req.body));
+  console.log('📋 Request files:', req.files ? Object.keys(req.files as any) : 'no files');
+  console.log('👤 Worker ID:', req.body.workerId);
+  console.log('📂 Category:', req.body.category);
+  console.log('📊 Files received:', req.files ? JSON.stringify(Object.keys((req.files as any))) : 'none');
+  
   try {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
     const workerId = req.body.workerId;
     const category = req.body.category;
 
     if (!workerId || !category) {
+      console.error('❌ Missing required fields:', { workerId: !!workerId, category: !!category });
       return res.status(400).json({ message: 'Worker ID and category are required' });
     }
 
@@ -671,6 +705,9 @@ app.post('/api/workers/upload-service-documents', upload.fields([
       console.log(`📢 Service verification submitted event emitted for ${category}`);
     }
 
+    console.log('✅ Service documents saved successfully for category:', category);
+    console.log('📤 Sending success response...');
+    
     res.json({
       success: true,
       message: `Service documents uploaded successfully for ${category}`,
@@ -679,12 +716,31 @@ app.post('/api/workers/upload-service-documents', upload.fields([
         drivingLicense: files.drivingLicense?.[0]?.filename,
         citizenship: files.citizenship?.[0]?.filename,
         serviceCertificate: files.serviceCertificate?.[0]?.filename,
-        experienceCertificate: files.experienceCertificate?.[0]?.filename,
+        experienceCertificate: experienceFilenames.length > 0 ? experienceFilenames[0] : files.experienceCertificate?.[0]?.filename,
       },
     });
-  } catch (error) {
-    console.error('Service document upload error:', error);
-    res.status(500).json({ message: 'Failed to upload service documents' });
+    
+    console.log('✅ Response sent successfully');
+  } catch (error: any) {
+    console.error('❌ Service document upload error:', error);
+    console.error('❌ Error stack:', error.stack);
+    console.error('❌ Error message:', error.message);
+    console.error('❌ Error name:', error.name);
+    console.error('❌ Error code:', error.code);
+    
+    // Handle multer errors specifically
+    if (error.name === 'MulterError') {
+      console.error('❌ Multer error:', error.code, error.field);
+      return res.status(400).json({ 
+        message: `File upload error: ${error.message || error.code}`,
+        error: error.code || 'MULTER_ERROR'
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Failed to upload service documents',
+      error: error.message || String(error)
+    });
   }
 });
 
@@ -880,9 +936,66 @@ app.get("/health", async (req, res) => {
 
 const PORT = Number(process.env.PORT) || 5001;
 
-connectDB().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`🔌 Socket.IO server is running`);
-  });
+// Add error handling to prevent crash loops
+server.on('error', (error: any) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use.`);
+    console.error('   Please kill the process using this port or use a different port.');
+    console.error('   To find and kill: lsof -ti:5001 | xargs kill -9');
+    process.exit(1);
+  } else {
+    console.error('❌ Server error:', error);
+    process.exit(1);
+  }
 });
+
+// Handle uncaught exceptions to prevent crash loops
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  console.error('   Stack:', error.stack);
+  // Exit after logging to prevent infinite restart loops
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise);
+  console.error('   Reason:', reason);
+  // Log but don't exit for unhandled rejections (they're less critical)
+});
+
+// Graceful shutdown handling
+const gracefulShutdown = (signal: string) => {
+  console.log(`\n🛑 Received ${signal}. Gracefully shutting down...`);
+  server.close(() => {
+    console.log('✅ HTTP server closed.');
+    io.close(() => {
+      console.log('✅ Socket.IO server closed.');
+      process.exit(0);
+    });
+  });
+  
+  // Force close after 10 seconds
+  setTimeout(() => {
+    console.error('❌ Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+connectDB()
+  .then(() => {
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`🌐 Server accessible at http://0.0.0.0:${PORT}`);
+      console.log(`🔌 Socket.IO server is running`);
+      console.log(`✅ Backend is stable and ready to accept requests`);
+    });
+  })
+  .catch((error) => {
+    console.error('❌ Failed to connect to database:', error);
+    console.error('   Server will not start without database connection.');
+    console.error('   Please check your MongoDB connection and try again.');
+    process.exit(1);
+  });
