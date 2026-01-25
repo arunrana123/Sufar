@@ -408,7 +408,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   backButton: {
-    padding: 4,
+    padding: 8,
+    marginLeft: -8,
+    marginRight: 4,
   },
   headerTitle: {
     fontSize: 20,
