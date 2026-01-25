@@ -31,7 +31,7 @@ interface CategoryDocuments {
   drivingLicense?: DocumentFile | null;
   citizenship?: DocumentFile | null;
   serviceCertificate?: DocumentFile | null;
-  experienceCertificate?: DocumentFile | null;
+  experienceCertificate?: DocumentFile | DocumentFile[] | null; // Allow single file or array for multiple images
 }
 
 export default function DocumentVerificationScreen() {
@@ -50,8 +50,66 @@ export default function DocumentVerificationScreen() {
   useEffect(() => {
     if (worker?.id) {
       loadVerificationData();
+      
+      // Connect to socket for live updates
+      const { socketService } = require('@/lib/SocketService');
+      socketService.connect(worker.id, 'worker');
+      
+      // Listen for verification status updates
+      const handleVerificationUpdate = (data: any) => {
+        if (data.workerId === worker.id || data.category) {
+          console.log('📢 Verification update received:', data);
+          // Reload verification data
+          setTimeout(() => {
+            loadVerificationData();
+          }, 1000);
+        }
+      };
+      
+      // Listen for category verification updates
+      const handleCategoryVerificationUpdate = (data: any) => {
+        if (data.workerId === worker.id) {
+          console.log('📢 Category verification update received:', data);
+          setCategoryVerificationStatus(prev => ({
+            ...prev,
+            [data.category]: data.status,
+          }));
+          // Reload verification data
+          setTimeout(() => {
+            loadVerificationData();
+          }, 1000);
+        }
+      };
+      
+      // Listen for document submission confirmation
+      const handleDocumentSubmitted = (data: any) => {
+        if (data.workerId === worker.id) {
+          console.log('📢 Document submitted confirmation:', data);
+          Alert.alert(
+            '✅ Documents Submitted',
+            'Your documents have been submitted for verification. You will be notified once the review is complete.',
+            [{ text: 'OK' }]
+          );
+          // Reload verification data
+          setTimeout(() => {
+            loadVerificationData();
+          }, 1000);
+        }
+      };
+      
+      socketService.on('document:verification:updated', handleVerificationUpdate);
+      socketService.on('category:verification:updated', handleCategoryVerificationUpdate);
+      socketService.on('category:verification:submitted', handleDocumentSubmitted);
+      socketService.on('document:verification:submitted', handleDocumentSubmitted);
+      
+      return () => {
+        socketService.off('document:verification:updated', handleVerificationUpdate);
+        socketService.off('category:verification:updated', handleCategoryVerificationUpdate);
+        socketService.off('category:verification:submitted', handleDocumentSubmitted);
+        socketService.off('document:verification:submitted', handleDocumentSubmitted);
+      };
     }
-  }, [worker]);
+  }, [worker?.id]);
 
   const loadVerificationData = async (preserveLocalUploads: boolean = false) => {
     if (!worker?.id) {
@@ -112,11 +170,17 @@ export default function DocumentVerificationScreen() {
             experienceCertificate: preserveLocalUploads && localDocs.experienceCertificate
               ? localDocs.experienceCertificate
               : (catDocs.experience || catDocs.experienceCertificate
-                  ? { 
-                      uri: `${apiUrl}/uploads/${catDocs.experience || catDocs.experienceCertificate}`, 
-                      name: catDocs.experience || catDocs.experienceCertificate,
-                      mimeType: (catDocs.experience || catDocs.experienceCertificate || '').includes('.pdf') ? 'application/pdf' : 'image/jpeg'
-                    }
+                  ? (Array.isArray(catDocs.experience) 
+                      ? catDocs.experience.map((filename: string) => ({
+                          uri: `${apiUrl}/uploads/${filename}`,
+                          name: filename,
+                          mimeType: filename.includes('.pdf') ? 'application/pdf' : 'image/jpeg'
+                        }))
+                      : {
+                          uri: `${apiUrl}/uploads/${catDocs.experience || catDocs.experienceCertificate}`, 
+                          name: catDocs.experience || catDocs.experienceCertificate,
+                          mimeType: (catDocs.experience || catDocs.experienceCertificate || '').includes('.pdf') ? 'application/pdf' : 'image/jpeg'
+                        })
                   : null),
           };
           categoryStatus[cat] = workerData.categoryVerificationStatus?.[cat] || 'pending';
@@ -242,8 +306,12 @@ export default function DocumentVerificationScreen() {
         setTimeout(() => {
           setCategoryDocuments(current => {
             const check = current[category]?.[docType];
-            if (check && check.uri) {
-              console.log('✅✅✅ Document CONFIRMED in state:', check.name, check.uri.substring(0, 50));
+            if (check) {
+              if (Array.isArray(check)) {
+                console.log('✅✅✅ Multiple documents CONFIRMED in state:', check.length, 'files');
+              } else if ((check as DocumentFile).uri) {
+                console.log('✅✅✅ Document CONFIRMED in state:', (check as DocumentFile).name, (check as DocumentFile).uri.substring(0, 50));
+              }
             } else {
               console.error('❌❌❌ Document NOT in state! Category:', category, 'DocType:', docType);
               console.error('Current state:', JSON.stringify(current[category], null, 2));
@@ -261,7 +329,10 @@ export default function DocumentVerificationScreen() {
         
       } else {
         // For image-only documents - use ImagePicker
-        console.log('📷 Opening ImagePicker for image selection...');
+        // Allow multiple selection for experienceCertificate
+        const allowMultiple = docType === 'experienceCertificate';
+        
+        console.log('📷 Opening ImagePicker for image selection...', { allowMultiple });
         
         // Request permission first
         const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -285,10 +356,10 @@ export default function DocumentVerificationScreen() {
 
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsEditing: true,
-          aspect: [4, 3],
+          allowsEditing: !allowMultiple, // Don't allow editing when multiple selection
+          aspect: allowMultiple ? undefined : [4, 3],
           quality: 0.8,
-          allowsMultipleSelection: false,
+          allowsMultipleSelection: allowMultiple,
         });
 
         console.log('📷 ImagePicker result:', {
@@ -307,61 +378,113 @@ export default function DocumentVerificationScreen() {
           return;
         }
 
-        const asset = result.assets[0];
-        
-        if (!asset.uri) {
-          console.error('❌ Asset has no URI');
-          Alert.alert('Error', 'Selected image has no valid file path. Please try again.');
-          return;
-        }
-        
-        const fileInfo: DocumentFile = {
-          uri: asset.uri,
-          name: asset.fileName || asset.uri.split('/').pop() || `image-${Date.now()}.jpg`,
-          mimeType: asset.type || 'image/jpeg',
-          size: asset.fileSize || 0,
-        };
-        
-        console.log('✅ Image info prepared:', {
-          uri: fileInfo.uri.substring(0, 80) + '...',
-          name: fileInfo.name,
-          mimeType: fileInfo.mimeType,
-          size: fileInfo.size,
-        });
-        
-        // Update state immediately
-        setCategoryDocuments(prev => {
-          const currentCategory = prev[category] || {};
-          const updated = {
-            ...prev,
-            [category]: {
-              ...currentCategory,
-              [docType]: fileInfo,
-            },
-          };
-          console.log('✅ Image state updated - Category:', category, 'DocType:', docType);
-          return updated;
-        });
-        
-        // Verify state was set
-        setTimeout(() => {
-          setCategoryDocuments(current => {
-            const check = current[category]?.[docType];
-            if (check && check.uri) {
-              console.log('✅✅✅ Image CONFIRMED in state:', check.name);
-            } else {
-              console.error('❌❌❌ Image NOT in state!');
+        // Handle multiple images for experienceCertificate
+        if (allowMultiple && result.assets.length > 0) {
+          const fileInfos: DocumentFile[] = result.assets.map((asset, index) => {
+            if (!asset.uri) {
+              throw new Error(`Asset ${index} has no URI`);
             }
-            return current;
+            return {
+              uri: asset.uri,
+              name: asset.fileName || asset.uri.split('/').pop() || `experience-${Date.now()}-${index}.jpg`,
+              mimeType: asset.type || 'image/jpeg',
+              size: asset.fileSize || 0,
+            };
           });
-        }, 200);
-        
-        // Show success feedback
-        Alert.alert(
-          '✅ Image Selected Successfully!',
-          `Image has been selected.\n\nFile: ${fileInfo.name}\nSize: ${fileInfo.size ? (fileInfo.size / 1024).toFixed(2) + ' KB' : 'Unknown'}\n\nYou can see the preview below.`,
-          [{ text: 'OK' }]
-        );
+          
+          console.log('✅ Multiple images prepared:', fileInfos.length, 'images');
+          
+          // Update state with array of images - append if already exists
+          setCategoryDocuments(prev => {
+            const currentCategory = prev[category] || {};
+            const existing = currentCategory[docType];
+            let newValue: DocumentFile[];
+            
+            if (Array.isArray(existing)) {
+              // Append to existing array
+              newValue = [...existing, ...fileInfos];
+              console.log('✅ Appending', fileInfos.length, 'images to existing', existing.length, 'images');
+            } else {
+              // Create new array
+              newValue = fileInfos;
+              console.log('✅ Creating new array with', fileInfos.length, 'images');
+            }
+            
+            const updated = {
+              ...prev,
+              [category]: {
+                ...currentCategory,
+                [docType]: newValue,
+              },
+            };
+            console.log('✅ Multiple images state updated - Category:', category, 'DocType:', docType, 'Total:', newValue.length);
+            return updated;
+          });
+          
+          // Show success feedback
+          Alert.alert(
+            '✅ Images Selected Successfully!',
+            `${fileInfos.length} image${fileInfos.length > 1 ? 's' : ''} selected for experience certificate.\n\nYou can add more images or submit now.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          // Single image selection
+          const asset = result.assets[0];
+          
+          if (!asset.uri) {
+            console.error('❌ Asset has no URI');
+            Alert.alert('Error', 'Selected image has no valid file path. Please try again.');
+            return;
+          }
+          
+          const fileInfo: DocumentFile = {
+            uri: asset.uri,
+            name: asset.fileName || asset.uri.split('/').pop() || `image-${Date.now()}.jpg`,
+            mimeType: asset.type || 'image/jpeg',
+            size: asset.fileSize || 0,
+          };
+          
+          console.log('✅ Image info prepared:', {
+            uri: fileInfo.uri.substring(0, 80) + '...',
+            name: fileInfo.name,
+            mimeType: fileInfo.mimeType,
+            size: fileInfo.size,
+          });
+          
+          // Update state immediately
+          setCategoryDocuments(prev => {
+            const currentCategory = prev[category] || {};
+            const updated = {
+              ...prev,
+              [category]: {
+                ...currentCategory,
+                [docType]: fileInfo,
+              },
+            };
+            console.log('✅ Image state updated - Category:', category, 'DocType:', docType);
+            return updated;
+          });
+          
+          // Verify state was set
+          setTimeout(() => {
+            setCategoryDocuments(current => {
+              const check = current[category]?.[docType];
+              if (check && (check as DocumentFile).uri) {
+                console.log('✅✅✅ Image CONFIRMED in state:', (check as DocumentFile).name);
+              } else {
+                console.error('❌❌❌ Image NOT in state!');
+              }
+              return current;
+            });
+          }, 200);
+          
+          // Show success feedback
+          Alert.alert(
+            '✅ Image Selected Successfully!',
+            `Image has been selected.\n\nFile: ${fileInfo.name}\nSize: ${fileInfo.size ? (fileInfo.size / 1024).toFixed(2) + ' KB' : 'Unknown'}\n\nYou can see the preview below.`,
+            [{ text: 'OK' }]
+          );
+        }
       }
     } catch (error: any) {
       console.error('❌❌❌ Error picking document:', error);
@@ -402,7 +525,14 @@ export default function DocumentVerificationScreen() {
     }
 
     // Validate that documents have valid URIs
-    if (!docs.citizenship.uri || !docs.serviceCertificate.uri || !docs.experienceCertificate.uri) {
+    // Handle experienceCertificate as single file or array
+    const experienceCert = docs.experienceCertificate;
+    const isExperienceArray = Array.isArray(experienceCert);
+    const hasValidExperience = isExperienceArray 
+      ? experienceCert.length > 0 && experienceCert.every((f: DocumentFile) => f && f.uri)
+      : experienceCert && (experienceCert as DocumentFile).uri;
+    
+    if (!docs.citizenship?.uri || !docs.serviceCertificate?.uri || !hasValidExperience) {
       Alert.alert('Error', 'Some documents are missing. Please re-upload them.');
       return;
     }
@@ -510,13 +640,26 @@ export default function DocumentVerificationScreen() {
         
         if (docs.experienceCertificate) {
           try {
-            const file = docs.experienceCertificate;
-            const response = await fetch(file.uri);
-            const blob = await response.blob();
-            const fileName = file.name || `experienceCertificate-${category}-${Date.now()}.${getFileExtension(file)}`;
-            const fileObj = new File([blob], fileName, { type: getMimeType(file) });
-            formData.append('experienceCertificate', fileObj);
-            console.log('✅ Added experience certificate to FormData:', fileName);
+            // Handle multiple images for experience certificate
+            if (Array.isArray(docs.experienceCertificate)) {
+              for (let i = 0; i < docs.experienceCertificate.length; i++) {
+                const file = docs.experienceCertificate[i];
+                const response = await fetch(file.uri);
+                const blob = await response.blob();
+                const fileName = file.name || `experienceCertificate-${category}-${Date.now()}-${i}.${getFileExtension(file)}`;
+                const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+                formData.append('experienceCertificate', fileObj);
+                console.log(`✅ Added experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData:`, fileName);
+              }
+            } else {
+              const file = docs.experienceCertificate;
+              const response = await fetch(file.uri);
+              const blob = await response.blob();
+              const fileName = file.name || `experienceCertificate-${category}-${Date.now()}.${getFileExtension(file)}`;
+              const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+              formData.append('experienceCertificate', fileObj);
+              console.log('✅ Added experience certificate to FormData:', fileName);
+            }
           } catch (e) {
             console.error('❌ Could not add experience certificate:', e);
           }
@@ -577,34 +720,65 @@ export default function DocumentVerificationScreen() {
         }
         
         if (docs.experienceCertificate) {
-          const file = docs.experienceCertificate;
-          const ext = getFileExtension(file);
-          const mimeType = getMimeType(file);
-          const fileName = file.name || `experienceCertificate-${category}-${Date.now()}.${ext}`;
-          
-          // Ensure URI is properly formatted for native platforms
-          let fileUri = normalizeUri(file.uri);
-          
-          // For Android, ensure content:// URIs are handled
-          if (Platform.OS === 'android' && fileUri.startsWith('content://')) {
-            // Content URIs should work as-is for React Native FormData
-            console.log('📄 Using content:// URI for Android');
+          // Handle multiple images for experience certificate
+          if (Array.isArray(docs.experienceCertificate)) {
+            for (let i = 0; i < docs.experienceCertificate.length; i++) {
+              const file = docs.experienceCertificate[i];
+              const ext = getFileExtension(file);
+              const mimeType = getMimeType(file);
+              const fileName = file.name || `experienceCertificate-${category}-${Date.now()}-${i}.${ext}`;
+              
+              // Ensure URI is properly formatted for native platforms
+              let fileUri = normalizeUri(file.uri);
+              
+              // For Android, ensure content:// URIs are handled
+              if (Platform.OS === 'android' && fileUri.startsWith('content://')) {
+                console.log('📄 Using content:// URI for Android');
+              }
+              
+              console.log(`📄 Preparing experience certificate ${i + 1}/${docs.experienceCertificate.length} for upload:`, {
+                uri: fileUri.substring(0, 60) + '...',
+                name: fileName,
+                mimeType: mimeType,
+                extension: ext,
+              });
+              
+              formData.append('experienceCertificate', {
+                uri: fileUri,
+                type: mimeType,
+                name: fileName,
+              } as any);
+              console.log(`✅ Added experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData (native):`, fileName, mimeType);
+            }
+          } else {
+            const file = docs.experienceCertificate;
+            const ext = getFileExtension(file);
+            const mimeType = getMimeType(file);
+            const fileName = file.name || `experienceCertificate-${category}-${Date.now()}.${ext}`;
+            
+            // Ensure URI is properly formatted for native platforms
+            let fileUri = normalizeUri(file.uri);
+            
+            // For Android, ensure content:// URIs are handled
+            if (Platform.OS === 'android' && fileUri.startsWith('content://')) {
+              console.log('📄 Using content:// URI for Android');
+            }
+            
+            console.log('📄 Preparing experience certificate for upload:', {
+              uri: fileUri.substring(0, 60) + '...',
+              name: fileName,
+              mimeType: mimeType,
+              extension: ext,
+              originalUri: file.uri.substring(0, 60) + '...',
+            });
+            
+            formData.append('experienceCertificate', {
+              uri: fileUri,
+              type: mimeType,
+              name: fileName,
+            } as any);
+            console.log('✅ Added experience certificate to FormData (native):', fileName, mimeType);
           }
-          
-          console.log('📄 Preparing experience certificate for upload:', {
-            uri: fileUri.substring(0, 60) + '...',
-            name: fileName,
-            mimeType: mimeType,
-            extension: ext,
-            originalUri: file.uri.substring(0, 60) + '...',
-          });
-          
-          formData.append('experienceCertificate', {
-            uri: fileUri,
-            type: mimeType,
-            name: fileName,
-          } as any);
-          console.log('✅ Added experience certificate to FormData (native):', fileName, mimeType);
         }
       }
 
@@ -624,14 +798,23 @@ export default function DocumentVerificationScreen() {
         const result = await response.json();
         console.log('✅ Category verification submitted successfully:', result);
         
-        // Update local state - set status to pending
+        // Clear the local documents for this category since they're now submitted
+        setCategoryDocuments(prev => {
+          const updated = { ...prev };
+          updated[category] = {
+            drivingLicense: null,
+            citizenship: null,
+            serviceCertificate: null,
+            experienceCertificate: null,
+          };
+          return updated;
+        });
+        
+        // Update local status to pending
         setCategoryVerificationStatus(prev => ({
           ...prev,
           [category]: 'pending',
         }));
-        
-        // DON'T clear documents immediately - keep them visible until we confirm server has them
-        // The documents will be reloaded from server after a short delay
         
         // Update worker context if available
         if (updateWorker) {
@@ -642,20 +825,28 @@ export default function DocumentVerificationScreen() {
           } as any);
         }
         
+        // Close the expanded category section
+        setSelectedCategory(null);
+        
         Alert.alert(
           '✅ Documents Submitted Successfully!',
           `Your ${category} verification documents have been submitted successfully.\n\n` +
-          `Status: Pending Admin Review\n\n` +
+          `Your documents are now pending admin review. You can view them in the "Uploaded Documents" section.\n\n` +
           `You will be notified once the admin reviews your documents.`,
           [
             { 
+              text: 'View Uploaded Documents',
+              onPress: () => {
+                router.push('/uploaded-documents');
+              }
+            },
+            { 
               text: 'OK',
               onPress: async () => {
-                // Wait a moment for server to process, then reload
-                // Don't preserve local uploads since they're now on server
+                // Reload verification data to reflect the submission
                 setTimeout(async () => {
                   await loadVerificationData(false);
-                }, 1500);
+                }, 1000);
               }
             }
           ]
@@ -694,18 +885,39 @@ export default function DocumentVerificationScreen() {
   };
 
   // Get categories that need verification
+  // Only show categories that:
+  // 1. Are rejected (need resubmission)
+  // 2. Have no documents uploaded yet (status is undefined/null)
+  // 3. Have documents locally but haven't been submitted yet
+  // DO NOT show categories with status 'pending' (already submitted - they appear in uploaded-documents)
   const getCategoriesNeedingVerification = () => {
     return serviceCategories.filter(category => {
-      const status = categoryVerificationStatus[category] || 'pending';
+      const status = categoryVerificationStatus[category];
       const docs = categoryDocuments[category] || {};
-      // Show if: status is rejected OR documents are missing (check for DocumentFile objects)
-      return status === 'rejected' || 
-             !docs.citizenship || 
-             !docs.serviceCertificate || 
-             !docs.experienceCertificate ||
-             (docs.citizenship && !docs.citizenship.uri) ||
-             (docs.serviceCertificate && !docs.serviceCertificate.uri) ||
-             (docs.experienceCertificate && !docs.experienceCertificate.uri);
+      
+      // If status is 'verified', don't show (already verified)
+      if (status === 'verified') {
+        return false;
+      }
+      
+      // If status is 'pending' from server, don't show (already submitted - check uploaded-documents)
+      if (status === 'pending') {
+        return false;
+      }
+      
+      // If status is 'rejected', show (needs resubmission)
+      if (status === 'rejected') {
+        return true;
+      }
+      
+      // If no status and no documents, show (needs initial upload)
+      const hasDocuments = docs.citizenship?.uri || docs.serviceCertificate?.uri || docs.experienceCertificate;
+      if (!hasDocuments) {
+        return true;
+      }
+      
+      // If has documents but status is undefined/null, show (ready to submit)
+      return true;
     });
   };
 
@@ -795,6 +1007,28 @@ export default function DocumentVerificationScreen() {
                     {/* Category Content */}
                     {isExpanded && (
                       <View style={styles.categoryContent}>
+                        {/* Show success message if status is pending (submitted, waiting for admin) */}
+                        {status === 'pending' && (
+                          <View style={styles.successNotice}>
+                            <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
+                            <Text style={styles.successText}>
+                              ✅ Documents Submitted Successfully!
+                            </Text>
+                            <Text style={styles.successSubtext}>
+                              Your {category} verification documents have been submitted and are pending admin review.
+                            </Text>
+                            <Text style={styles.successSubtext}>
+                              You will be notified once the admin reviews your documents.
+                            </Text>
+                            <TouchableOpacity
+                              style={styles.viewDocumentsLink}
+                              onPress={() => router.push('/uploaded-documents')}
+                            >
+                              <Text style={styles.viewDocumentsLinkText}>View Uploaded Documents →</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                        
                         {status === 'rejected' && (
                           <View style={styles.rejectionNotice}>
                             <Ionicons name="alert-circle" size={20} color="#F44336" />
@@ -803,7 +1037,8 @@ export default function DocumentVerificationScreen() {
                             </Text>
                           </View>
                         )}
-
+                        
+                        {/* Upload sections */}
                         {/* Driving License (Optional) */}
                         <View style={styles.uploadSection}>
                           <View style={styles.uploadLabelContainer}>
@@ -960,7 +1195,7 @@ export default function DocumentVerificationScreen() {
                           )}
                         </View>
 
-                        {/* Experience Certificate (Required) */}
+                        {/* Experience Certificate (Required - Multiple Images/PDF) */}
                         <View style={styles.uploadSection}>
                           <View style={styles.uploadLabelContainer}>
                             <Text style={styles.uploadLabel}>
@@ -969,48 +1204,110 @@ export default function DocumentVerificationScreen() {
                             {docs.experienceCertificate && (
                               <View style={styles.uploadedBadge}>
                                 <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
-                                <Text style={styles.uploadedBadgeText}>Uploaded</Text>
+                                <Text style={styles.uploadedBadgeText}>
+                                  {Array.isArray(docs.experienceCertificate) 
+                                    ? `${docs.experienceCertificate.length} image${docs.experienceCertificate.length > 1 ? 's' : ''}`
+                                    : 'Uploaded'}
+                                </Text>
                               </View>
                             )}
                           </View>
                           {docs.experienceCertificate ? (
-                            <View style={styles.uploadedPreview}>
-                              <View style={styles.previewHeader}>
-                                <Text style={styles.previewHeaderText}>Experience Certificate Uploaded</Text>
-                              </View>
-                              {(() => {
-                                const isPDF = docs.experienceCertificate.mimeType?.includes('pdf') || 
-                                             docs.experienceCertificate.name?.toLowerCase().endsWith('.pdf');
-                                return isPDF ? (
-                                  <View style={styles.pdfPreviewContainer}>
-                                    <View style={styles.pdfIconContainer}>
-                                      <Ionicons name="document-text" size={64} color="#FF7A2C" />
-                                    </View>
-                                    <Text style={styles.fileNameText} numberOfLines={2}>
-                                      {docs.experienceCertificate.name || 'Experience Certificate.pdf'}
-                                    </Text>
-                                    <View style={styles.pdfBadge}>
-                                      <Ionicons name="document" size={14} color="#FF7A2C" />
-                                      <Text style={styles.pdfBadgeText}>PDF Document</Text>
-                                    </View>
-                                  </View>
-                                ) : (
-                                  <Image source={{ uri: docs.experienceCertificate.uri }} style={styles.previewImage} />
-                                );
-                              })()}
-                              <View style={styles.previewFooter}>
-                                <TouchableOpacity
-                                  style={styles.changeButton}
-                                  onPress={() => pickDocument(category, 'experienceCertificate', true)}
+                            <View>
+                              {Array.isArray(docs.experienceCertificate) ? (
+                                // Multiple images
+                                <ScrollView 
+                                  horizontal 
+                                  showsHorizontalScrollIndicator={false}
+                                  style={styles.multipleImagesContainer}
+                                  contentContainerStyle={styles.multipleImagesContent}
                                 >
-                                  <Text style={styles.changeButtonText}>
-                                    {docs.experienceCertificate.mimeType?.includes('pdf') || 
-                                     docs.experienceCertificate.name?.toLowerCase().endsWith('.pdf')
-                                      ? 'Change Document' 
-                                      : 'Change Image'}
-                                  </Text>
+                                  {docs.experienceCertificate.map((file: DocumentFile, index: number) => (
+                                    <View key={index} style={styles.multipleImageItem}>
+                                      <View style={styles.uploadedPreview}>
+                                        <View style={styles.previewHeader}>
+                                          <Text style={styles.previewHeaderText}>
+                                            Image {index + 1} of {Array.isArray(docs.experienceCertificate) ? docs.experienceCertificate.length : 1}
+                                          </Text>
+                                        </View>
+                                        <Image source={{ uri: file.uri }} style={styles.previewImage} />
+                                        <View style={styles.previewFooter}>
+                                          <TouchableOpacity
+                                            style={styles.removeButton}
+                                            onPress={() => {
+                                              setCategoryDocuments(prev => {
+                                                const currentCategory = prev[category] || {};
+                                                const updatedArray = [...(currentCategory.experienceCertificate as DocumentFile[])];
+                                                updatedArray.splice(index, 1);
+                                                return {
+                                                  ...prev,
+                                                  [category]: {
+                                                    ...currentCategory,
+                                                    experienceCertificate: updatedArray.length > 0 ? updatedArray : null,
+                                                  },
+                                                };
+                                              });
+                                            }}
+                                          >
+                                            <Ionicons name="trash-outline" size={16} color="#F44336" />
+                                            <Text style={styles.removeButtonText}>Remove</Text>
+                                          </TouchableOpacity>
+                                        </View>
+                                      </View>
+                                    </View>
+                                  ))}
+                                </ScrollView>
+                              ) : (
+                                // Single file (PDF or image)
+                                <View style={styles.uploadedPreview}>
+                                  <View style={styles.previewHeader}>
+                                    <Text style={styles.previewHeaderText}>Experience Certificate Uploaded</Text>
+                                  </View>
+                                  {(() => {
+                                    const isPDF = docs.experienceCertificate.mimeType?.includes('pdf') || 
+                                                 docs.experienceCertificate.name?.toLowerCase().endsWith('.pdf');
+                                    return isPDF ? (
+                                      <View style={styles.pdfPreviewContainer}>
+                                        <View style={styles.pdfIconContainer}>
+                                          <Ionicons name="document-text" size={64} color="#FF7A2C" />
+                                        </View>
+                                        <Text style={styles.fileNameText} numberOfLines={2}>
+                                          {docs.experienceCertificate.name || 'Experience Certificate.pdf'}
+                                        </Text>
+                                        <View style={styles.pdfBadge}>
+                                          <Ionicons name="document" size={14} color="#FF7A2C" />
+                                          <Text style={styles.pdfBadgeText}>PDF Document</Text>
+                                        </View>
+                                      </View>
+                                    ) : (
+                                      <Image source={{ uri: docs.experienceCertificate.uri }} style={styles.previewImage} />
+                                    );
+                                  })()}
+                                  <View style={styles.previewFooter}>
+                                    <TouchableOpacity
+                                      style={styles.changeButton}
+                                      onPress={() => pickDocument(category, 'experienceCertificate', true)}
+                                    >
+                                      <Text style={styles.changeButtonText}>
+                                        {docs.experienceCertificate.mimeType?.includes('pdf') || 
+                                         docs.experienceCertificate.name?.toLowerCase().endsWith('.pdf')
+                                          ? 'Change Document' 
+                                          : 'Change Image'}
+                                      </Text>
+                                    </TouchableOpacity>
+                                  </View>
+                                </View>
+                              )}
+                              {/* Add More Images Button for Multiple Images */}
+                              {docs.experienceCertificate && Array.isArray(docs.experienceCertificate) && (
+                                <TouchableOpacity
+                                  style={styles.addMoreButton}
+                                  onPress={() => pickDocument(category, 'experienceCertificate', false)}
+                                >
+                                  <Ionicons name="add-circle-outline" size={20} color="#FF7A2C" />
+                                  <Text style={styles.addMoreButtonText}>Add More Images</Text>
                                 </TouchableOpacity>
-                              </View>
+                              )}
                             </View>
                           ) : (
                             <TouchableOpacity
@@ -1021,9 +1318,9 @@ export default function DocumentVerificationScreen() {
                               }}
                               activeOpacity={0.7}
                             >
-                              <Ionicons name="document-text-outline" size={32} color="#FF7A2C" />
+                              <Ionicons name="images-outline" size={32} color="#FF7A2C" />
                               <Text style={styles.uploadButtonText}>Upload Experience Certificate</Text>
-                              <Text style={styles.uploadButtonSubtext}>PDF or Image format</Text>
+                              <Text style={styles.uploadButtonSubtext}>PDF or Multiple Images (for multi-page documents)</Text>
                             </TouchableOpacity>
                           )}
                         </View>
@@ -1058,7 +1355,13 @@ export default function DocumentVerificationScreen() {
                               color={docs.experienceCertificate ? "#4CAF50" : "#999"} 
                             />
                             <Text style={[styles.summaryText, docs.experienceCertificate && styles.summaryTextComplete]}>
-                              Experience Certificate {docs.experienceCertificate ? '✓' : '(Required)'}
+                              Experience Certificate {
+                                docs.experienceCertificate 
+                                  ? (Array.isArray(docs.experienceCertificate) 
+                                      ? `✓ (${docs.experienceCertificate.length} image${docs.experienceCertificate.length > 1 ? 's' : ''})`
+                                      : '✓')
+                                  : '(Required)'
+                              }
                             </Text>
                           </View>
                           {docs.drivingLicense && (
@@ -1075,12 +1378,12 @@ export default function DocumentVerificationScreen() {
                         <TouchableOpacity
                           style={[
                             styles.submitButton, 
-                            (isUploading || !docs.citizenship || !docs.serviceCertificate || !docs.experienceCertificate) && styles.submitButtonDisabled
+                            (uploading === category || !docs.citizenship || !docs.serviceCertificate || !docs.experienceCertificate) && styles.submitButtonDisabled
                           ]}
                           onPress={() => submitCategoryVerification(category)}
-                          disabled={isUploading || !docs.citizenship || !docs.serviceCertificate || !docs.experienceCertificate}
+                          disabled={uploading === category || !docs.citizenship || !docs.serviceCertificate || !docs.experienceCertificate}
                         >
-                          {isUploading ? (
+                          {uploading === category ? (
                             <>
                               <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
                               <Text style={styles.submitButtonText}>Submitting...</Text>
@@ -1336,7 +1639,19 @@ const styles = StyleSheet.create({
     color: '#2E7D32',
   },
   removeButton: {
-    padding: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FFEBEE',
+  },
+  removeButtonText: {
+    color: '#F44336',
+    fontSize: 12,
+    fontWeight: '600',
   },
   previewImage: {
     width: '100%',
@@ -1446,6 +1761,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  multipleImagesContainer: {
+    marginVertical: 12,
+  },
+  multipleImagesContent: {
+    paddingRight: 12,
+    gap: 12,
+  },
+  multipleImageItem: {
+    width: 280,
+    marginRight: 12,
+  },
+  addMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#FF7A2C',
+    borderStyle: 'dashed',
+    backgroundColor: '#FFF5F0',
+    marginTop: 12,
+  },
+  addMoreButtonText: {
+    color: '#FF7A2C',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   submitButton: {
     backgroundColor: '#FF7A2C',
     flexDirection: 'row',
@@ -1497,6 +1842,35 @@ const styles = StyleSheet.create({
   },
   summaryTextComplete: {
     color: '#4CAF50',
+    fontWeight: '600',
+  },
+  successNotice: {
+    backgroundColor: '#E8F5E9',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#4CAF50',
+  },
+  successText: {
+    color: '#2E7D32',
+    fontSize: 15,
+    fontWeight: '600',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  successSubtext: {
+    color: '#4CAF50',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  viewDocumentsLink: {
+    marginTop: 12,
+    paddingVertical: 8,
+  },
+  viewDocumentsLinkText: {
+    color: '#FF7A2C',
+    fontSize: 14,
     fontWeight: '600',
   },
 });
