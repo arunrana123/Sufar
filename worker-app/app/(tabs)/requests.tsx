@@ -478,15 +478,60 @@ export default function RequestsScreen() {
         // Listen for booking updates
         socketService.on('booking:updated', (updatedBooking: any) => {
           console.log('📢 Booking updated event received in worker app:', updatedBooking);
-          // Update in state immediately
-          setBookings(prevBookings =>
-            prevBookings.map(b =>
-              b._id === updatedBooking._id ? { ...b, ...updatedBooking } : b
-            )
-          );
-          if (updatedBooking.workerId === worker.id || updatedBooking._id) {
-            // Refresh bookings to show updated status
-            fetchBookings();
+          // Update in state immediately for real-time UI updates
+          setBookings(prevBookings => {
+            const exists = prevBookings.some(b => b._id === updatedBooking._id);
+            if (exists) {
+              return prevBookings.map(b =>
+                b._id === updatedBooking._id ? { ...b, ...updatedBooking } : b
+              );
+            } else {
+              // If booking doesn't exist and is assigned to this worker, add it
+              if (updatedBooking.workerId === worker.id || String(updatedBooking.workerId) === String(worker.id)) {
+                const newBooking: Booking = {
+                  _id: updatedBooking._id,
+                  userId: {
+                    firstName: updatedBooking.userId?.firstName || 'Customer',
+                    lastName: updatedBooking.userId?.lastName || '',
+                    phone: updatedBooking.userId?.phone || '',
+                    profilePhoto: updatedBooking.userId?.profilePhoto,
+                  },
+                  serviceName: updatedBooking.serviceName || updatedBooking.serviceCategory || 'Service',
+                  serviceCategory: updatedBooking.serviceCategory,
+                  location: updatedBooking.location || { address: 'Location not specified' },
+                  price: updatedBooking.price || 0,
+                  status: updatedBooking.status || 'pending',
+                  createdAt: updatedBooking.createdAt || new Date().toISOString(),
+                  workerId: updatedBooking.workerId,
+                };
+                return [newBooking, ...prevBookings];
+              }
+              return prevBookings;
+            }
+          });
+          
+          // Refresh from backend to ensure consistency
+          if (updatedBooking.workerId === worker.id || String(updatedBooking.workerId) === String(worker.id)) {
+            setTimeout(() => {
+              fetchBookings();
+            }, 500);
+          }
+        });
+        
+        // Listen for booking:accepted event to update counts immediately
+        socketService.on('booking:accepted', (data: any) => {
+          console.log('✅ Booking accepted event received:', data);
+          if (data.workerId === worker.id || String(data.workerId) === String(worker.id)) {
+            // Update bookings immediately
+            setBookings(prevBookings =>
+              prevBookings.map(b =>
+                b._id === data.bookingId ? { ...b, status: 'accepted', workerId: data.workerId } : b
+              )
+            );
+            // Refresh to get full booking data
+            setTimeout(() => {
+              fetchBookings();
+            }, 500);
           }
         });
         
@@ -502,6 +547,7 @@ export default function RequestsScreen() {
       socketService.off('booking:request');
       socketService.off('booking:cancelled');
       socketService.off('booking:updated');
+      socketService.off('booking:accepted');
       // Stop any playing sounds when component unmounts
       stopRequestAlert();
     };
@@ -515,31 +561,46 @@ export default function RequestsScreen() {
   const pendingBookings = bookings.filter(b => b.status === 'pending');
   const acceptedBookings = bookings.filter(b => b.status === 'accepted');
 
-  // Update accepted count when bookings change
+  // Update accepted count in real-time when bookings change
   useEffect(() => {
-    if (worker?.id && bookings.length > 0) {
+    if (worker?.id) {
+      // Calculate actual accepted count from current bookings
       const actualAccepted = bookings.filter(b => 
-        b.status === 'accepted' && b.workerId === worker.id
+        b.status === 'accepted' && (b.workerId === worker.id || String(b.workerId) === String(worker.id))
       ).length;
       
+      // Calculate actual rejected count from current bookings
+      const actualRejected = bookings.filter(b => 
+        b.status === 'rejected' && (b.workerId === worker.id || String(b.workerId) === String(worker.id))
+      ).length;
+      
+      // Update counts immediately if they changed
       if (actualAccepted !== acceptedCount) {
-        // Update if backend has more accepted than stored
-        if (actualAccepted > acceptedCount) {
-          setAcceptedCount(actualAccepted);
-          // Save to storage
-          const updateStats = async () => {
-            const storageKey = `worker_request_stats_${worker.id}`;
-            const stored = await AsyncStorage.getItem(storageKey);
-            let stats = { accepted: 0, rejected: 0 };
-            if (stored) {
-              stats = JSON.parse(stored);
-            }
-            stats.accepted = Math.max(stats.accepted, actualAccepted);
-            await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
-          };
-          updateStats();
-        }
+        setAcceptedCount(actualAccepted);
+        // Save to storage for persistence
+        const updateStats = async () => {
+          const storageKey = `worker_request_stats_${worker.id}`;
+          const stored = await AsyncStorage.getItem(storageKey);
+          let stats = { accepted: 0, rejected: 0 };
+          if (stored) {
+            stats = JSON.parse(stored);
+          }
+          stats.accepted = actualAccepted;
+          stats.rejected = actualRejected;
+          await AsyncStorage.setItem(storageKey, JSON.stringify(stats));
+        };
+        updateStats();
       }
+      
+      if (actualRejected !== rejectedCount) {
+        setRejectedCount(actualRejected);
+      }
+      
+      console.log('📊 Real-time counts updated:', { 
+        accepted: actualAccepted, 
+        rejected: actualRejected,
+        totalBookings: bookings.length 
+      });
     }
   }, [bookings, worker?.id]);
 
@@ -560,7 +621,14 @@ export default function RequestsScreen() {
         const booking = await response.json();
         console.log('✅ Booking accepted successfully:', booking._id);
         
-        // Increment accepted count
+        // Update booking in state immediately for real-time UI update
+        setBookings(prevBookings =>
+          prevBookings.map(b =>
+            b._id === bookingId ? { ...b, status: 'accepted', workerId: worker?.id } : b
+          )
+        );
+        
+        // Save stats (count will be updated automatically by useEffect when bookings change)
         await saveRequestStats(true, false);
         
         // Show toast notification
@@ -570,9 +638,10 @@ export default function RequestsScreen() {
           'success'
         );
         
-        // Refresh bookings to show the accepted request in "Accepted Jobs" section
-        // This ensures the request is properly stored and displayed
-        fetchBookings();
+        // Refresh bookings to get full updated data from backend
+        setTimeout(() => {
+          fetchBookings();
+        }, 300);
       } else {
         const data = await response.json();
         showToast(
@@ -749,6 +818,7 @@ export default function RequestsScreen() {
 
         <ScrollView 
           style={styles.content} 
+          contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         >
@@ -1065,6 +1135,10 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 100, // Extra padding to ensure content is visible above BottomNav
+    flexGrow: 1,
   },
   section: {
     paddingTop: 20,
