@@ -68,6 +68,13 @@ export default function ServiceRegistrationModal({
 
   useEffect(() => {
     if (visible) {
+      // Log existing services for debugging
+      console.log('📋 ServiceRegistrationModal opened');
+      console.log('   Existing services count:', existingServices.length);
+      console.log('   Existing services:', existingServices.map(s => ({ category: s.category, name: s.name })));
+      console.log('   Existing categories:', existingServices.map(s => s.category));
+      console.log('   Will filter out:', existingServices.map(s => s.category).join(', '));
+      
       if (editingService) {
         setFormData({
           name: editingService.name,
@@ -91,7 +98,7 @@ export default function ServiceRegistrationModal({
       }
       setErrors({});
     }
-  }, [visible, editingService]);
+  }, [visible, editingService, existingServices]);
 
   const validateForm = () => {
     const newErrors: {[key: string]: string} = {};
@@ -131,12 +138,13 @@ export default function ServiceRegistrationModal({
 
     if (isMultiSelect && !editingService && formData.selectedCategories.length > 0) {
       // Create multiple services for selected categories with default values
-      const existingCategories = existingServices.map(s => s.category);
+      // Filter out any that are already registered (shouldn't happen due to disabled state, but safety check)
+      const existingCategories = existingServices.map(s => s.category?.toLowerCase().trim());
       const servicesToAdd = formData.selectedCategories
-        .filter(cat => !existingCategories.includes(cat)) // Don't add duplicates
+        .filter(cat => !existingCategories.includes(cat.toLowerCase().trim())) // Don't add duplicates (case-insensitive)
         .map((category, index) => ({
           id: `service-${category}-${Date.now()}-${index}`,
-          name: `${category} Service`,
+          name: category, // Use category name directly
           category: category,
           price: 0, // Default price - can be updated later
           priceType: 'hour' as const, // Default price type
@@ -147,7 +155,7 @@ export default function ServiceRegistrationModal({
         onAddService(servicesToAdd); // Pass array for multi-add
         onClose();
       } else {
-        Alert.alert('Info', 'All selected categories already exist in your services.');
+        Alert.alert('Info', 'All selected categories are already registered. Please select different services.');
       }
     } else {
       // Single service add/edit
@@ -166,6 +174,15 @@ export default function ServiceRegistrationModal({
   };
 
   const toggleCategorySelection = (category: string) => {
+    // Don't allow selection of already registered services (case-insensitive comparison)
+    const isAlreadyRegistered = existingServices.some(s => 
+      s.category?.toLowerCase().trim() === category.toLowerCase().trim()
+    );
+    if (isAlreadyRegistered) {
+      console.log('⚠️ Cannot select already registered service:', category);
+      return;
+    }
+    
     setFormData(prev => {
       const isSelected = prev.selectedCategories.includes(category);
       return {
@@ -215,16 +232,30 @@ export default function ServiceRegistrationModal({
             </View>
             
             {isMultiSelect && !editingService ? (
-              // Multi-select mode - only show categories that are NOT already registered
+              // Multi-select mode - HIDE already registered services completely
               // Display as a grid instead of horizontal scroll
               <View style={styles.categoryGrid}>
                 {serviceCategories
-                  .filter(category => {
-                    // Exclude already registered services
-                    return !existingServices.some(s => s.category === category);
+                  .filter((category) => {
+                    // HIDE already registered services - don't show them at all
+                    const isAlreadyRegistered = existingServices.some(s => 
+                      s.category?.toLowerCase().trim() === category.toLowerCase().trim()
+                    );
+                    
+                    if (category === 'Carpenter' || category.toLowerCase() === 'carpenter') {
+                      console.log(`🔍 Checking Carpenter:`, {
+                        category,
+                        isAlreadyRegistered,
+                        existingCategories: existingServices.map(s => s.category),
+                        willShow: !isAlreadyRegistered,
+                      });
+                    }
+                    
+                    return !isAlreadyRegistered; // Only show services that are NOT registered
                   })
                   .map((category) => {
                     const isSelected = formData.selectedCategories.includes(category);
+                    
                     return (
                       <TouchableOpacity
                         key={category}
@@ -245,26 +276,47 @@ export default function ServiceRegistrationModal({
                   })}
               </View>
             ) : (
-              // Single select mode
+              // Single select mode - HIDE already registered services completely
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
-                {serviceCategories.map((category) => (
-                  <TouchableOpacity
-                    key={category}
-                    style={[
-                      styles.categoryChip,
-                      formData.category === category && styles.selectedCategoryChip
-                    ]}
-                    onPress={() => handleInputChange('category', category)}
-                  >
-                    <Text style={[
-                      styles.categoryChipText,
-                      formData.category === category && styles.selectedCategoryChipText
-                    ]}>
-                      {category}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                {serviceCategories
+                  .filter((category) => {
+                    // HIDE already registered services - don't show them at all
+                    const isAlreadyRegistered = existingServices.some(s => 
+                      s.category?.toLowerCase().trim() === category.toLowerCase().trim()
+                    );
+                    return !isAlreadyRegistered; // Only show services that are NOT registered
+                  })
+                  .map((category) => {
+                    const isSelected = formData.category === category;
+                    
+                    return (
+                      <TouchableOpacity
+                        key={category}
+                        style={[
+                          styles.categoryChip,
+                          isSelected && styles.selectedCategoryChip
+                        ]}
+                        onPress={() => handleInputChange('category', category)}
+                      >
+                        <Text style={[
+                          styles.categoryChipText,
+                          isSelected && styles.selectedCategoryChipText
+                        ]}>
+                          {category}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
               </ScrollView>
+            )}
+            {/* Show info about registered services */}
+            {existingServices.length > 0 && (
+              <View style={styles.registeredInfo}>
+                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                <Text style={styles.registeredInfoText}>
+                  {existingServices.length} service{existingServices.length > 1 ? 's' : ''} already registered: {existingServices.map(s => s.category).join(', ')}
+                </Text>
+              </View>
             )}
             {errors.category && <Text style={styles.errorText}>{errors.category}</Text>}
           </View>
@@ -411,12 +463,48 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   disabledCategoryChip: {
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#F3F4F6',
     borderColor: '#D1D5DB',
-    opacity: 0.6,
+    opacity: 0.7,
   },
   disabledCategoryChipText: {
     color: '#9CA3AF',
+  },
+  disabledCategoryChipGrid: {
+    backgroundColor: '#F3F4F6',
+    borderColor: '#D1D5DB',
+    opacity: 0.7,
+    position: 'relative',
+  },
+  disabledCategoryChipTextGrid: {
+    color: '#9CA3AF',
+  },
+  registeredIcon: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+  },
+  registeredLabel: {
+    fontSize: 10,
+    color: '#10B981',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  registeredInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: '#F0FDF4',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
+  },
+  registeredInfoText: {
+    fontSize: 12,
+    color: '#065F46',
+    marginLeft: 6,
+    flex: 1,
   },
   selectedCount: {
     fontSize: 12,
