@@ -1,6 +1,6 @@
 // PAYMENT SCREEN - Payment processing with eSewa, Khalti, PhonePay integrations
-// Features: Multiple payment gateways, transaction verification, booking confirmation after payment
-import React, { useState } from 'react';
+// Features: Multiple payment gateways, transaction verification, booking confirmation after payment, reward points usage
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -27,8 +27,91 @@ export default function PaymentScreen() {
   const [selectedMethod, setSelectedMethod] = useState<string>('');
   const [transactionId, setTransactionId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [rewardPoints, setRewardPoints] = useState<number>((user as any)?.rewardPoints || 0);
+  const [useRewardPoints, setUseRewardPoints] = useState(false);
+  const [pointsToUse, setPointsToUse] = useState<number>(0);
+  const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [finalAmount, setFinalAmount] = useState<number>(amount);
 
   const paymentMethods = paymentService.getPaymentMethods();
+
+  // Fetch user reward points
+  useEffect(() => {
+    const fetchRewardPoints = async () => {
+      if (!user?.id) return;
+      
+      try {
+        const apiUrl = getApiUrl();
+        const response = await fetch(`${apiUrl}/api/users/${user.id}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        
+        if (response.ok) {
+          const userData = await response.json();
+          const points = userData.rewardPoints || 0;
+          setRewardPoints(points);
+        }
+      } catch (error) {
+        console.error('Error fetching reward points:', error);
+      }
+    };
+
+    fetchRewardPoints();
+  }, [user?.id]);
+
+  // Calculate discount based on reward points
+  useEffect(() => {
+    if (!useRewardPoints || pointsToUse === 0) {
+      setDiscountAmount(0);
+      setFinalAmount(amount);
+      return;
+    }
+
+    // Discount calculation:
+    // - 10,000 points = 10% discount (max Rs. 500)
+    // - 20,000 points = 20% discount (max Rs. 1,000)
+    // - 100,000 points = 100% discount (free service)
+    
+    let discount = 0;
+    let pointsUsed = 0;
+
+    if (pointsToUse >= 100000) {
+      // Free service - 100% discount
+      discount = amount;
+      pointsUsed = 100000;
+    } else if (pointsToUse >= 20000) {
+      // 20% discount (max Rs. 1,000)
+      discount = Math.min(amount * 0.2, 1000);
+      pointsUsed = 20000;
+    } else if (pointsToUse >= 10000) {
+      // 10% discount (max Rs. 500)
+      discount = Math.min(amount * 0.1, 500);
+      pointsUsed = 10000;
+    }
+
+    setDiscountAmount(discount);
+    setFinalAmount(Math.max(0, amount - discount));
+    setPointsToUse(pointsUsed);
+  }, [useRewardPoints, pointsToUse, amount]);
+
+  // Auto-set points to use based on available points
+  const handleToggleRewardPoints = () => {
+    if (!useRewardPoints) {
+      // When enabling, use maximum available discount
+      if (rewardPoints >= 100000) {
+        setPointsToUse(100000);
+      } else if (rewardPoints >= 20000) {
+        setPointsToUse(20000);
+      } else if (rewardPoints >= 10000) {
+        setPointsToUse(10000);
+      } else {
+        Alert.alert('Insufficient Points', 'You need at least 10,000 points to use reward points for discount.');
+        return;
+      }
+    }
+    setUseRewardPoints(!useRewardPoints);
+  };
 
   const handlePayment = async () => {
     if (!selectedMethod) {
@@ -52,12 +135,14 @@ export default function PaymentScreen() {
       // For digital payments, use PaymentService
       if (selectedMethod !== 'cash') {
         const paymentData: PaymentRequest = {
-          amount,
+          amount: useRewardPoints ? finalAmount : amount,
           bookingId,
           serviceName: serviceTitle,
           customerName: user.firstName + ' ' + user.lastName,
           customerEmail: user.email,
           customerPhone: user.phone || '',
+          rewardPointsUsed: useRewardPoints ? pointsToUse : 0,
+          discountAmount: useRewardPoints ? discountAmount : 0,
         };
 
         let paymentResult;
@@ -114,15 +199,24 @@ export default function PaymentScreen() {
       } else {
         // For cash payments, update booking directly
         const apiUrl = getApiUrl();
+        const paymentBody: any = {
+          method: selectedMethod,
+          transactionId: 'CASH_PAYMENT',
+        };
+        
+        // Include reward points usage if applicable
+        if (useRewardPoints && pointsToUse > 0) {
+          paymentBody.rewardPointsUsed = pointsToUse;
+          paymentBody.discountAmount = discountAmount;
+          paymentBody.finalAmount = finalAmount;
+        }
+        
         const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/payment`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            method: selectedMethod,
-            transactionId: 'CASH_PAYMENT',
-          }),
+          body: JSON.stringify(paymentBody),
         });
 
         const data = await response.json();
@@ -172,9 +266,72 @@ export default function PaymentScreen() {
           {/* Amount Card */}
           <View style={styles.amountCard}>
             <Text style={styles.amountLabel}>Total Amount</Text>
-            <Text style={styles.amountValue}>Rs. {amount}</Text>
+            {discountAmount > 0 ? (
+              <>
+                <Text style={styles.originalAmount}>Rs. {amount.toFixed(2)}</Text>
+                <Text style={styles.discountText}>- Rs. {discountAmount.toFixed(2)} (Reward Points)</Text>
+                <Text style={styles.amountValue}>Rs. {finalAmount.toFixed(2)}</Text>
+              </>
+            ) : (
+              <Text style={styles.amountValue}>Rs. {amount.toFixed(2)}</Text>
+            )}
             <Text style={styles.serviceText}>{serviceTitle}</Text>
           </View>
+
+          {/* Reward Points Section */}
+          {rewardPoints > 0 && (
+            <View style={styles.rewardSection}>
+              <View style={styles.rewardHeader}>
+                <View style={styles.rewardInfo}>
+                  <Ionicons name="star" size={20} color="#FFD700" />
+                  <Text style={styles.rewardTitle}>Use Reward Points</Text>
+                  <Text style={styles.rewardPointsText}>({rewardPoints.toLocaleString()} available)</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.toggleSwitch, useRewardPoints && styles.toggleSwitchActive]}
+                  onPress={handleToggleRewardPoints}
+                >
+                  <View style={[styles.toggleCircle, useRewardPoints && styles.toggleCircleActive]} />
+                </TouchableOpacity>
+              </View>
+              
+              {useRewardPoints && (
+                <View style={styles.rewardDetails}>
+                  {rewardPoints >= 100000 && (
+                    <View style={styles.rewardOption}>
+                      <Ionicons name="trophy" size={18} color="#FFD700" />
+                      <Text style={styles.rewardOptionText}>
+                        100,000 points = Free Service (100% discount)
+                      </Text>
+                    </View>
+                  )}
+                  {rewardPoints >= 20000 && (
+                    <View style={styles.rewardOption}>
+                      <Ionicons name="star" size={18} color="#FFD700" />
+                      <Text style={styles.rewardOptionText}>
+                        20,000 points = 20% discount (max Rs. 1,000)
+                      </Text>
+                    </View>
+                  )}
+                  {rewardPoints >= 10000 && (
+                    <View style={styles.rewardOption}>
+                      <Ionicons name="star-outline" size={18} color="#FFD700" />
+                      <Text style={styles.rewardOptionText}>
+                        10,000 points = 10% discount (max Rs. 500)
+                      </Text>
+                    </View>
+                  )}
+                  {discountAmount > 0 && (
+                    <View style={styles.discountInfo}>
+                      <Text style={styles.discountInfoText}>
+                        Using {pointsToUse.toLocaleString()} points for Rs. {discountAmount.toFixed(2)} discount
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+          )}
 
           {/* Payment Methods */}
           <View style={styles.section}>
@@ -382,6 +539,96 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  originalAmount: {
+    fontSize: 20,
+    color: '#999',
+    textDecorationLine: 'line-through',
+    marginBottom: 4,
+  },
+  discountText: {
+    fontSize: 14,
+    color: '#4CAF50',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  rewardSection: {
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 24,
+    borderWidth: 2,
+    borderColor: '#FFD700',
+  },
+  rewardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  rewardInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  rewardTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  rewardPointsText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  toggleSwitch: {
+    width: 50,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#E0E0E0',
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  toggleSwitchActive: {
+    backgroundColor: '#4CAF50',
+  },
+  toggleCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    alignSelf: 'flex-start',
+  },
+  toggleCircleActive: {
+    alignSelf: 'flex-end',
+  },
+  rewardDetails: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    gap: 8,
+  },
+  rewardOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  rewardOptionText: {
+    fontSize: 13,
+    color: '#666',
+  },
+  discountInfo: {
+    backgroundColor: '#E8F5E9',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  discountInfoText: {
+    fontSize: 14,
+    color: '#4CAF50',
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
 
