@@ -12,6 +12,8 @@ import {
   TextInput,
   Alert,
   SafeAreaView,
+  Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,6 +38,7 @@ export default function ProfileScreen() {
   });
   const [rewardPoints, setRewardPoints] = useState<number>((user as any)?.rewardPoints || 0);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   // Sync formData when user data changes
   useEffect(() => {
@@ -116,44 +119,96 @@ export default function ProfileScreen() {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.5,
+      quality: 0.8,
     });
 
-    if (!result.canceled && result.assets[0]) {
-      setProfileImage(result.assets[0].uri);
-      // Update user profile image
-      if (user) {
-        try {
-          // Save to backend
-          const apiUrl = getApiUrl();
-          const response = await fetch(`${apiUrl}/api/users/profile-photo`, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              userId: user.id,
-              profilePhoto: result.assets[0].uri,
-            }),
-          });
+    if (!result.canceled && result.assets[0] && user?.id) {
+      const imageUri = result.assets[0].uri;
+      setProfileImage(imageUri);
+      setIsUploadingPhoto(true);
 
-          if (response.ok) {
-            const data = await response.json();
-            console.log('Profile photo saved to backend:', data);
-            
-            // Update local state
-            const updatedUser = { ...user, profilePhoto: result.assets[0].uri };
+      try {
+        const apiUrl = getApiUrl();
+        const formData = new FormData();
+
+        // Normalize URI for different platforms
+        const normalizeUri = (uri: string) => {
+          if (Platform.OS === 'android') {
+            if (uri.startsWith('content://') || uri.startsWith('file://') || uri.startsWith('http')) {
+              return uri;
+            }
+            return `file://${uri}`;
+          } else if (Platform.OS === 'ios') {
+            if (uri.startsWith('file://') || uri.startsWith('ph://') || uri.startsWith('assets-library://')) {
+              return uri;
+            }
+            return `file://${uri}`;
+          }
+          return uri;
+        };
+
+        // Prepare file object for FormData
+        const imageFile = {
+          uri: normalizeUri(imageUri),
+          type: 'image/jpeg',
+          name: `profile-photo-${user.id}-${Date.now()}.jpg`,
+        } as any;
+
+        formData.append('profilePhoto', imageFile);
+        // Ensure userId is a string
+        const userIdString = String(user.id);
+        formData.append('userId', userIdString);
+        
+        console.log('FormData prepared:', {
+          userId: userIdString,
+          userIdType: typeof userIdString,
+          hasFile: !!imageFile,
+        });
+
+        console.log('Uploading profile photo:', {
+          userId: user.id,
+          uri: imageFile.uri.substring(0, 60) + '...',
+          type: imageFile.type,
+          name: imageFile.name,
+        });
+
+        const response = await fetch(`${apiUrl}/api/users/profile-photo`, {
+          method: 'PATCH',
+          // Don't set Content-Type header - let fetch set it automatically with boundary for FormData
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Profile photo saved to backend:', data);
+          
+          // Update local state with the URL returned from backend
+          const photoUrl = data.profilePhoto || data.profileImageUrl;
+          if (photoUrl) {
+            const updatedUser = { ...user, profilePhoto: photoUrl };
             updateUser(updatedUser);
+            setProfileImage(photoUrl);
             Alert.alert('Success', 'Profile picture updated successfully!');
           } else {
-            const errorData = await response.json();
-            console.error('Failed to save profile photo:', errorData);
-            Alert.alert('Error', 'Failed to save profile picture to server');
+            // Fallback to local URI if backend doesn't return URL
+            const updatedUser = { ...user, profilePhoto: imageUri };
+            updateUser(updatedUser);
+            Alert.alert('Success', 'Profile picture updated successfully!');
           }
-        } catch (error) {
-          console.error('Error saving profile photo:', error);
-          Alert.alert('Error', 'Failed to save profile picture');
+        } else {
+          const errorData = await response.json().catch(() => ({ message: 'Failed to save profile picture' }));
+          console.error('Failed to save profile photo:', errorData);
+          Alert.alert('Error', errorData.message || 'Failed to save profile picture to server');
+          // Revert to previous image on error
+          setProfileImage(user?.profilePhoto || null);
         }
+      } catch (error: any) {
+        console.error('Error saving profile photo:', error);
+        Alert.alert('Error', error.message || 'Failed to save profile picture');
+        // Revert to previous image on error
+        setProfileImage(user?.profilePhoto || null);
+      } finally {
+        setIsUploadingPhoto(false);
       }
     }
   };
@@ -275,8 +330,16 @@ export default function ProfileScreen() {
                   <Ionicons name="person" size={70} color={theme.tint} />
                 </View>
               )}
-              <TouchableOpacity style={[styles.cameraButton, { backgroundColor: theme.tint }]} onPress={pickImage}>
-                <Ionicons name="camera" size={20} color="#fff" />
+              <TouchableOpacity 
+                style={[styles.cameraButton, { backgroundColor: theme.tint }]} 
+                onPress={pickImage}
+                disabled={isUploadingPhoto}
+              >
+                {isUploadingPhoto ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="camera" size={20} color="#fff" />
+                )}
               </TouchableOpacity>
             </View>
             <Text style={[styles.imageName, { color: theme.text }]}>
