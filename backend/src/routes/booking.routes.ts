@@ -774,6 +774,46 @@ router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
       updateData.paymentStatus = 'paid';
       updateData.paymentConfirmedAt = new Date();
       console.log('✅ Both parties confirmed payment - updating to paid');
+      
+      // Calculate and award reward points (10 points per Rs. 100 paid)
+      // Use finalAmount if available (after discount), otherwise use price
+      const amountPaid = booking.finalAmount || booking.price;
+      const pointsEarned = Math.floor(amountPaid / 100) * 10; // 10 points per Rs. 100
+      
+      // Deduct reward points if used
+      if (booking.rewardPointsUsed && booking.rewardPointsUsed > 0) {
+        const User = (await import('../models/User.model')).default;
+        const user = await User.findById(booking.userId);
+        if (user) {
+          const currentPoints = user.rewardPoints || 0;
+          const newPoints = Math.max(0, currentPoints - booking.rewardPointsUsed);
+          await User.findByIdAndUpdate(booking.userId, { rewardPoints: newPoints });
+          console.log(`💰 Deducted ${booking.rewardPointsUsed} reward points from user ${booking.userId}`);
+        }
+      }
+      
+      // Award reward points
+      if (pointsEarned > 0) {
+        const User = (await import('../models/User.model')).default;
+        const user = await User.findById(booking.userId);
+        if (user) {
+          const currentPoints = user.rewardPoints || 0;
+          const newPoints = currentPoints + pointsEarned;
+          await User.findByIdAndUpdate(booking.userId, { rewardPoints: newPoints });
+          console.log(`🎁 Awarded ${pointsEarned} reward points to user ${booking.userId} (Total: ${newPoints})`);
+          
+          // Emit reward points update
+          const io = req.app.get('io');
+          if (io) {
+            io.to(String(booking.userId)).emit('reward:points_updated', {
+              userId: booking.userId,
+              pointsEarned,
+              totalPoints: newPoints,
+              bookingId: id,
+            });
+          }
+        }
+      }
     }
 
     const updatedBooking = await Booking.findByIdAndUpdate(id, updateData, { new: true })
@@ -825,6 +865,89 @@ router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Confirm payment error:', error);
     res.status(500).json({ message: 'Failed to confirm payment' });
+  }
+});
+
+// Process payment with reward points support
+router.patch('/:id/payment', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { method, transactionId, rewardPointsUsed, discountAmount, finalAmount } = req.body;
+
+    console.log('💳 Process payment request:', { bookingId: id, method, transactionId, rewardPointsUsed, discountAmount, finalAmount });
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    // Validate reward points usage
+    if (rewardPointsUsed && rewardPointsUsed > 0) {
+      const user = await User.findById(booking.userId);
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      const currentPoints = user.rewardPoints || 0;
+      if (currentPoints < rewardPointsUsed) {
+        return res.status(400).json({ message: 'Insufficient reward points' });
+      }
+
+      // Validate discount calculation
+      if (discountAmount === undefined || finalAmount === undefined) {
+        return res.status(400).json({ message: 'Discount amount and final amount are required when using reward points' });
+      }
+
+      // Update booking with reward points info
+      booking.rewardPointsUsed = rewardPointsUsed;
+      booking.discountAmount = discountAmount;
+      booking.finalAmount = finalAmount;
+    }
+
+    // Update payment info
+    booking.paymentMethod = method;
+    booking.paymentId = transactionId || `PAYMENT_${Date.now()}`;
+    booking.paymentStatus = 'paid';
+    booking.paymentConfirmedAt = new Date();
+
+    await booking.save();
+
+    // Deduct reward points if used
+    if (rewardPointsUsed && rewardPointsUsed > 0) {
+      const user = await User.findById(booking.userId);
+      if (user) {
+        const currentPoints = user.rewardPoints || 0;
+        const newPoints = Math.max(0, currentPoints - rewardPointsUsed);
+        await User.findByIdAndUpdate(booking.userId, { rewardPoints: newPoints });
+        console.log(`💰 Deducted ${rewardPointsUsed} reward points from user ${booking.userId}`);
+      }
+    }
+
+    // Emit real-time events
+    const io = req.app.get('io');
+    if (io) {
+      io.to(String(booking.userId)).emit('payment:status_updated', {
+        bookingId: id,
+        paymentStatus: booking.paymentStatus,
+        booking: booking.toObject(),
+      });
+      
+      if (booking.workerId) {
+        io.to(String(booking.workerId)).emit('payment:status_updated', {
+          bookingId: id,
+          paymentStatus: booking.paymentStatus,
+          booking: booking.toObject(),
+        });
+      }
+    }
+
+    res.json({
+      booking,
+      message: 'Payment processed successfully',
+    });
+  } catch (error) {
+    console.error('Process payment error:', error);
+    res.status(500).json({ message: 'Failed to process payment' });
   }
 });
 
