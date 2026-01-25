@@ -316,16 +316,13 @@ router.post('/verify-category', async (req, res) => {
     
     console.log('✅ Service category notification created:', categoryNotification._id);
     
-    // Emit notification:new event to worker
-    if (io) {
-      io.to(String(workerId)).emit('notification:new', categoryNotification.toObject());
-      io.to('worker').emit('notification:new', categoryNotification.toObject());
-      console.log('✅ Service category notification sent to worker:', workerId);
-    }
-
     // Emit Socket.IO event
     const io = getIO(req);
     if (io) {
+      // Emit notification:new event to worker
+      io.to(String(workerId)).emit('notification:new', categoryNotification.toObject());
+      io.to('worker').emit('notification:new', categoryNotification.toObject());
+      console.log('✅ Service category notification sent to worker:', workerId);
       const updateData = {
         workerId: String(workerId),
         category,
@@ -337,8 +334,27 @@ router.post('/verify-category', async (req, res) => {
       // Emit to specific worker room for targeted delivery (workers join their userId room)
       io.to(String(workerId)).emit('category:verification:updated', updateData);
       
+      // Emit to worker room for all workers
+      io.to('worker').emit('category:verification:updated', updateData);
+      
       // Emit globally for admin dashboard and other clients
       io.emit('category:verification:updated', updateData);
+      
+      // Also emit notification:new event to ensure worker receives notification
+      io.to(String(workerId)).emit('notification:new', {
+        _id: categoryNotification._id,
+        userId: workerId,
+        type: status === 'rejected' ? 'job' : 'system',
+        title: status === 'verified' ? 'Service Verified' : 'Service Rejected',
+        message: notificationMessage,
+        data: {
+          category,
+          status,
+          rejectionReason: status === 'rejected' ? rejectionReason : undefined,
+        },
+        isRead: false,
+        createdAt: categoryNotification.createdAt,
+      });
       
       console.log(`📢 Category verification updated event emitted: ${category} ${status} to worker ${workerId}`);
     }
