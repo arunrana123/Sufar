@@ -302,9 +302,9 @@ router.post('/verify-category', async (req, res) => {
       ? `Your ${category} service has been verified! You can now receive requests for this service.`
       : `Your ${category} verification was rejected. ${rejectionReason || 'Please resubmit valid documents.'}`;
 
-    await Notification.create({
+    const categoryNotification = await Notification.create({
       userId: workerId,
-      type: 'category_verification_updated',
+      type: status === 'rejected' ? 'job' : 'system', // Use 'job' type for rejected services
       title: status === 'verified' ? 'Service Verified' : 'Service Rejected',
       message: notificationMessage,
       data: {
@@ -312,8 +312,16 @@ router.post('/verify-category', async (req, res) => {
         status,
         rejectionReason: status === 'rejected' ? rejectionReason : undefined,
       },
-      priority: 'high',
     });
+    
+    console.log('✅ Service category notification created:', categoryNotification._id);
+    
+    // Emit notification:new event to worker
+    if (io) {
+      io.to(String(workerId)).emit('notification:new', categoryNotification.toObject());
+      io.to('worker').emit('notification:new', categoryNotification.toObject());
+      console.log('✅ Service category notification sent to worker:', workerId);
+    }
 
     // Emit Socket.IO event
     const io = getIO(req);
