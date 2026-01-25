@@ -14,6 +14,7 @@ export interface IUser extends Document {
   address?: string;
   role?: 'user' | 'admin';
   googleId?: string;
+  rewardPoints?: number;
   createdAt: Date;
   resetToken?: string;
   resetTokenExpires?: Date;
@@ -32,6 +33,7 @@ const UserSchema: Schema = new Schema({
   address: { type: String, trim: true },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   googleId: { type: String, unique: true, sparse: true }, // Google Sign-In ID
+  rewardPoints: { type: Number, default: 0 }, // Reward points for discounts
   createdAt: { type: Date, default: Date.now },
   resetToken: { type: String },
   resetTokenExpires: { type: Date },
