@@ -200,44 +200,71 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
       console.log('📡 Using robust network utility with retry logic');
       
       try {
+        console.log('📡 Sending login request...');
         const response = await loginRequest('/api/workers/login', {
           email,
           password,
         }, apiUrl);
-        console.log('Response status:', response.status);
         
-        // Check if response is JSON
-        const contentType = response.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-          const text = await response.text();
-          console.error('Non-JSON response:', text);
-          Alert.alert('Error', 'Server returned an invalid response. Please try again.');
+        console.log('✅ Login response received, status:', response.status);
+        
+        // Parse response - handle both JSON and text responses
+        let data: any;
+        const contentType = response.headers.get('content-type') || '';
+        
+        try {
+          if (contentType.includes('application/json')) {
+            data = await response.json();
+            console.log('✅ Response parsed as JSON');
+          } else {
+            // Try to parse as JSON anyway (some servers don't set content-type correctly)
+            const text = await response.text();
+            console.log('⚠️ Non-JSON content-type, attempting to parse text as JSON...');
+            try {
+              data = JSON.parse(text);
+              console.log('✅ Successfully parsed text as JSON');
+            } catch (parseError) {
+              console.error('❌ Failed to parse response:', text);
+              Alert.alert('Error', `Server returned an invalid response: ${text.substring(0, 100)}`);
+              setLoading(false);
+              return;
+            }
+          }
+        } catch (parseError: any) {
+          console.error('❌ Error parsing response:', parseError);
+          Alert.alert('Error', 'Failed to parse server response. Please try again.');
           setLoading(false);
           return;
         }
-        
-        const data = await response.json();
-        console.log('Response data received');
 
-        if (response.ok) {
+        console.log('📦 Response data:', { 
+          hasWorker: !!data.worker, 
+          hasToken: !!data.token,
+          status: response.status 
+        });
+
+        if (response.ok && data.worker && data.token) {
+          console.log('✅ Login successful, processing worker data...');
+          
           // Try to load stored worker data to preserve profileImage and other local updates
           let storedWorkerData = null;
           try {
             const stored = await AsyncStorage.getItem('workerData');
             if (stored) {
               storedWorkerData = JSON.parse(stored);
+              console.log('✅ Loaded stored worker data');
             }
           } catch (e) {
-            console.log('No stored worker data found');
+            console.log('ℹ️ No stored worker data found');
           }
           
           // Merge backend data with stored data (prefer stored profileImage if exists)
           const workerData = {
-            id: data.worker._id,
-            name: data.worker.name,
+            id: data.worker._id || data.worker.id,
+            name: data.worker.name || data.worker.firstName + ' ' + (data.worker.lastName || ''),
             email: data.worker.email,
             phone: data.worker.phone,
-            skills: data.worker.skills,
+            skills: data.worker.skills || [],
             token: data.token,
             profileImage: storedWorkerData?.profileImage || data.worker.profileImage || data.worker.profilePhoto || null,
             documents: storedWorkerData?.documents || data.worker.documents || null,
@@ -245,9 +272,15 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
             verificationSubmitted: storedWorkerData?.verificationSubmitted || data.worker.verificationSubmitted || false,
           };
           
+          console.log('✅ Worker data prepared, calling onLoginSuccess...');
           onLoginSuccess(workerData);
+          console.log('✅ Login flow completed successfully');
         } else {
-          Alert.alert('Login Failed', data.message || 'Invalid credentials');
+          // Handle error responses
+          const errorMessage = data.message || data.error || 'Invalid credentials. Please check your email and password.';
+          console.error('❌ Login failed:', errorMessage);
+          Alert.alert('Login Failed', errorMessage);
+          setLoading(false);
         }
       } catch (fetchError: any) {
         // Error already handled by loginRequest with retry logic
@@ -255,27 +288,33 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
         throw fetchError; // Re-throw to be caught by outer catch
       }
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('❌ Login error caught:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       
-      // Display error message (loginRequest already provides detailed messages)
-      Alert.alert(
-        'Login Failed',
-        errorMessage,
-        [
-          { text: 'OK', style: 'default' },
-          {
-            text: 'Retry',
-            onPress: () => {
-              console.log('🔄 Retrying login...');
-              handleLogin();
-            },
-            style: 'default'
-          }
-        ]
-      );
+      // Don't show alert if login was actually successful (loading state will be cleared by onLoginSuccess)
+      // Only show error if it's a real error
+      if (errorMessage && !errorMessage.includes('success')) {
+        // Display error message (loginRequest already provides detailed messages)
+        Alert.alert(
+          'Login Failed',
+          errorMessage,
+          [
+            { text: 'OK', style: 'default' },
+            {
+              text: 'Retry',
+              onPress: () => {
+                console.log('🔄 Retrying login...');
+                handleLogin();
+              },
+              style: 'default'
+            }
+          ]
+        );
+      }
     } finally {
+      // Always clear loading state
       setLoading(false);
+      console.log('✅ Login attempt completed, loading state cleared');
     }
   };
 
