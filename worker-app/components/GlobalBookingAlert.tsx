@@ -166,13 +166,23 @@ export default function GlobalBookingAlert() {
         (cat: string) => cat.toLowerCase().trim() === bookingCategory
       );
 
-      console.log('🔍 Category match:', hasCategory, '| Worker categories:', worker.serviceCategories);
+      // CRITICAL: Check if this service category is VERIFIED
+      const categoryStatus = worker?.categoryVerificationStatus?.[data.serviceCategory];
+      const isServiceVerified = categoryStatus === 'verified';
 
-      if (hasCategory) {
+      console.log('🔍 Category match:', hasCategory, '| Worker categories:', worker.serviceCategories);
+      console.log('✅ Service verified:', isServiceVerified, '| Status:', categoryStatus);
+
+      // Only show booking request if worker has the category AND it's verified
+      if (hasCategory && isServiceVerified) {
         console.log('✅ GLOBAL: Showing booking alert popup for:', data.serviceName || data.serviceCategory);
         showBanner(data);
       } else {
-        console.log('⚠️ GLOBAL: Worker does not have this category, skipping alert');
+        if (!hasCategory) {
+          console.log('⚠️ GLOBAL: Worker does not have this category, skipping alert');
+        } else if (!isServiceVerified) {
+          console.log(`⚠️ GLOBAL: Service category "${data.serviceCategory}" is not verified (Status: ${categoryStatus}) - skipping alert`);
+        }
       }
     };
 
