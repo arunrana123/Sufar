@@ -1,6 +1,7 @@
 // DOCUMENT VERIFICATION SCREEN - Service category-based document verification
 // Features: Service category selection, document upload, uploaded documents view with status
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   View,
   Text,
@@ -19,6 +20,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { getApiUrl } from '@/lib/config';
+import { robustFetch, checkNetworkConnectivity, checkServerHealth } from '@/lib/networkUtils';
 
 interface DocumentFile {
   uri: string;
@@ -39,7 +41,7 @@ export default function DocumentVerificationScreen() {
   const [loading, setLoading] = useState(true);
   const [serviceCategories, setServiceCategories] = useState<string[]>([]);
   const [categoryVerificationStatus, setCategoryVerificationStatus] = useState<{
-    [category: string]: 'pending' | 'verified' | 'rejected';
+    [category: string]: 'pending' | 'verified' | 'rejected' | undefined;
   }>({});
   const [categoryDocuments, setCategoryDocuments] = useState<{
     [category: string]: CategoryDocuments;
@@ -49,6 +51,16 @@ export default function DocumentVerificationScreen() {
 
   useEffect(() => {
     if (worker?.id) {
+      console.log('📋 Document verification screen mounted, loading data for worker:', worker.id);
+      console.log('📋 Worker context serviceCategories:', worker.serviceCategories);
+      
+      // Immediately set serviceCategories from worker context if available (for faster display)
+      if (worker.serviceCategories && Array.isArray(worker.serviceCategories) && worker.serviceCategories.length > 0) {
+        const contextCategories = worker.serviceCategories.filter((cat: any) => cat && String(cat).trim().length > 0);
+        console.log('⚡ Setting serviceCategories from worker context immediately:', contextCategories);
+        setServiceCategories(contextCategories);
+      }
+      
       loadVerificationData();
       
       // Connect to socket for live updates
@@ -66,7 +78,7 @@ export default function DocumentVerificationScreen() {
         }
       };
       
-      // Listen for category verification updates
+      // Listen for category verification updates (when admin approves/rejects)
       const handleCategoryVerificationUpdate = (data: any) => {
         if (data.workerId === worker.id) {
           console.log('📢 Category verification update received:', data);
@@ -74,6 +86,33 @@ export default function DocumentVerificationScreen() {
             ...prev,
             [data.category]: data.status,
           }));
+          
+          // Update worker context with new verification status
+          if (updateWorker) {
+            updateWorker({
+              ...worker,
+              categoryVerificationStatus: {
+                ...worker.categoryVerificationStatus,
+                [data.category]: data.status,
+              },
+            } as any);
+          }
+          
+          // Show alert to worker
+          Alert.alert(
+            data.status === 'verified' ? '✅ Service Verified!' : '❌ Service Rejected',
+            data.status === 'verified'
+              ? `Your ${data.category} service has been verified! You can now receive requests for this service.`
+              : `Your ${data.category} verification was rejected. ${data.rejectionReason || 'Please resubmit valid documents.'}`,
+            [
+              { 
+                text: 'View Documents', 
+                onPress: () => router.push('/uploaded-documents') 
+              },
+              { text: 'OK' }
+            ]
+          );
+          
           // Reload verification data
           setTimeout(() => {
             loadVerificationData();
@@ -111,6 +150,16 @@ export default function DocumentVerificationScreen() {
     }
   }, [worker?.id]);
 
+  // Reload verification data when screen comes into focus (e.g., when returning from home)
+  useFocusEffect(
+    useCallback(() => {
+      if (worker?.id) {
+        console.log('🔄 Document verification screen focused, reloading data...');
+        loadVerificationData(true); // Preserve local uploads when refocusing
+      }
+    }, [worker?.id])
+  );
+
   const loadVerificationData = async (preserveLocalUploads: boolean = false) => {
     if (!worker?.id) {
       setLoading(false);
@@ -119,6 +168,7 @@ export default function DocumentVerificationScreen() {
 
     try {
       const apiUrl = getApiUrl();
+      console.log('🔄 Loading verification data for worker:', worker.id);
       const response = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
@@ -126,19 +176,44 @@ export default function DocumentVerificationScreen() {
       
       if (response.ok) {
         const workerData = await response.json();
+        console.log('📦 Raw workerData.serviceCategories:', workerData.serviceCategories);
+        console.log('📦 Type of serviceCategories:', typeof workerData.serviceCategories);
         
-        // Load service categories
-        const categories = workerData.serviceCategories || [];
+        // Load service categories - ensure it's always an array
+        let categories: string[] = [];
+        if (Array.isArray(workerData.serviceCategories)) {
+          categories = workerData.serviceCategories.filter((cat: string) => cat && String(cat).trim().length > 0);
+        } else if (typeof workerData.serviceCategories === 'string' && workerData.serviceCategories.trim().length > 0) {
+          categories = [workerData.serviceCategories.trim()];
+        }
+        
+        // Fallback: Also check worker context if backend returns empty
+        if (categories.length === 0 && worker?.serviceCategories && Array.isArray(worker.serviceCategories)) {
+          console.log('⚠️ Backend returned empty categories, using worker context:', worker.serviceCategories);
+          categories = worker.serviceCategories.filter((cat: any) => cat && String(cat).trim().length > 0);
+        }
+        
+        console.log('📋 Document verification - Final serviceCategories to display:', categories);
+        console.log('📋 Number of categories:', categories.length);
         setServiceCategories(categories);
+        
+        // Also update worker context with latest serviceCategories
+        if (worker && categories.length > 0) {
+          updateWorker({
+            ...worker,
+            serviceCategories: categories,
+          } as any);
+          console.log('✅ Updated worker context with serviceCategories in document verification:', categories);
+        }
 
         // Load category documents and status
         const categoryDocs: { [key: string]: CategoryDocuments } = {};
-        const categoryStatus: { [key: string]: 'pending' | 'verified' | 'rejected' } = {};
+        const categoryStatus: { [key: string]: 'pending' | 'verified' | 'rejected' | undefined } = {};
         
         // Get current local uploads to preserve them if needed
         const currentLocalDocs = preserveLocalUploads ? categoryDocuments : {};
         
-        categories.forEach((cat: string) => {
+        categories.forEach((cat: string): void => {
           const catDocs = workerData.categoryDocuments?.[cat] || {};
           // Backend stores as skillProof and experience, but we need to map them
           // Convert string URIs to DocumentFile objects for display
@@ -183,11 +258,34 @@ export default function DocumentVerificationScreen() {
                         })
                   : null),
           };
-          categoryStatus[cat] = workerData.categoryVerificationStatus?.[cat] || 'pending';
+          
+          // Only set status if it exists in backend - don't default to 'pending'
+          // If no status exists, it means the category needs verification
+          const backendStatus = workerData.categoryVerificationStatus?.[cat];
+          if (backendStatus) {
+            categoryStatus[cat] = backendStatus;
+          } else {
+            // No status means not yet submitted - leave as undefined
+            categoryStatus[cat] = undefined;
+          }
         });
         
         setCategoryDocuments(categoryDocs);
         setCategoryVerificationStatus(categoryStatus);
+        
+        // Update worker context with verificationSubmitted status from backend
+        if (updateWorker && workerData) {
+          updateWorker({
+            ...worker,
+            categoryVerificationStatus: categoryStatus,
+            categoryDocuments: workerData.categoryDocuments || {},
+            verificationStatus: workerData.verificationStatus || {},
+            serviceCategories: categories,
+            verificationSubmitted: workerData.verificationSubmitted || false,
+            submittedAt: workerData.submittedAt || undefined,
+          } as any);
+          console.log('✅ Worker context updated with verificationSubmitted:', workerData.verificationSubmitted);
+        }
         
         console.log('✅ Verification data loaded, preserved local uploads:', preserveLocalUploads);
       } else {
@@ -539,8 +637,10 @@ export default function DocumentVerificationScreen() {
 
     setUploading(category);
     
+    // Get API URL outside try block so it's accessible in catch block
+    const apiUrl = getApiUrl();
+    
     try {
-      const apiUrl = getApiUrl();
       const formData = new FormData();
       
       formData.append('workerId', worker.id);
@@ -783,16 +883,19 @@ export default function DocumentVerificationScreen() {
       }
 
       console.log('📤 Submitting documents for category:', category);
-      console.log('📤 FormData prepared with documents');
-
-      const response = await fetch(`${apiUrl}/api/workers/upload-service-documents`, {
+      console.log('🌐 API URL:', apiUrl);
+      
+      // Simple upload - EXACTLY like profile.tsx (no health check, no timeout, just upload)
+      const uploadUrl = `${apiUrl}/api/workers/upload-service-documents`;
+      console.log('📡 Uploading to:', uploadUrl);
+      
+      // Upload documents to backend (Don't set Content-Type header, let fetch set it with boundary)
+      const response = await fetch(uploadUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${worker?.token || ''}`,
-          // Don't set Content-Type for FormData - let the browser set it with boundary
-        },
         body: formData,
       });
+      
+      console.log('📥 Response received, status:', response.status);
 
       if (response.ok) {
         const result = await response.json();
@@ -816,17 +919,26 @@ export default function DocumentVerificationScreen() {
           [category]: 'pending',
         }));
         
-        // Update worker context if available
+        // Update worker context with pending status and verificationSubmitted flag
         if (updateWorker) {
-          updateWorker({
+          const updatedWorker = {
             ...worker,
+            categoryVerificationStatus: {
+              ...(worker.categoryVerificationStatus || {}),
+              [category]: 'pending',
+            },
             verificationSubmitted: true,
             submittedAt: new Date().toISOString(),
-          } as any);
+          };
+          updateWorker(updatedWorker as any);
+          console.log('✅ Worker context updated with verificationSubmitted:', updatedWorker.verificationSubmitted);
         }
         
         // Close the expanded category section
         setSelectedCategory(null);
+        
+        // Reload verification data immediately to reflect the submission
+        await loadVerificationData(false);
         
         Alert.alert(
           '✅ Documents Submitted Successfully!',
@@ -842,12 +954,7 @@ export default function DocumentVerificationScreen() {
             },
             { 
               text: 'OK',
-              onPress: async () => {
-                // Reload verification data to reflect the submission
-                setTimeout(async () => {
-                  await loadVerificationData(false);
-                }, 1000);
-              }
+              style: 'default'
             }
           ]
         );
@@ -869,56 +976,89 @@ export default function DocumentVerificationScreen() {
         Alert.alert('Upload Failed', errorMessage);
       }
     } catch (error: any) {
+      // Simple error handling
       console.error('❌ Error submitting verification:', error);
+      console.error('❌ Error name:', error.name);
+      console.error('❌ Error message:', error.message);
+      
       let errorMessage = 'Failed to submit documents. Please try again.';
       
-      if (error.message) {
+      if (error.message?.includes('Network request failed') || error.name === 'TypeError') {
+        errorMessage = `Network error. Cannot connect to server.\n\nPlease check:\n• Backend is running: cd backend && bun run dev\n• Test in browser: ${apiUrl}/health\n• Same WiFi network\n• IP: ${apiUrl.replace('http://', '').split(':')[0]}`;
+      } else if (error.message) {
         errorMessage = error.message;
-      } else if (error.toString) {
-        errorMessage = error.toString();
       }
       
-      Alert.alert('Error', errorMessage);
+      Alert.alert('Upload Error', errorMessage, [
+        { 
+          text: 'Retry', 
+          onPress: () => submitCategoryVerification(category)
+        },
+        { text: 'OK', style: 'cancel' }
+      ]);
     } finally {
       setUploading(null);
     }
   };
 
   // Get categories that need verification
-  // Only show categories that:
-  // 1. Are rejected (need resubmission)
-  // 2. Have no documents uploaded yet (status is undefined/null)
-  // 3. Have documents locally but haven't been submitted yet
-  // DO NOT show categories with status 'pending' (already submitted - they appear in uploaded-documents)
+  // Show categories that:
+  // 1. Have no status (undefined) - newly added, not yet submitted
+  // 2. Are rejected (need resubmission)
+  // 3. Have documents locally but haven't been submitted yet (status is undefined)
+  // DO NOT show categories with:
+  // - status 'verified' (already verified)
+  // - status 'pending' (already submitted - they appear in uploaded-documents)
   const getCategoriesNeedingVerification = () => {
-    return serviceCategories.filter(category => {
+    console.log('🔍 Filtering categories needing verification...');
+    console.log('   Total serviceCategories:', serviceCategories);
+    console.log('   categoryVerificationStatus:', categoryVerificationStatus);
+    
+    const filtered = serviceCategories.filter(category => {
       const status = categoryVerificationStatus[category];
       const docs = categoryDocuments[category] || {};
       
+      console.log(`   Category: ${category}, Status: ${status}, Has docs: ${!!docs.citizenship || !!docs.serviceCertificate || !!docs.experienceCertificate}`);
+      
       // If status is 'verified', don't show (already verified)
       if (status === 'verified') {
+        console.log(`     ❌ ${category} is verified - hiding`);
         return false;
       }
       
       // If status is 'pending' from server, don't show (already submitted - check uploaded-documents)
       if (status === 'pending') {
+        console.log(`     ❌ ${category} is pending - hiding (check uploaded-documents)`);
         return false;
       }
       
       // If status is 'rejected', show (needs resubmission)
       if (status === 'rejected') {
+        console.log(`     ✅ ${category} is rejected - showing (needs resubmission)`);
         return true;
       }
       
-      // If no status and no documents, show (needs initial upload)
+      // If status is undefined/null (no status from backend), show (needs verification)
+      // This means the category was just added and hasn't been submitted yet
+      if (status === undefined || status === null) {
+        console.log(`     ✅ ${category} has no status - showing (needs verification)`);
+        return true;
+      }
+      
+      // If has documents locally but status is undefined/null, show (ready to submit)
       const hasDocuments = docs.citizenship?.uri || docs.serviceCertificate?.uri || docs.experienceCertificate;
-      if (!hasDocuments) {
+      if (hasDocuments && (status === undefined || status === null)) {
+        console.log(`     ✅ ${category} has local docs but no status - showing (ready to submit)`);
         return true;
       }
       
-      // If has documents but status is undefined/null, show (ready to submit)
+      // Default: show if no status
+      console.log(`     ✅ ${category} - showing (default)`);
       return true;
     });
+    
+    console.log('   Filtered categories:', filtered);
+    return filtered;
   };
 
   if (loading) {
@@ -935,6 +1075,10 @@ export default function DocumentVerificationScreen() {
   }
 
   const categoriesNeedingVerification = getCategoriesNeedingVerification();
+  
+  console.log('📊 Render - serviceCategories:', serviceCategories);
+  console.log('📊 Render - categoriesNeedingVerification:', categoriesNeedingVerification);
+  console.log('📊 Render - categoriesNeedingVerification.length:', categoriesNeedingVerification.length);
 
   return (
     <View style={styles.container}>
@@ -954,11 +1098,23 @@ export default function DocumentVerificationScreen() {
         <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           {categoriesNeedingVerification.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="checkmark-circle" size={64} color="#4CAF50" />
-              <Text style={styles.emptyTitle}>All Services Verified</Text>
-              <Text style={styles.emptyText}>
-                All your service categories have been verified and are ready to receive requests.
-              </Text>
+              {serviceCategories.length === 0 ? (
+                <>
+                  <Ionicons name="document-text-outline" size={64} color="#999" />
+                  <Text style={styles.emptyTitle}>No Services Added</Text>
+                  <Text style={styles.emptyText}>
+                    You haven't added any service categories yet. Please add services from the home screen first.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={64} color="#4CAF50" />
+                  <Text style={styles.emptyTitle}>All Services Verified</Text>
+                  <Text style={styles.emptyText}>
+                    All your service categories have been verified and are ready to receive requests.
+                  </Text>
+                </>
+              )}
             </View>
           ) : (
             <>
@@ -968,10 +1124,13 @@ export default function DocumentVerificationScreen() {
               </Text>
 
               {categoriesNeedingVerification.map((category) => {
-                const status = categoryVerificationStatus[category] || 'pending';
+                const status = categoryVerificationStatus[category];
                 const docs = categoryDocuments[category] || {};
                 const isExpanded = selectedCategory === category;
                 const isUploading = uploading === category;
+                
+                // Determine display status - if undefined, show as "Not Started"
+                const displayStatus = status || 'not_started';
 
                 return (
                   <View key={category} style={styles.categoryCard}>
@@ -987,13 +1146,15 @@ export default function DocumentVerificationScreen() {
                       <View style={styles.categoryHeaderRight}>
                         <View style={[
                           styles.statusBadge,
-                          status === 'verified' && styles.statusBadgeVerified,
-                          status === 'rejected' && styles.statusBadgeRejected,
-                          status === 'pending' && styles.statusBadgePending,
+                          displayStatus === 'verified' && styles.statusBadgeVerified,
+                          displayStatus === 'rejected' && styles.statusBadgeRejected,
+                          displayStatus === 'pending' && styles.statusBadgePending,
+                          (displayStatus === 'not_started' || !status) && styles.statusBadgeNotStarted,
                         ]}>
                           <Text style={styles.statusText}>
-                            {status === 'verified' ? 'Verified' : 
-                             status === 'rejected' ? 'Rejected' : 'Pending'}
+                            {displayStatus === 'verified' ? 'Verified' : 
+                             displayStatus === 'rejected' ? 'Rejected' : 
+                             displayStatus === 'pending' ? 'Pending' : 'Not Started'}
                           </Text>
                         </View>
                         <Ionicons 
@@ -1008,7 +1169,7 @@ export default function DocumentVerificationScreen() {
                     {isExpanded && (
                       <View style={styles.categoryContent}>
                         {/* Show success message if status is pending (submitted, waiting for admin) */}
-                        {status === 'pending' && (
+                        {displayStatus === 'pending' && (
                           <View style={styles.successNotice}>
                             <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
                             <Text style={styles.successText}>
@@ -1029,11 +1190,20 @@ export default function DocumentVerificationScreen() {
                           </View>
                         )}
                         
-                        {status === 'rejected' && (
+                        {displayStatus === 'rejected' && (
                           <View style={styles.rejectionNotice}>
                             <Ionicons name="alert-circle" size={20} color="#F44336" />
                             <Text style={styles.rejectionText}>
                               Your documents were rejected. Please resubmit valid documents.
+                            </Text>
+                          </View>
+                        )}
+                        
+                        {(displayStatus === 'not_started' || !status) && (
+                          <View style={styles.notStartedNotice}>
+                            <Ionicons name="document-text-outline" size={20} color="#6C757D" />
+                            <Text style={styles.notStartedText}>
+                              Please upload the required documents to start verification for this service category.
                             </Text>
                           </View>
                         )}
@@ -1530,6 +1700,9 @@ const styles = StyleSheet.create({
   statusBadgePending: {
     backgroundColor: '#FEF3C7',
   },
+  statusBadgeNotStarted: {
+    backgroundColor: '#E9ECEF',
+  },
   statusText: {
     fontSize: 12,
     fontWeight: '600',
@@ -1555,6 +1728,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#C62828',
     lineHeight: 20,
+  },
+  notStartedNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  notStartedText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#6C757D',
+    marginLeft: 8,
   },
   uploadSection: {
     marginBottom: 20,
