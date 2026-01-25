@@ -317,8 +317,38 @@ export default function RequestsScreen() {
         const data = await response.json();
         console.log('✅ Bookings fetched successfully:', data.length, 'bookings');
         console.log('📋 Booking IDs:', data.map((b: any) => b._id));
-        // Store all bookings (pending and accepted) in state
-        setBookings(data);
+        
+        // Filter bookings to only show those for VERIFIED service categories
+        const filteredBookings = data.filter((booking: any) => {
+          if (!booking.serviceCategory || !worker?.serviceCategories) {
+            return false;
+          }
+          
+          // Check if worker has this service category
+          const bookingCategory = booking.serviceCategory.toLowerCase().trim();
+          const hasCategory = worker.serviceCategories.some(
+            (cat: string) => cat.toLowerCase().trim() === bookingCategory
+          );
+          
+          if (!hasCategory) {
+            return false;
+          }
+          
+          // CRITICAL: Only show bookings for VERIFIED service categories
+          const categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+          const isServiceVerified = categoryStatus === 'verified';
+          
+          if (!isServiceVerified) {
+            console.log(`⚠️ Filtering out booking for unverified service: ${booking.serviceCategory} (Status: ${categoryStatus})`);
+            return false;
+          }
+          
+          return true;
+        });
+        
+        console.log('✅ Filtered bookings (verified services only):', filteredBookings.length, 'out of', data.length);
+        // Store filtered bookings (only verified services) in state
+        setBookings(filteredBookings);
         
         // Update stats after fetching bookings
         await loadRequestStats();
@@ -396,9 +426,25 @@ export default function RequestsScreen() {
             return true;
           })();
           
-          // Show request if worker has the category (backend already filters verified workers)
-          // Frontend should show all requests - verification is handled by backend
-          if (hasServiceCategory) {
+          // Check if worker is verified for this service category
+          const isServiceVerified = (() => {
+            if (!booking.serviceCategory || !worker) {
+              return false;
+            }
+            
+            const categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+            const isVerified = categoryStatus === 'verified';
+            
+            if (!isVerified) {
+              console.log(`⚠️ Worker service category "${booking.serviceCategory}" is not verified. Status: ${categoryStatus}`);
+            }
+            
+            return isVerified;
+          })();
+          
+          // Only show request if worker has the category AND it's verified
+          // Unverified workers should NOT receive job requests
+          if (hasServiceCategory && isServiceVerified) {
             // IMMEDIATELY add to state (optimistic update)
             setBookings(prevBookings => {
               // Check if booking already exists
@@ -447,8 +493,10 @@ export default function RequestsScreen() {
             console.log('⚠️ Booking does not match this worker - ignoring');
             console.log('📋 Reasons:', {
               hasServiceCategory,
+              isServiceVerified,
               bookingCategory: booking.serviceCategory,
               workerCategories: worker.serviceCategories,
+              categoryStatus: worker.categoryVerificationStatus?.[booking.serviceCategory],
             });
           }
         };
