@@ -110,9 +110,13 @@ export default function TrackingScreen() {
       // Connect to socket for real-time updates
       socketService.connect(user.id, 'user');
       
-      // Listen for booking updates
+      // Listen for booking updates (handles all status changes)
       socketService.on('booking:updated', (updatedBooking: any) => {
-        console.log('📝 Booking updated event received in tracking:', updatedBooking);
+        console.log('📝 Booking updated event received in tracking:', {
+          bookingId: updatedBooking._id,
+          status: updatedBooking.status,
+          paymentStatus: updatedBooking.paymentStatus,
+        });
         if (updatedBooking._id) {
           setBookings(prev => 
             prev.map(b => 
@@ -120,10 +124,12 @@ export default function TrackingScreen() {
                 ? { 
                     ...b, 
                     ...updatedBooking,
-                    // Ensure payment status and confirmations are updated
+                    // Ensure all status fields are updated
+                    status: updatedBooking.status || b.status,
                     paymentStatus: updatedBooking.paymentStatus || b.paymentStatus,
                     userConfirmedPayment: updatedBooking.userConfirmedPayment !== undefined ? updatedBooking.userConfirmedPayment : b.userConfirmedPayment,
                     workerConfirmedPayment: updatedBooking.workerConfirmedPayment !== undefined ? updatedBooking.workerConfirmedPayment : b.workerConfirmedPayment,
+                    paymentConfirmedAt: updatedBooking.paymentConfirmedAt || b.paymentConfirmedAt,
                   }
                 : b
             )
@@ -134,24 +140,103 @@ export default function TrackingScreen() {
           }, 500);
         }
       });
+
+      // Listen for booking accepted
+      socketService.on('booking:accepted', (data: any) => {
+        console.log('✅ Booking accepted event received in tracking:', data);
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === bookingId 
+                ? { 
+                    ...b, 
+                    status: 'accepted',
+                    workerId: data.booking?.workerId || data.workerId || b.workerId,
+                    ...(data.booking || {}),
+                  }
+                : b
+            )
+          );
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+
+      // Listen for booking cancelled
+      socketService.on('booking:cancelled', (data: any) => {
+        console.log('🚫 Booking cancelled event received in tracking:', data);
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === bookingId 
+                ? { ...b, status: 'cancelled' }
+                : b
+            )
+          );
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+
+      // Listen for booking rejected
+      socketService.on('booking:rejected', (data: any) => {
+        console.log('❌ Booking rejected event received in tracking:', data);
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === bookingId 
+                ? { ...b, status: 'rejected' }
+                : b
+            )
+          );
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
       
       // Listen for payment status updates
       socketService.on('payment:status_updated', (data: any) => {
         console.log('💳 Payment status updated event received in tracking:', data);
-        if (data.bookingId) {
+        const bookingId = data.bookingId || data.booking?._id;
+        if (bookingId) {
           setBookings(prev => 
             prev.map(b => 
-              b._id === data.bookingId 
+              b._id === bookingId 
                 ? { 
                     ...b, 
-                    paymentStatus: data.paymentStatus,
-                    userConfirmedPayment: data.userConfirmed,
-                    workerConfirmedPayment: data.workerConfirmed,
+                    paymentStatus: data.paymentStatus || data.booking?.paymentStatus || b.paymentStatus,
+                    userConfirmedPayment: data.userConfirmed !== undefined ? data.userConfirmed : (data.booking?.userConfirmedPayment ?? b.userConfirmedPayment),
+                    workerConfirmedPayment: data.workerConfirmed !== undefined ? data.workerConfirmed : (data.booking?.workerConfirmedPayment ?? b.workerConfirmedPayment),
+                    paymentConfirmedAt: data.booking?.paymentConfirmedAt || b.paymentConfirmedAt,
+                    ...(data.booking || {}),
                   }
                 : b
             )
           );
           // Refresh to get latest data from backend
+          setTimeout(() => {
+            fetchBookings();
+          }, 500);
+        }
+      });
+
+      // Listen for work started
+      socketService.on('work:started', (data: any) => {
+        console.log('🔨 Work started event received in tracking:', data);
+        if (data.bookingId) {
+          setBookings(prev => 
+            prev.map(b => 
+              b._id === data.bookingId 
+                ? { ...b, status: 'in_progress' }
+                : b
+            )
+          );
           setTimeout(() => {
             fetchBookings();
           }, 500);
@@ -165,7 +250,14 @@ export default function TrackingScreen() {
           setBookings(prev => 
             prev.map(b => 
               b._id === data.bookingId 
-                ? { ...b, status: 'completed' }
+                ? { 
+                    ...b, 
+                    status: 'completed',
+                    paymentStatus: data.paymentStatus || b.paymentStatus,
+                    userConfirmedPayment: data.userConfirmedPayment !== undefined ? data.userConfirmedPayment : b.userConfirmedPayment,
+                    workerConfirmedPayment: data.workerConfirmedPayment !== undefined ? data.workerConfirmedPayment : b.workerConfirmedPayment,
+                    completedAt: data.completedAt || b.completedAt,
+                  }
                 : b
             )
           );
@@ -179,7 +271,11 @@ export default function TrackingScreen() {
     
     return () => {
       socketService.off('booking:updated');
+      socketService.off('booking:accepted');
+      socketService.off('booking:cancelled');
+      socketService.off('booking:rejected');
       socketService.off('payment:status_updated');
+      socketService.off('work:started');
       socketService.off('work:completed');
     };
   }, [user?.id]);
