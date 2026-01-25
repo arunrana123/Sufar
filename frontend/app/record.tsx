@@ -68,6 +68,7 @@ export default function RecordScreen() {
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [clearAllModalVisible, setClearAllModalVisible] = useState(false);
+  const [clearAllConfirmVisible, setClearAllConfirmVisible] = useState(false);
   const [clearingAll, setClearingAll] = useState(false);
   
   // Toast notification state
@@ -545,6 +546,7 @@ export default function RecordScreen() {
     } finally {
       setClearingAll(false);
       setClearAllModalVisible(false);
+      setClearAllConfirmVisible(false);
     }
   };
 
@@ -637,25 +639,24 @@ export default function RecordScreen() {
         >
           {/* Header */}
           <View style={[styles.header, { backgroundColor: theme.primary }]}>
-            <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => router.back()}
+            >
               <Ionicons name="arrow-back" size={24} color="#fff" />
-            </Pressable>
+            </TouchableOpacity>
             <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Service Records</ThemedText>
-            <View style={{ width: 40 }} />
-          </View>
-          {bookings.length > 0 && (
-            <View style={[styles.clearAllContainer, { backgroundColor: theme.danger + '10', borderColor: theme.danger + '20' }]}>
+            {bookings.length > 0 && (
               <TouchableOpacity
-                style={[styles.clearAllActionButton, { backgroundColor: theme.danger }]}
+                style={styles.deleteAllButton}
                 onPress={() => setClearAllModalVisible(true)}
-                activeOpacity={0.85}
+                activeOpacity={0.7}
               >
-                <Ionicons name="trash" size={20} color="#fff" />
-                <Text style={styles.clearAllActionTextPlain}>Clear All Bookings</Text>
+                <Ionicons name="trash-outline" size={24} color="#fff" />
               </TouchableOpacity>
-              <Text style={[styles.clearAllHint, { color: theme.danger }]}>Removes every record from this list</Text>
-            </View>
-          )}
+            )}
+            {bookings.length === 0 && <View style={{ width: 40 }} />}
+          </View>
           {/* Stats Cards */}
           <View style={styles.statsContainer}>
             <View style={[styles.statCard, { backgroundColor: theme.card }]}>
@@ -981,7 +982,7 @@ export default function RecordScreen() {
         </View>
       </Modal>
 
-      {/* Clear All Confirmation Modal */}
+      {/* First Confirmation Modal - Ask if user wants to delete all bookings */}
       <Modal
         visible={clearAllModalVisible}
         transparent={true}
@@ -990,10 +991,51 @@ export default function RecordScreen() {
       >
         <View style={[styles.modalOverlay, { backgroundColor: theme.modalOverlay }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
-            <Ionicons name="alert-circle-outline" size={48} color={theme.warning} />
-            <ThemedText style={[styles.modalTitle, { color: theme.text }]}>Clear All Bookings?</ThemedText>
+            <Ionicons name="trash-outline" size={48} color={theme.danger} />
+            <ThemedText style={[styles.modalTitle, { color: theme.text }]}>Delete All Bookings?</ThemedText>
             <ThemedText style={[styles.modalMessage, { color: theme.secondary }]}>
-              Are you sure you want to clear all {bookings.length} service booking{bookings.length > 1 ? 's' : ''}? This will cancel all pending and active bookings. This action cannot be undone.
+              Do you want to delete all {bookings.length} service booking{bookings.length > 1 ? 's' : ''}? This action will remove all your booking records.
+            </ThemedText>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton, 
+                  { backgroundColor: theme.card, borderColor: theme.border }
+                ]}
+                onPress={() => setClearAllModalVisible(false)}
+              >
+                <ThemedText style={[styles.cancelButtonText, { color: theme.text }]}>Cancel</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton, 
+                  { backgroundColor: theme.danger }
+                ]}
+                onPress={() => {
+                  setClearAllModalVisible(false);
+                  setClearAllConfirmVisible(true);
+                }}
+              >
+                <ThemedText style={styles.confirmButtonText}>Yes, Delete All</ThemedText>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Second Confirmation Modal - Final confirmation */}
+      <Modal
+        visible={clearAllConfirmVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setClearAllConfirmVisible(false)}
+      >
+        <View style={[styles.modalOverlay, { backgroundColor: theme.modalOverlay }]}>
+          <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
+            <Ionicons name="alert-circle-outline" size={48} color={theme.warning} />
+            <ThemedText style={[styles.modalTitle, { color: theme.text }]}>Confirm Deletion</ThemedText>
+            <ThemedText style={[styles.modalMessage, { color: theme.secondary }]}>
+              Are you absolutely sure? This will permanently delete all {bookings.length} booking{bookings.length > 1 ? 's' : ''} and cancel all pending and active bookings. This action cannot be undone.
             </ThemedText>
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -1003,7 +1045,7 @@ export default function RecordScreen() {
                   clearingAll && { opacity: 0.6 }
                 ]}
                 disabled={clearingAll}
-                onPress={() => setClearAllModalVisible(false)}
+                onPress={() => setClearAllConfirmVisible(false)}
               >
                 <ThemedText style={[styles.cancelButtonText, { color: theme.text }]}>Cancel</ThemedText>
               </TouchableOpacity>
@@ -1019,7 +1061,7 @@ export default function RecordScreen() {
                 {clearingAll ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <ThemedText style={styles.confirmButtonText}>Clear All</ThemedText>
+                  <ThemedText style={styles.confirmButtonText}>Confirm Delete</ThemedText>
                 )}
               </TouchableOpacity>
             </View>
@@ -1050,10 +1092,10 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: 20,
   },
-  backBtn: {
+  backButton: {
     padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 20,
+    marginLeft: -8,
+    marginRight: 4,
   },
   header: {
     flexDirection: 'row',
@@ -1069,41 +1111,13 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   headerTitle: {
+    flex: 1,
     fontSize: 24,
     fontWeight: 'bold',
   },
-  clearAllContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 16,
-    borderRadius: 12,
-    marginHorizontal: 12,
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  clearAllActionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-  },
-  clearAllActionTextPlain: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-    marginLeft: 10,
-  },
-  clearAllHint: {
-    marginTop: 8,
-    textAlign: 'center',
-    fontSize: 13,
-    fontWeight: '500',
+  deleteAllButton: {
+    padding: 8,
+    marginRight: -8,
   },
   loadingContainer: {
     flex: 1,
