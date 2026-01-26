@@ -92,12 +92,24 @@ export default function RequestsPage() {
       }, 500);
     };
 
-    // Wait a bit for connection to establish
+    // Wait a bit for connection to establish, then register listeners
     const connectTimeout = setTimeout(() => {
+      // Listen for verification status updates (when admin approves/rejects)
       socketService.on('document:verification:updated', handleVerificationUpdated);
       socketService.on('category:verification:updated', handleVerificationUpdated);
+      
+      // Listen for new document submissions (when worker submits documents)
       socketService.on('document:verification:submitted', handleDocumentSubmitted);
       socketService.on('category:verification:submitted', handleDocumentSubmitted);
+      
+      // Also listen for notification events
+      socketService.on('notification:new', (notification: any) => {
+        console.log('📢 New notification received:', notification);
+        if (notification.type === 'category_verification_submitted') {
+          handleDocumentSubmitted(notification.data);
+        }
+      });
+      
       console.log('✅ Socket.IO listeners registered for requests page');
     }, 1000);
     
@@ -113,6 +125,7 @@ export default function RequestsPage() {
       socketService.off('category:verification:updated', handleVerificationUpdated);
       socketService.off('document:verification:submitted', handleDocumentSubmitted);
       socketService.off('category:verification:submitted', handleDocumentSubmitted);
+      socketService.off('notification:new');
     };
   }, [router]);
 
@@ -338,7 +351,28 @@ export default function RequestsPage() {
         if (res.ok) {
           const data = await res.json();
           // Map worker data to WorkerRequest format
-          const mappedRequests: WorkerRequest[] = data.map((worker: any) => ({
+          // Filter workers who have submitted documents for verification
+          const workersWithSubmissions = data.filter((worker: any) => {
+            // Check if worker has category documents submitted
+            const hasCategoryDocs = worker.categoryDocuments && 
+              Object.keys(worker.categoryDocuments).length > 0 &&
+              Object.values(worker.categoryDocuments).some((catDocs: any) => 
+                catDocs.skillProof || catDocs.experience
+              );
+            
+            // Check if worker has general documents submitted
+            const hasGeneralDocs = worker.documents && 
+              Object.values(worker.documents).some((doc: any) => doc && doc !== '');
+            
+            // Check if verification was submitted
+            const hasSubmitted = worker.verificationSubmitted === true;
+            
+            return hasCategoryDocs || (hasGeneralDocs && hasSubmitted);
+          });
+          
+          console.log(`📊 Found ${workersWithSubmissions.length} workers with verification submissions out of ${data.length} total`);
+          
+          const mappedRequests: WorkerRequest[] = workersWithSubmissions.map((worker: any) => ({
             _id: worker._id,
             username: worker.email?.split('@')[0] || 'worker',
             firstName: worker.name?.split(' ')[0] || 'Worker',
@@ -353,8 +387,11 @@ export default function RequestsPage() {
               // Check category verification status first (new system)
               if (worker.categoryVerificationStatus && Object.keys(worker.categoryVerificationStatus).length > 0) {
                 const categoryStatuses = Object.values(worker.categoryVerificationStatus);
+                // If all categories are verified, overall is approved
                 if (categoryStatuses.every((s: any) => s === 'verified')) return 'approved';
+                // If any category is rejected, overall is rejected
                 if (categoryStatuses.some((s: any) => s === 'rejected')) return 'rejected';
+                // If any category is pending, overall is pending
                 return 'pending';
               }
               // Fallback to general verification status
@@ -459,21 +496,36 @@ export default function RequestsPage() {
           if (worker) {
             // Check if worker has category documents (new system)
             if (worker.categoryDocuments && Object.keys(worker.categoryDocuments).length > 0) {
-              // Verify the first category
-              const firstCategory = Object.keys(worker.categoryDocuments)[0];
-              const categoryResponse = await fetch(`${apiUrl}/api/admin/verify-category`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  workerId: requestId,
-                  category: firstCategory,
-                  status,
-                  rejectionReason: action === 'reject' ? 'Request rejected by admin' : undefined,
-                }),
-              });
+              // Get all categories that need verification
+              const categoriesToVerify = Object.keys(worker.categoryDocuments);
+              
+              // Verify all categories with pending status
+              let allVerified = true;
+              for (const category of categoriesToVerify) {
+                const categoryStatus = worker.categoryVerificationStatus?.[category];
+                // Only verify categories that are pending or undefined
+                if (!categoryStatus || categoryStatus === 'pending') {
+                  const categoryResponse = await fetch(`${apiUrl}/api/admin/verify-category`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      workerId: requestId,
+                      category: category,
+                      status,
+                      rejectionReason: action === 'reject' ? `Request rejected by admin for ${category}` : undefined,
+                    }),
+                  });
 
-              if (categoryResponse.ok) {
-                console.log(`✅ Category ${firstCategory} ${action}d successfully`);
+                  if (!categoryResponse.ok) {
+                    allVerified = false;
+                    console.warn(`Failed to verify category ${category}`);
+                  } else {
+                    console.log(`✅ Category ${category} ${action}d successfully`);
+                  }
+                }
+              }
+
+              if (allVerified || categoriesToVerify.length > 0) {
                 await fetchRequests();
                 if (selectedRequest?._id === requestId) {
                   setSelectedRequest(null);
