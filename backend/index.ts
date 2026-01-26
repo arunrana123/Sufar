@@ -72,8 +72,9 @@ app.use(cors({
   maxAge: 86400, // 24 hours
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Support URL-encoded bodies
+// Increase body size limits for file uploads (50MB for JSON and URL-encoded)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true })); // Support URL-encoded bodies
 app.use('/uploads', express.static(uploadsDir));
 
 // Add request logging middleware for debugging
@@ -106,10 +107,16 @@ io.on('connection', (socket) => {
       }
       
       // Join both the user type room and user-specific room
-      socket.join(userType); // 'worker' or 'user'
+      socket.join(userType); // 'worker' or 'user' or 'admin'
       socket.join(userId);   // Specific worker/user ID
       
-      console.log(`✅ AUTHENTICATED: ${userType} ${userId} joined rooms: ['${userType}', '${userId}']`);
+      // If admin, also join 'admin' room explicitly for notifications
+      if (userType === 'admin') {
+        socket.join('admin');
+        console.log(`✅ Admin ${userId} joined 'admin' room for notifications`);
+      }
+      
+      console.log(`✅ AUTHENTICATED: ${userType} ${userId} joined rooms: ['${userType}', '${userId}'${userType === 'admin' ? ", 'admin'" : ''}]`);
       console.log(`📊 Socket ${socket.id} is now in rooms:`, Array.from(socket.rooms));
       
       // Send confirmation back to client
@@ -989,8 +996,17 @@ connectDB()
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
       console.log(`🌐 Server accessible at http://0.0.0.0:${PORT}`);
+      console.log(`📱 For mobile devices, use your computer's IP address:`);
+      console.log(`   Example: http://192.168.1.66:${PORT}`);
+      console.log(`   Find your IP with: ifconfig (Mac/Linux) or ipconfig (Windows)`);
       console.log(`🔌 Socket.IO server is running`);
       console.log(`✅ Backend is stable and ready to accept requests`);
+      console.log(`\n📋 Network Configuration:`);
+      console.log(`   - Listening on: 0.0.0.0 (all network interfaces)`);
+      console.log(`   - Port: ${PORT}`);
+      console.log(`   - CORS: Enabled for all origins`);
+      console.log(`   - File upload limit: 10MB per file`);
+      console.log(`   - Body size limit: 50MB`);
     });
   })
   .catch((error) => {
