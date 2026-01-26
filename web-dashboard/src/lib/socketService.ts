@@ -58,6 +58,11 @@ class SocketService {
 
     this.socket.on('authenticated', (data: any) => {
       console.log('✅ Socket authenticated:', data);
+      // Join admin room if userType is admin
+      if (userType === 'admin') {
+        this.socket?.emit('join_room', { roomId: 'admin' });
+        console.log('✅ Admin joined admin room for notifications');
+      }
     });
 
     this.socket.on('disconnect', (reason: string) => {
