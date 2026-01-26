@@ -25,16 +25,21 @@ let RNPolyline: any = null;
 let getDirections: any;
 let mapsAvailable = false;
 
-// Load react-native-maps for map rendering
-try {
-  const RNMaps = require('react-native-maps');
-  RNMapView = RNMaps.default || RNMaps;
-  RNMarker = RNMaps.Marker;
-  RNPolyline = RNMaps.Polyline;
-  mapsAvailable = true;
-  console.log(' react-native-maps loaded successfully');
-} catch (mapsError) {
-  console.error(' react-native-maps not available:', mapsError);
+// Load react-native-maps for map rendering (only on native platforms, not web)
+if (Platform.OS !== 'web') {
+  try {
+    const RNMaps = require('react-native-maps');
+    RNMapView = RNMaps.default || RNMaps;
+    RNMarker = RNMaps.Marker;
+    RNPolyline = RNMaps.Polyline;
+    mapsAvailable = true;
+    console.log('✅ react-native-maps loaded successfully');
+  } catch (mapsError) {
+    console.error('❌ react-native-maps not available:', mapsError);
+    mapsAvailable = false;
+  }
+} else {
+  console.log('🌐 Web platform: react-native-maps not available (native-only module)');
   mapsAvailable = false;
 }
 
@@ -1102,14 +1107,20 @@ export default function JobNavigationScreen() {
         ) : (
           <View style={styles.mapPlaceholder}>
             <Ionicons name="map-outline" size={64} color="#ccc" />
-            <Text style={styles.mapPlaceholderTitle}>Maps Not Available</Text>
+            <Text style={styles.mapPlaceholderTitle}>
+              {Platform.OS === 'web' ? 'Maps Not Available on Web' : 'Maps Not Available'}
+            </Text>
             <Text style={styles.mapPlaceholderText}>
-              To enable maps, you need to build the native app:{'\n\n'}
-              For Android:{'\n'}
-              bunx expo run:android{'\n\n'}
-              For iOS:{'\n'}
-              bunx expo run:ios{'\n\n'}
-              Maps require native build and cannot run in Expo Go.
+              {Platform.OS === 'web' ? (
+                'Maps require native modules and are not available in the web version. Please use the mobile app for navigation features.'
+              ) : (
+                `To enable maps, you need to build the native app:${'\n\n'}` +
+                `For Android:${'\n'}` +
+                `bunx expo run:android${'\n\n'}` +
+                `For iOS:${'\n'}` +
+                `bunx expo run:ios${'\n\n'}` +
+                `Maps require native build and cannot run in Expo Go.`
+              )}
             </Text>
           </View>
         )}
