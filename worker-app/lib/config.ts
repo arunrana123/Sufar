@@ -59,8 +59,30 @@ const sanitizeUrl = (value?: string | null) => {
 };
 
 const resolveBaseUrl = () => {
+  // Web platform - ALWAYS use localhost (browsers can't connect to local network IPs easily)
+  // Check this FIRST before any other logic
+  if (Platform.OS === 'web') {
+    // For web, always use localhost unless explicitly set to something else
+    // Browsers have CORS restrictions with local network IPs
+    const envUrl = sanitizeUrl(process.env.EXPO_PUBLIC_API_URL);
+    if (envUrl && (envUrl.includes('localhost') || envUrl.includes('127.0.0.1'))) {
+      if (__DEV__) console.log('🌐 Web platform, using API URL from environment:', envUrl);
+      return envUrl;
+    }
+    // If env URL is a local network IP (192.168.x.x), convert to localhost for web
+    if (envUrl && envUrl.match(/192\.168\.\d+\.\d+/)) {
+      const portMatch = envUrl.match(/:(\d+)/);
+      const port = portMatch ? portMatch[1] : '5001';
+      if (__DEV__) console.log('🌐 Web platform: Converting local network IP to localhost:', envUrl, '→', `http://localhost:${port}`);
+      return `http://localhost:${port}`;
+    }
+    if (__DEV__) console.log('🌐 Web platform detected, using localhost');
+    return 'http://localhost:5001';
+  }
+
   // For mobile platforms, prefer environment variable, otherwise use default
-  if (__DEV__ && Platform.OS !== 'web') {
+  // Check for web first, then handle mobile platforms
+  if (__DEV__ && (Platform.OS === 'ios' || Platform.OS === 'android' || Platform.OS === 'windows' || Platform.OS === 'macos')) {
     const envUrl = sanitizeUrl(process.env.EXPO_PUBLIC_API_URL);
     
     // If environment variable is set, use it (it will be sanitized to handle legacy IPs)
@@ -74,17 +96,6 @@ const resolveBaseUrl = () => {
     return DEFAULT_API_URL;
   }
 
-  // Web platform - check environment variable
-  if (__DEV__ && Platform.OS === 'web') {
-    const envUrl = sanitizeUrl(process.env.EXPO_PUBLIC_API_URL);
-    if (envUrl) {
-      console.log('🌐 Web platform, using API URL from environment:', envUrl);
-      return envUrl;
-    }
-    console.log('🌐 Web platform detected, using localhost');
-    return 'http://localhost:5001';
-  }
-
   // Production: use default IP
   return DEFAULT_API_URL;
 };
@@ -93,7 +104,7 @@ let BASE_URL = resolveBaseUrl();
 
 // Final validation - ensure mobile platforms use a valid IP (allow localhost and 10.0.2.2 for emulators)
 const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
-if (__DEV__ && Platform.OS !== 'web' && !BASE_URL.includes(defaultIp) && !BASE_URL.includes('localhost') && !BASE_URL.includes('10.0.2.2')) {
+if (__DEV__ && (Platform.OS === 'ios' || Platform.OS === 'android' || Platform.OS === 'windows' || Platform.OS === 'macos') && !BASE_URL.includes(defaultIp) && !BASE_URL.includes('localhost') && !BASE_URL.includes('10.0.2.2')) {
   console.warn('⚠️ FORCING default IP address - was:', BASE_URL);
   BASE_URL = DEFAULT_API_URL;
   console.log('✅ Corrected to:', BASE_URL);
@@ -118,17 +129,46 @@ export const API_CONFIG = {
 export const getApiUrl = () => {
   let url = API_CONFIG.BASE_URL;
   
+  // For web platform, ALWAYS use localhost (browsers can't easily connect to local network IPs)
+  // This check happens at runtime, so it will work even if BASE_URL was set incorrectly at module load
+  // Remove __DEV__ check - we always want this conversion on web
+  if (Platform.OS === 'web') {
+    // If URL contains a local network IP (192.168.x.x), convert to localhost
+    if (url.match(/192\.168\.\d+\.\d+/)) {
+      const portMatch = url.match(/:(\d+)/);
+      const port = portMatch ? portMatch[1] : '5001';
+      url = `http://localhost:${port}`;
+      console.log('🌐 [getApiUrl] Web platform: Converted local network IP to localhost');
+      console.log('   Original:', API_CONFIG.BASE_URL);
+      console.log('   Converted:', url);
+    }
+    // Ensure it's localhost or 127.0.0.1 for web (double-check)
+    if (!url.includes('localhost') && !url.includes('127.0.0.1')) {
+      const portMatch = url.match(/:(\d+)/);
+      const port = portMatch ? portMatch[1] : '5001';
+      url = `http://localhost:${port}`;
+      console.log('🌐 [getApiUrl] Web platform: Forced localhost conversion');
+      console.log('   Original:', API_CONFIG.BASE_URL);
+      console.log('   Converted:', url);
+    }
+  }
+  
   // Final safety check - ensure mobile platforms use a valid IP (allow localhost and 10.0.2.2 for emulators)
   const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
-  if (__DEV__ && Platform.OS !== 'web' && !url.includes(defaultIp) && !url.includes('localhost') && !url.includes('10.0.2.2')) {
+  if (__DEV__ && (Platform.OS === 'ios' || Platform.OS === 'android' || Platform.OS === 'windows' || Platform.OS === 'macos') && !url.includes(defaultIp) && !url.includes('localhost') && !url.includes('10.0.2.2')) {
     console.error('❌ ERROR: Wrong IP detected in getApiUrl(), forcing correction:', url);
     url = DEFAULT_API_URL;
     console.log('✅ Corrected to:', url);
   }
   
   if (__DEV__) {
-    console.log('🔗 getApiUrl() called (Worker App), returning:', url);
-    console.log(`   ✅ IP is correct (${defaultIp}):`, url.includes(defaultIp) || url.includes('localhost') || url.includes('10.0.2.2'));
+    console.log('🔗 [getApiUrl] Called (Worker App)');
+    console.log('   Platform:', Platform.OS);
+    console.log('   BASE_URL:', API_CONFIG.BASE_URL);
+    console.log('   Returning:', url);
+    const defaultIp = DEFAULT_API_URL.replace('http://', '').split(':')[0];
+    const isCorrect = url.includes(defaultIp) || url.includes('localhost') || url.includes('10.0.2.2') || Platform.OS === 'web';
+    console.log(`   ✅ IP is correct:`, isCorrect);
   }
   return url;
 };
