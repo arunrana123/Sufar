@@ -1,10 +1,38 @@
 // MAPBOX DIRECTIONS COMPONENT - Shows navigation route on map for worker app
 // Features: Display route, turn-by-turn directions, distance and duration
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Mapbox, { MapView, Camera, ShapeSource, LineLayer, SymbolLayer } from '@rnmapbox/maps';
 import { getDirections, metersToKilometers, secondsToMinutes, DEFAULT_MAP_STYLE } from '@/lib/MapboxConfig';
+
+// Conditionally import Mapbox components (native-only, not available on web)
+let Mapbox: any = null;
+let MapView: any = null;
+let Camera: any = null;
+let ShapeSource: any = null;
+let LineLayer: any = null;
+let SymbolLayer: any = null;
+let mapboxAvailable = false;
+
+if (Platform.OS !== 'web') {
+  try {
+    const MapboxModule = require('@rnmapbox/maps');
+    Mapbox = MapboxModule.default;
+    MapView = MapboxModule.MapView;
+    Camera = MapboxModule.Camera;
+    ShapeSource = MapboxModule.ShapeSource;
+    LineLayer = MapboxModule.LineLayer;
+    SymbolLayer = MapboxModule.SymbolLayer;
+    mapboxAvailable = true;
+    console.log('✅ @rnmapbox/maps loaded successfully');
+  } catch (error) {
+    console.error('❌ @rnmapbox/maps not available:', error);
+    mapboxAvailable = false;
+  }
+} else {
+  console.log('🌐 Web platform: @rnmapbox/maps not available (native-only module)');
+  mapboxAvailable = false;
+}
 
 interface MapboxDirectionsProps {
   origin: {
@@ -66,6 +94,30 @@ export default function MapboxDirections({ origin, destination, onClose }: Mapbo
         <TouchableOpacity style={styles.retryButton} onPress={fetchRoute}>
           <Text style={styles.retryButtonText}>Retry</Text>
         </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Show placeholder on web or if Mapbox is not available
+  if (Platform.OS === 'web' || !mapboxAvailable || !MapView) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.mapPlaceholder}>
+          <Ionicons name="map-outline" size={64} color="#ccc" />
+          <Text style={styles.mapPlaceholderTitle}>
+            {Platform.OS === 'web' ? 'Maps Not Available on Web' : 'Maps Not Available'}
+          </Text>
+          <Text style={styles.mapPlaceholderText}>
+            {Platform.OS === 'web' 
+              ? 'Maps require native modules and are not available in the web version. Please use the mobile app for map features.'
+              : 'Maps require native build. Please build the native app to use map features.'}
+          </Text>
+          {onClose && (
+            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     );
   }
@@ -334,6 +386,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#6B7280',
+  },
+  mapPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    padding: 30,
+  },
+  mapPlaceholderTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  mapPlaceholderText: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
   },
 });
 
