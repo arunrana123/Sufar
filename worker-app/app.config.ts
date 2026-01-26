@@ -62,6 +62,10 @@ const config = {
               NSIncludesSubdomains: true,
               NSTemporaryExceptionAllowsInsecureHTTPLoads: true,
             },
+            '192.168.1.66': {
+              NSIncludesSubdomains: true,
+              NSTemporaryExceptionAllowsInsecureHTTPLoads: true,
+            },
             '192.168.1.92': {
               NSIncludesSubdomains: true,
               NSTemporaryExceptionAllowsInsecureHTTPLoads: true,
@@ -90,7 +94,16 @@ const config = {
         'ACCESS_FINE_LOCATION',
         'ACCESS_COARSE_LOCATION',
         'ACCESS_BACKGROUND_LOCATION',
+        'READ_EXTERNAL_STORAGE',
+        'WRITE_EXTERNAL_STORAGE',
+        'READ_MEDIA_IMAGES', // Android 13+ (API 33+)
+        'READ_MEDIA_VIDEO', // Android 13+ (API 33+)
+        'CAMERA',
+        'INTERNET', // Required for network requests
       ],
+      // Allow cleartext (HTTP) traffic for development
+      // This is required when using http:// instead of https://
+      usesCleartextTraffic: true,
     },
 
     // ------------------- WEB -------------------
