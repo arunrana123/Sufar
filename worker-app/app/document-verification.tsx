@@ -430,33 +430,35 @@ export default function DocumentVerificationScreen() {
         // Allow multiple selection for experienceCertificate
         const allowMultiple = docType === 'experienceCertificate';
         
-        console.log('📷 Opening ImagePicker for image selection...', { allowMultiple });
+        console.log('📷 Opening ImagePicker for image selection...', { allowMultiple, platform: Platform.OS });
         
-        // Request permission first
-        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        console.log('📷 Permission result:', permissionResult);
-        
-        if (permissionResult.granted === false) {
-          Alert.alert(
-            'Permission Required',
-            'Permission to access photos is required to upload images. Please enable it in your device settings.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Settings', onPress: () => {
-                if (Platform.OS !== 'web') {
+        // Request permission first (not needed on web)
+        if (Platform.OS !== 'web') {
+          const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          console.log('📷 Permission result:', permissionResult);
+          
+          if (permissionResult.granted === false) {
+            Alert.alert(
+              'Permission Required',
+              'Permission to access photos is required to upload images. Please enable it in your device settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => {
                   ImagePicker.requestMediaLibraryPermissionsAsync();
-                }
-              }}
-            ]
-          );
-          return;
+                }}
+              ]
+            );
+            return;
+          }
+        } else {
+          console.log('🌐 Web platform: No permissions needed for file picker');
         }
 
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           allowsEditing: !allowMultiple, // Don't allow editing when multiple selection
           aspect: allowMultiple ? undefined : [4, 3],
-          quality: 0.8,
+          quality: 0.6, // Reduced from 0.8 to reduce file size (60% quality for faster uploads)
           allowsMultipleSelection: allowMultiple,
         });
 
@@ -611,6 +613,11 @@ export default function DocumentVerificationScreen() {
       return;
     }
 
+    // Get the latest state directly (avoid race conditions)
+    // Use a small delay to ensure state is fully updated if user just picked a file
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    // Get fresh state to avoid stale closures
     const docs = categoryDocuments[category] || {};
     
     // Check required documents - now checking DocumentFile objects
@@ -631,14 +638,64 @@ export default function DocumentVerificationScreen() {
       : experienceCert && (experienceCert as DocumentFile).uri;
     
     if (!docs.citizenship?.uri || !docs.serviceCertificate?.uri || !hasValidExperience) {
-      Alert.alert('Error', 'Some documents are missing. Please re-upload them.');
+      Alert.alert('Error', 'Some documents are missing valid file paths. Please re-upload them.');
       return;
+    }
+    
+    // Validate file sizes (max 10MB per file - matches backend limit)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+    const validateFileSize = (file: DocumentFile | DocumentFile[] | null | undefined): { valid: boolean; message?: string } => {
+      if (!file) return { valid: true };
+      if (Array.isArray(file)) {
+        const oversized = file.find(f => f.size && f.size > MAX_FILE_SIZE);
+        if (oversized) {
+          return { 
+            valid: false, 
+            message: `One or more Experience Certificate images exceed 10MB. Please compress them or select smaller files.` 
+          };
+        }
+        return { valid: true };
+      }
+      if (file.size && file.size > MAX_FILE_SIZE) {
+        return { 
+          valid: false, 
+          message: `File size (${(file.size / 1024 / 1024).toFixed(2)}MB) exceeds the maximum of 10MB. Please compress the file or select a smaller one.` 
+        };
+      }
+      return { valid: true };
+    };
+    
+    const sizeChecks = [
+      { name: 'Citizenship Document', file: docs.citizenship },
+      { name: 'Service Certificate', file: docs.serviceCertificate },
+      { name: 'Experience Certificate', file: docs.experienceCertificate },
+      { name: 'Driving License', file: docs.drivingLicense },
+    ];
+    
+    for (const { name, file } of sizeChecks) {
+      // Handle undefined by converting to null (validateFileSize handles null)
+      const check = validateFileSize(file ?? null);
+      if (!check.valid) {
+        Alert.alert('File Too Large', check.message || `${name} exceeds the maximum file size of 10MB.`);
+        return;
+      }
     }
 
     setUploading(category);
     
     // Get API URL outside try block so it's accessible in catch block
-    const apiUrl = getApiUrl();
+    let apiUrl = getApiUrl();
+    
+    // CRITICAL: For web platform, ALWAYS use localhost (browsers can't connect to local network IPs)
+    // This is a runtime safety check in case config didn't convert it properly
+    if (Platform.OS === 'web' && apiUrl.match(/192\.168\.\d+\.\d+/)) {
+      const portMatch = apiUrl.match(/:(\d+)/);
+      const port = portMatch ? portMatch[1] : '5001';
+      apiUrl = `http://localhost:${port}`;
+      console.log('🌐 [document-verification] Web platform: Runtime conversion to localhost');
+      console.log('   Original:', getApiUrl());
+      console.log('   Converted:', apiUrl);
+    }
     
     try {
       const formData = new FormData();
@@ -646,25 +703,91 @@ export default function DocumentVerificationScreen() {
       formData.append('workerId', worker.id);
       formData.append('category', category);
       
-      // Helper function to normalize URI for native platforms
-      const normalizeUri = (uri: string) => {
-        // Handle different URI formats
-        if (Platform.OS === 'android') {
-          // Android can use content://, file://, or file paths
-          if (uri.startsWith('content://') || uri.startsWith('file://') || uri.startsWith('http')) {
-            return uri;
-          }
-          // If it's a plain path, add file://
-          return `file://${uri}`;
-        } else if (Platform.OS === 'ios') {
-          // iOS typically uses file:// or asset-library://
-          if (uri.startsWith('file://') || uri.startsWith('ph://') || uri.startsWith('assets-library://')) {
-            return uri;
-          }
-          // If it's a plain path, add file://
-          return `file://${uri}`;
+      // CRITICAL: Helper function to create properly formatted file data for FormData
+      // Android native layer is extremely picky - if type or name is missing, it crashes with "Network request failed"
+      // This function ensures all required fields are present and valid before appending to FormData
+      const createFormDataFile = (file: DocumentFile | null | undefined): { uri: string; type: string; name: string } | null => {
+        // Return null if file is missing (caller should check)
+        if (!file) {
+          console.warn('⚠️ createFormDataFile: File is null or undefined');
+          return null;
         }
-        // For web, return as-is
+        
+        if (!file.uri || file.uri.trim().length === 0) {
+          console.error('❌ createFormDataFile: URI is missing or empty');
+          return null;
+        }
+
+        const uri = file.uri.trim();
+        
+        // CRITICAL: On Android, the type MUST be present and valid (not application/octet-stream)
+        // If missing or generic, Android's native network layer will crash before sending the request
+        let type = file.mimeType || getMimeType(file);
+        if (!type || type === 'application/octet-stream' || type === '') {
+          // Fallback to specific MIME type based on file extension
+          const ext = getFileExtension(file);
+          type = ext === 'pdf' ? 'application/pdf' : 
+                 ext === 'png' ? 'image/png' : 'image/jpeg';
+          console.warn(`⚠️ Missing or generic mimeType (${file.mimeType}), using fallback: ${type}`);
+        }
+        
+        // CRITICAL: On Android, the name MUST be present and include extension
+        // If missing, Android's native network layer will crash before sending the request
+        let name = file.name;
+        if (!name || name.trim().length === 0 || !name.includes('.')) {
+          // Generate filename with proper extension if missing
+          const ext = getFileExtension(file);
+          const timestamp = Date.now();
+          name = file.name && file.name.trim().length > 0
+            ? `${file.name.replace(/\.[^/.]+$/, '')}.${ext}` // Replace existing extension
+            : `upload_${timestamp}.${ext}`; // Generate new name with extension
+          console.warn(`⚠️ Missing or invalid filename (${file.name}), generated: ${name}`);
+        }
+        
+        // Final validation - all fields MUST be present and non-empty
+        if (!uri || uri.trim().length === 0) {
+          console.error('❌ createFormDataFile: URI is empty after trim');
+          return null;
+        }
+        if (!type || type.trim().length === 0) {
+          console.error('❌ createFormDataFile: Type is empty');
+          return null;
+        }
+        if (!name || name.trim().length === 0) {
+          console.error('❌ createFormDataFile: Name is empty');
+          return null;
+        }
+        
+        const fileData = {
+          uri: uri,
+          type: type.trim(), // REQUIRED: Must be valid MIME type (e.g., 'image/jpeg', 'application/pdf')
+          name: name.trim(), // REQUIRED: Must include file extension (e.g., 'document.jpg', 'file.pdf')
+        };
+        
+        // Verify structure one more time before returning
+        if (!fileData.uri || !fileData.type || !fileData.name) {
+          console.error('❌ createFormDataFile: File data structure is invalid', fileData);
+          return null;
+        }
+        
+        console.log('📄 FormData file created (validated):', {
+          uri: uri.substring(0, 80) + (uri.length > 80 ? '...' : ''),
+          type: type,
+          name: name,
+          platform: Platform.OS,
+          isContentUri: uri.startsWith('content://'),
+          isFileUri: uri.startsWith('file://'),
+          uriLength: uri.length,
+          allFieldsPresent: !!(fileData.uri && fileData.type && fileData.name),
+        });
+        
+        return fileData;
+      };
+      
+      // Helper function to normalize URI (kept for backward compatibility)
+      const normalizeUri = (uri: string) => {
+        // React Native FormData handles content:// URIs correctly on Android
+        // and file:// URIs correctly on iOS, so we can use them as-is
         return uri;
       };
 
@@ -696,17 +819,24 @@ export default function DocumentVerificationScreen() {
       // Handle file uploads for web vs native
       if (Platform.OS === 'web') {
         // Web platform handling - convert URIs to File objects
+        // On web, DocumentPicker and ImagePicker return blob: or data: URIs
+        // We need to convert them to File objects for FormData
+        console.log('🌐 Web platform: Converting file URIs to File objects for FormData');
+        
         if (docs.drivingLicense) {
           try {
             const file = docs.drivingLicense;
+            // On web, URI might be a blob: URL or data: URL
             const response = await fetch(file.uri);
             const blob = await response.blob();
             const fileName = file.name || `drivingLicense-${category}-${Date.now()}.${getFileExtension(file)}`;
-            const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+            const mimeType = getMimeType(file);
+            const fileObj = new File([blob], fileName, { type: mimeType });
             formData.append('drivingLicense', fileObj);
-            console.log('✅ Added driving license to FormData:', fileName);
+            console.log('✅ Added driving license to FormData (web):', fileName, mimeType);
           } catch (e) {
-            console.error('❌ Could not add driving license:', e);
+            console.error('❌ Could not add driving license (web):', e);
+            Alert.alert('Upload Error', `Failed to prepare driving license file: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
         
@@ -716,11 +846,13 @@ export default function DocumentVerificationScreen() {
             const response = await fetch(file.uri);
             const blob = await response.blob();
             const fileName = file.name || `citizenship-${category}-${Date.now()}.${getFileExtension(file)}`;
-            const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+            const mimeType = getMimeType(file);
+            const fileObj = new File([blob], fileName, { type: mimeType });
             formData.append('citizenship', fileObj);
-            console.log('✅ Added citizenship to FormData:', fileName);
+            console.log('✅ Added citizenship to FormData (web):', fileName, mimeType);
           } catch (e) {
-            console.error('❌ Could not add citizenship:', e);
+            console.error('❌ Could not add citizenship (web):', e);
+            Alert.alert('Upload Error', `Failed to prepare citizenship file: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
         
@@ -730,11 +862,13 @@ export default function DocumentVerificationScreen() {
             const response = await fetch(file.uri);
             const blob = await response.blob();
             const fileName = file.name || `serviceCertificate-${category}-${Date.now()}.${getFileExtension(file)}`;
-            const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+            const mimeType = getMimeType(file);
+            const fileObj = new File([blob], fileName, { type: mimeType });
             formData.append('serviceCertificate', fileObj);
-            console.log('✅ Added service certificate to FormData:', fileName, getMimeType(file));
+            console.log('✅ Added service certificate to FormData (web):', fileName, mimeType);
           } catch (e) {
-            console.error('❌ Could not add service certificate:', e);
+            console.error('❌ Could not add service certificate (web):', e);
+            Alert.alert('Upload Error', `Failed to prepare service certificate file: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
         
@@ -747,76 +881,76 @@ export default function DocumentVerificationScreen() {
                 const response = await fetch(file.uri);
                 const blob = await response.blob();
                 const fileName = file.name || `experienceCertificate-${category}-${Date.now()}-${i}.${getFileExtension(file)}`;
-                const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+                const mimeType = getMimeType(file);
+                const fileObj = new File([blob], fileName, { type: mimeType });
                 formData.append('experienceCertificate', fileObj);
-                console.log(`✅ Added experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData:`, fileName);
+                console.log(`✅ Added experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData (web):`, fileName, mimeType);
               }
             } else {
               const file = docs.experienceCertificate;
               const response = await fetch(file.uri);
               const blob = await response.blob();
               const fileName = file.name || `experienceCertificate-${category}-${Date.now()}.${getFileExtension(file)}`;
-              const fileObj = new File([blob], fileName, { type: getMimeType(file) });
+              const mimeType = getMimeType(file);
+              const fileObj = new File([blob], fileName, { type: mimeType });
               formData.append('experienceCertificate', fileObj);
-              console.log('✅ Added experience certificate to FormData:', fileName);
+              console.log('✅ Added experience certificate to FormData (web):', fileName, mimeType);
             }
           } catch (e) {
-            console.error('❌ Could not add experience certificate:', e);
+            console.error('❌ Could not add experience certificate (web):', e);
+            Alert.alert('Upload Error', `Failed to prepare experience certificate file: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
+        
+        console.log('✅ All files converted to File objects for web platform');
       } else {
         // Native platform handling (iOS/Android)
+        // CRITICAL: Use createFormDataFile which ensures all required fields are present
+        // Android will crash with "Network request failed" if type or name is missing
+        
         if (docs.drivingLicense) {
-          const file = docs.drivingLicense;
-          const ext = getFileExtension(file);
-          formData.append('drivingLicense', {
-            uri: normalizeUri(file.uri),
-            type: getMimeType(file),
-            name: file.name || `drivingLicense-${category}-${Date.now()}.${ext}`,
-          } as any);
-          console.log('✅ Added driving license to FormData (native):', file.name || 'drivingLicense');
+          const fileData = createFormDataFile(docs.drivingLicense);
+          if (fileData) {
+            console.log('📤 Adding driving license to FormData:', {
+              name: fileData.name,
+              type: fileData.type,
+              uri: fileData.uri.substring(0, 60) + '...',
+            });
+            formData.append('drivingLicense', fileData as any);
+            console.log('✅ Added driving license to FormData');
+          } else {
+            console.error('❌ Failed to create file data for drivingLicense');
+          }
         }
         
         if (docs.citizenship) {
-          const file = docs.citizenship;
-          const ext = getFileExtension(file);
-          formData.append('citizenship', {
-            uri: normalizeUri(file.uri),
-            type: getMimeType(file),
-            name: file.name || `citizenship-${category}-${Date.now()}.${ext}`,
-          } as any);
-          console.log('✅ Added citizenship to FormData (native):', file.name || 'citizenship');
+          const fileData = createFormDataFile(docs.citizenship);
+          if (fileData) {
+            console.log('📤 Adding citizenship to FormData:', {
+              name: fileData.name,
+              type: fileData.type,
+              uri: fileData.uri.substring(0, 60) + '...',
+            });
+            formData.append('citizenship', fileData as any);
+            console.log('✅ Added citizenship to FormData');
+          } else {
+            console.error('❌ Failed to create file data for citizenship');
+          }
         }
         
         if (docs.serviceCertificate) {
-          const file = docs.serviceCertificate;
-          const ext = getFileExtension(file);
-          const mimeType = getMimeType(file);
-          const fileName = file.name || `serviceCertificate-${category}-${Date.now()}.${ext}`;
-          
-          // Ensure URI is properly formatted for native platforms
-          let fileUri = normalizeUri(file.uri);
-          
-          // For Android, ensure content:// URIs are handled
-          if (Platform.OS === 'android' && fileUri.startsWith('content://')) {
-            // Content URIs should work as-is for React Native FormData
-            console.log('📄 Using content:// URI for Android');
+          const fileData = createFormDataFile(docs.serviceCertificate);
+          if (fileData) {
+            console.log('📤 Adding service certificate to FormData:', {
+              name: fileData.name,
+              type: fileData.type,
+              uri: fileData.uri.substring(0, 60) + '...',
+            });
+            formData.append('serviceCertificate', fileData as any);
+            console.log('✅ Added service certificate to FormData');
+          } else {
+            console.error('❌ Failed to create file data for serviceCertificate');
           }
-          
-          console.log('📄 Preparing service certificate for upload:', {
-            uri: fileUri.substring(0, 60) + '...',
-            name: fileName,
-            mimeType: mimeType,
-            extension: ext,
-            originalUri: file.uri.substring(0, 60) + '...',
-          });
-          
-          formData.append('serviceCertificate', {
-            uri: fileUri,
-            type: mimeType,
-            name: fileName,
-          } as any);
-          console.log('✅ Added service certificate to FormData (native):', fileName, mimeType);
         }
         
         if (docs.experienceCertificate) {
@@ -824,76 +958,389 @@ export default function DocumentVerificationScreen() {
           if (Array.isArray(docs.experienceCertificate)) {
             for (let i = 0; i < docs.experienceCertificate.length; i++) {
               const file = docs.experienceCertificate[i];
-              const ext = getFileExtension(file);
-              const mimeType = getMimeType(file);
-              const fileName = file.name || `experienceCertificate-${category}-${Date.now()}-${i}.${ext}`;
-              
-              // Ensure URI is properly formatted for native platforms
-              let fileUri = normalizeUri(file.uri);
-              
-              // For Android, ensure content:// URIs are handled
-              if (Platform.OS === 'android' && fileUri.startsWith('content://')) {
-                console.log('📄 Using content:// URI for Android');
+              const fileData = createFormDataFile(file);
+              if (fileData) {
+                console.log(`📤 Adding experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData:`, {
+                  name: fileData.name,
+                  type: fileData.type,
+                  uri: fileData.uri.substring(0, 60) + '...',
+                });
+                formData.append('experienceCertificate', fileData as any);
+                console.log(`✅ Added experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData`);
+              } else {
+                console.error(`❌ Failed to create file data for experienceCertificate[${i}]`);
               }
-              
-              console.log(`📄 Preparing experience certificate ${i + 1}/${docs.experienceCertificate.length} for upload:`, {
-                uri: fileUri.substring(0, 60) + '...',
-                name: fileName,
-                mimeType: mimeType,
-                extension: ext,
-              });
-              
-              formData.append('experienceCertificate', {
-                uri: fileUri,
-                type: mimeType,
-                name: fileName,
-              } as any);
-              console.log(`✅ Added experience certificate ${i + 1}/${docs.experienceCertificate.length} to FormData (native):`, fileName, mimeType);
             }
           } else {
-            const file = docs.experienceCertificate;
-            const ext = getFileExtension(file);
-            const mimeType = getMimeType(file);
-            const fileName = file.name || `experienceCertificate-${category}-${Date.now()}.${ext}`;
-            
-            // Ensure URI is properly formatted for native platforms
-            let fileUri = normalizeUri(file.uri);
-            
-            // For Android, ensure content:// URIs are handled
-            if (Platform.OS === 'android' && fileUri.startsWith('content://')) {
-              console.log('📄 Using content:// URI for Android');
+            const fileData = createFormDataFile(docs.experienceCertificate);
+            if (fileData) {
+              console.log('📤 Adding experience certificate to FormData:', {
+                name: fileData.name,
+                type: fileData.type,
+                uri: fileData.uri.substring(0, 60) + '...',
+              });
+              formData.append('experienceCertificate', fileData as any);
+              console.log('✅ Added experience certificate to FormData');
+            } else {
+              console.error('❌ Failed to create file data for experienceCertificate');
             }
-            
-            console.log('📄 Preparing experience certificate for upload:', {
-              uri: fileUri.substring(0, 60) + '...',
-              name: fileName,
-              mimeType: mimeType,
-              extension: ext,
-              originalUri: file.uri.substring(0, 60) + '...',
-            });
-            
-            formData.append('experienceCertificate', {
-              uri: fileUri,
-              type: mimeType,
-              name: fileName,
-            } as any);
-            console.log('✅ Added experience certificate to FormData (native):', fileName, mimeType);
           }
         }
+      }
+      
+      // CRITICAL: Validate all files have valid URIs before attempting upload
+      // Android native layer will crash with "Network request failed" if any file is invalid
+      console.log('🔍 Pre-upload validation - Checking all file URIs:');
+      const validationErrors: string[] = [];
+      
+      if (docs.citizenship) {
+        const uri = docs.citizenship.uri;
+        if (!uri || uri.trim().length === 0) {
+          validationErrors.push('Citizenship document URI is missing or empty');
+        } else {
+          console.log('   ✅ citizenship URI:', uri.substring(0, 80) + (uri.length > 80 ? '...' : ''));
+        }
+      } else {
+        validationErrors.push('Citizenship document is required but not provided');
+      }
+      
+      if (docs.serviceCertificate) {
+        const uri = docs.serviceCertificate.uri;
+        if (!uri || uri.trim().length === 0) {
+          validationErrors.push('Service certificate URI is missing or empty');
+        } else {
+          console.log('   ✅ serviceCertificate URI:', uri.substring(0, 80) + (uri.length > 80 ? '...' : ''));
+        }
+      } else {
+        validationErrors.push('Service certificate is required but not provided');
+      }
+      
+      if (docs.experienceCertificate) {
+        if (Array.isArray(docs.experienceCertificate)) {
+          if (docs.experienceCertificate.length === 0) {
+            validationErrors.push('Experience certificate array is empty');
+          } else {
+            docs.experienceCertificate.forEach((file, i) => {
+              const uri = file.uri;
+              if (!uri || uri.trim().length === 0) {
+                validationErrors.push(`Experience certificate[${i}] URI is missing or empty`);
+              } else {
+                console.log(`   ✅ experienceCertificate[${i}] URI:`, uri.substring(0, 80) + (uri.length > 80 ? '...' : ''));
+              }
+            });
+          }
+        } else {
+          const uri = docs.experienceCertificate.uri;
+          if (!uri || uri.trim().length === 0) {
+            validationErrors.push('Experience certificate URI is missing or empty');
+          } else {
+            console.log('   ✅ experienceCertificate URI:', uri.substring(0, 80) + (uri.length > 80 ? '...' : ''));
+          }
+        }
+      } else {
+        validationErrors.push('Experience certificate is required but not provided');
+      }
+      
+      if (docs.drivingLicense) {
+        const uri = docs.drivingLicense.uri;
+        if (!uri || uri.trim().length === 0) {
+          console.warn('   ⚠️ drivingLicense URI is missing (optional, but may cause issues)');
+        } else {
+          console.log('   ✅ drivingLicense URI:', uri.substring(0, 80) + (uri.length > 80 ? '...' : ''));
+        }
+      }
+      
+      // If validation fails, stop before attempting upload
+      if (validationErrors.length > 0) {
+        const errorMsg = `Cannot upload: ${validationErrors.join('; ')}`;
+        console.error('❌ Pre-upload validation failed:', errorMsg);
+        Alert.alert('Upload Validation Failed', errorMsg);
+        return;
+      }
+      
+      console.log('✅ All file URIs validated successfully');
+      
+      // CRITICAL: Final validation - ensure all required files were successfully added to FormData
+      // Count how many files were actually appended
+      let filesAppended = 0;
+      if (docs.citizenship) filesAppended++;
+      if (docs.serviceCertificate) filesAppended++;
+      if (docs.experienceCertificate) {
+        filesAppended += Array.isArray(docs.experienceCertificate) 
+          ? docs.experienceCertificate.length 
+          : 1;
+      }
+      if (docs.drivingLicense) filesAppended++;
+      
+      console.log(`📊 FormData summary: ${filesAppended} file(s) prepared for upload`);
+      
+      // Verify we have at least the required files
+      const requiredFilesCount = 3; // citizenship, serviceCertificate, experienceCertificate
+      if (filesAppended < requiredFilesCount) {
+        const errorMsg = `Cannot upload: Only ${filesAppended} file(s) prepared, but ${requiredFilesCount} are required`;
+        console.error('❌', errorMsg);
+        Alert.alert('Upload Validation Failed', errorMsg);
+        return;
       }
 
       console.log('📤 Submitting documents for category:', category);
       console.log('🌐 API URL:', apiUrl);
       
-      // Simple upload - EXACTLY like profile.tsx (no health check, no timeout, just upload)
-      const uploadUrl = `${apiUrl}/api/workers/upload-service-documents`;
-      console.log('📡 Uploading to:', uploadUrl);
+      // CRITICAL: Verify the API URL is correct for physical device
+      // Must NOT be localhost or 127.0.0.1 on physical Android device
+      // Web platform can use localhost, so only check for Android
+      if (Platform.OS === 'android' && (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1'))) {
+        const errorMsg = `❌ ERROR: API URL contains localhost/127.0.0.1 which won't work on physical Android device!\nCurrent URL: ${apiUrl}\n\nPlease ensure your .env file has EXPO_PUBLIC_API_URL set to your computer's IP address (e.g., http://192.168.1.66:5001)`;
+        console.error(errorMsg);
+        Alert.alert(
+          'Configuration Error',
+          `API URL is incorrect for physical device:\n${apiUrl}\n\nPlease check your .env file and ensure EXPO_PUBLIC_API_URL is set to your computer's IP address.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
       
-      // Upload documents to backend (Don't set Content-Type header, let fetch set it with boundary)
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        body: formData,
+      // For web platform, localhost is fine
+      if (Platform.OS === 'web') {
+        console.log('🌐 Web platform detected - localhost URLs are acceptable');
+      }
+      
+      const uploadUrl = `${apiUrl}/api/workers/upload-service-documents`;
+      console.log('📡 Final Upload URL:', uploadUrl);
+      console.log('📱 Platform:', Platform.OS);
+      console.log('📱 Device Type:', __DEV__ ? 'Development' : 'Production');
+      
+      // Verify URL format
+      if (!uploadUrl.startsWith('http://') && !uploadUrl.startsWith('https://')) {
+        console.error('❌ ERROR: Upload URL is missing protocol:', uploadUrl);
+        Alert.alert('Configuration Error', `Invalid upload URL: ${uploadUrl}`);
+        return;
+      }
+      
+      // Debug: Log file URIs before creating FormData (to verify they're not null/undefined)
+      console.log('🔍 Pre-FormData Debug - File URIs:');
+      console.log('   Sending to:', uploadUrl);
+      if (docs.drivingLicense) {
+        console.log('   drivingLicense URI:', docs.drivingLicense.uri?.substring(0, 100) || 'MISSING');
+      } else {
+        console.log('   drivingLicense: NOT PROVIDED');
+      }
+      if (docs.citizenship) {
+        console.log('   citizenship URI:', docs.citizenship.uri?.substring(0, 100) || 'MISSING');
+      } else {
+        console.log('   citizenship: NOT PROVIDED');
+      }
+      if (docs.serviceCertificate) {
+        console.log('   serviceCertificate URI:', docs.serviceCertificate.uri?.substring(0, 100) || 'MISSING');
+      } else {
+        console.log('   serviceCertificate: NOT PROVIDED');
+      }
+      if (docs.experienceCertificate) {
+        if (Array.isArray(docs.experienceCertificate)) {
+          docs.experienceCertificate.forEach((file, i) => {
+            console.log(`   experienceCertificate[${i}] URI:`, file.uri?.substring(0, 100) || 'MISSING');
+          });
+        } else {
+          console.log('   experienceCertificate URI:', docs.experienceCertificate.uri?.substring(0, 100) || 'MISSING');
+        }
+      } else {
+        console.log('   experienceCertificate: NOT PROVIDED');
+      }
+      
+      // Log FormData contents for debugging (without exposing sensitive data)
+      console.log('📦 FormData prepared with fields:', {
+        workerId: worker.id,
+        category: category,
+        hasDrivingLicense: !!docs.drivingLicense,
+        hasCitizenship: !!docs.citizenship,
+        hasServiceCertificate: !!docs.serviceCertificate,
+        hasExperienceCertificate: !!docs.experienceCertificate,
+        experienceCertificateCount: Array.isArray(docs.experienceCertificate) 
+          ? docs.experienceCertificate.length 
+          : (docs.experienceCertificate ? 1 : 0),
       });
+      
+      // CRITICAL: Test network connectivity before attempting upload
+      // This helps catch IP/routing issues early
+      // Skip connectivity test on web (browser handles CORS/network errors differently)
+      if (Platform.OS !== 'web') {
+        console.log('🔍 Testing network connectivity before upload...');
+        const testUrl = `${apiUrl}/health`;
+        console.log('   Test URL:', testUrl);
+        
+        try {
+          const testController = new AbortController();
+          const testTimeoutId = setTimeout(() => testController.abort(), 5000); // 5 second timeout
+          
+          try {
+            const testResponse = await fetch(testUrl, { 
+              method: 'GET',
+              signal: testController.signal
+            });
+            clearTimeout(testTimeoutId);
+            
+            if (testResponse.ok) {
+              const healthData = await testResponse.json().catch(() => ({}));
+              console.log('✅ Network connectivity test PASSED');
+              console.log('   Server is reachable and responding');
+              console.log('   Health check response:', healthData);
+            } else {
+              console.warn('⚠️ Network test returned status:', testResponse.status);
+              console.warn('   Server is reachable but returned non-OK status');
+              // Don't block - proceed with upload
+            }
+          } catch (testError: any) {
+            clearTimeout(testTimeoutId);
+            
+            // This is a critical error - if we can't reach the server, the upload will definitely fail
+            console.error('❌ Network connectivity test FAILED');
+            console.error('   Error:', testError.message);
+            console.error('   This means the server at', apiUrl, 'is not reachable');
+            
+            // Show user-friendly error with troubleshooting steps
+            Alert.alert(
+              'Cannot Reach Server',
+              `Cannot connect to server at:\n${apiUrl}\n\n` +
+              `Please verify:\n` +
+              `1. Backend is running (cd backend && bun run dev)\n` +
+              `2. Test in browser: ${apiUrl}/health\n` +
+              `3. Same WiFi network (device and computer)\n` +
+              `4. Correct IP address (check with: ifconfig/ipconfig)\n` +
+              `5. Firewall allows port 5001\n` +
+              `6. Router doesn't block device-to-device communication\n\n` +
+              `Current API URL: ${apiUrl}`,
+              [
+                {
+                  text: 'Retry',
+                  onPress: () => {
+                    // Retry the upload after user acknowledges
+                    setTimeout(() => submitCategoryVerification(category), 1000);
+                  }
+                },
+                { text: 'Cancel', style: 'cancel' }
+              ]
+            );
+            
+            // Don't proceed with upload if connectivity test fails
+            return;
+          }
+        } catch (testSetupError: any) {
+          // If we can't even set up the test, something is very wrong
+          console.error('❌ Could not set up connectivity test:', testSetupError.message);
+          Alert.alert(
+            'Network Error',
+            `Cannot test server connectivity:\n${testSetupError.message}\n\nPlease check your network settings.`,
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      } else {
+        console.log('🌐 Web platform: Skipping connectivity test (browser handles network errors)');
+      }
+
+      // Use fetch for all platforms (React Native fetch handles FormData correctly)
+      // Create AbortController for timeout handling (2 minutes for large files)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        console.error('⏱️ Upload timeout after 2 minutes');
+      }, 120000); // 2 minute timeout
+      
+      console.log('🚀 Starting upload request...');
+      console.log('   URL:', uploadUrl);
+      console.log('   Method: POST');
+      console.log('   Body: FormData (multipart/form-data)');
+      console.log('   Platform:', Platform.OS);
+      
+      // CRITICAL: For native platforms, do NOT set Content-Type header
+      // React Native fetch will automatically set: Content-Type: multipart/form-data; boundary=...
+      // If you set it manually, the boundary won't be included, causing "Network request failed"
+      let response: Response;
+      try {
+        // Build fetch options - NO Content-Type header for native platforms
+        const fetchOptions: RequestInit = {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        };
+        
+        // Only add Accept header - DO NOT add Content-Type
+        // For web platform, we can add Accept header
+        // For native, we still add Accept but NEVER Content-Type
+        if (Platform.OS === 'web') {
+          fetchOptions.headers = {
+            'Accept': 'application/json',
+          };
+        } else {
+          // Native platform - only Accept, NO Content-Type
+          fetchOptions.headers = {
+            'Accept': 'application/json',
+            // CRITICAL: DO NOT ADD 'Content-Type' HERE!
+            // React Native will automatically add: Content-Type: multipart/form-data; boundary=...
+            // If you add it manually, the boundary is missing and the request fails
+          };
+        }
+        
+        console.log('📡 Making fetch request:', {
+          url: uploadUrl,
+          method: fetchOptions.method,
+          hasBody: !!fetchOptions.body,
+          hasSignal: !!fetchOptions.signal,
+          headers: fetchOptions.headers ? Object.keys(fetchOptions.headers) : [],
+          // Explicitly showing that Content-Type is NOT in headers
+          note: 'Content-Type will be set automatically by React Native with boundary',
+          platform: Platform.OS,
+        });
+        
+        // Final check: Ensure formData is not empty
+        // This shouldn't happen due to validation above, but double-check
+        if (!formData) {
+          throw new Error('FormData is null or undefined');
+        }
+        
+        console.log('📤 Sending fetch request now...');
+        response = await fetch(uploadUrl, fetchOptions);
+        clearTimeout(timeoutId);
+        
+        console.log('📥 Response received:', {
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          headers: Object.fromEntries(response.headers.entries()),
+        });
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        
+        console.error('❌ Fetch error details:', {
+          name: fetchError.name,
+          message: fetchError.message,
+          stack: fetchError.stack,
+          url: uploadUrl,
+          platform: Platform.OS,
+        });
+        
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Upload timeout: The upload took too long (over 2 minutes). Please check your connection and try again with smaller files.');
+        }
+        
+        // Enhanced error message for network failures
+        if (fetchError.message?.includes('Network request failed') || 
+            fetchError.message?.includes('Failed to fetch') ||
+            fetchError.name === 'TypeError') {
+          throw new Error(
+            `Network request failed: Cannot connect to ${apiUrl}\n\n` +
+            `Possible causes:\n` +
+            `1. Backend server is not running\n` +
+            `2. Wrong IP address (check .env file)\n` +
+            `3. Device not on same WiFi network\n` +
+            `4. Firewall blocking port 5001\n` +
+            `5. Android cleartext traffic not allowed\n\n` +
+            `Current API URL: ${apiUrl}`
+          );
+        }
+        
+        throw fetchError;
+      }
       
       console.log('📥 Response received, status:', response.status);
 
@@ -959,43 +1406,100 @@ export default function DocumentVerificationScreen() {
           ]
         );
       } else {
+        // Get detailed error response from server
         const errorText = await response.text();
         let errorMessage = 'Failed to upload documents. Please try again.';
+        let errorDetails = '';
+        
+        console.error('❌ Upload error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: errorText,
+        });
         
         try {
           const errorJson = JSON.parse(errorText);
           errorMessage = errorJson.message || errorMessage;
+          errorDetails = errorJson.error || errorJson.details || '';
         } catch (e) {
           // If not JSON, use the text as is
           if (errorText) {
             errorMessage = errorText;
+            errorDetails = errorText;
           }
         }
         
-        console.error('❌ Upload error:', response.status, errorMessage);
-        Alert.alert('Upload Failed', errorMessage);
+        // Provide specific error messages based on status code
+        let userFriendlyMessage = errorMessage;
+        if (response.status === 413) {
+          userFriendlyMessage = 'File too large: One or more files exceed the 10MB limit. Please compress your images and try again.';
+        } else if (response.status === 400) {
+          userFriendlyMessage = `Missing required fields: ${errorMessage}. Please ensure all required documents are uploaded.`;
+        } else if (response.status === 500) {
+          userFriendlyMessage = `Server error: ${errorMessage}. Please try again later or contact support.`;
+        }
+        
+        console.error('❌ Upload error:', response.status, userFriendlyMessage);
+        if (errorDetails) {
+          console.error('❌ Error details:', errorDetails);
+        }
+        
+        Alert.alert(
+          'Upload Failed', 
+          `Status: ${response.status}\n\n${userFriendlyMessage}${errorDetails ? `\n\nDetails: ${errorDetails}` : ''}`
+        );
       }
     } catch (error: any) {
-      // Simple error handling
       console.error('❌ Error submitting verification:', error);
-      console.error('❌ Error name:', error.name);
-      console.error('❌ Error message:', error.message);
       
-      let errorMessage = 'Failed to submit documents. Please try again.';
+      // Check if it's a network error
+      const isNetworkError = error.message?.includes('Network request failed') || 
+                            error.name === 'TypeError' ||
+                            error.message?.includes('Failed to fetch') ||
+                            error.message?.includes('NetworkError');
       
-      if (error.message?.includes('Network request failed') || error.name === 'TypeError') {
-        errorMessage = `Network error. Cannot connect to server.\n\nPlease check:\n• Backend is running: cd backend && bun run dev\n• Test in browser: ${apiUrl}/health\n• Same WiFi network\n• IP: ${apiUrl.replace('http://', '').split(':')[0]}`;
-      } else if (error.message) {
-        errorMessage = error.message;
+      if (isNetworkError) {
+        // Network error - provide helpful message with retry
+        Alert.alert(
+          'Network Error',
+          `Cannot connect to server at ${apiUrl}\n\n` +
+          `Please check:\n` +
+          `1. Backend is running (cd backend && bun run dev)\n` +
+          `2. Test in phone browser: ${apiUrl}/health\n` +
+          `3. Same WiFi network\n` +
+          `4. Firewall allows port 5001`,
+          [
+            { 
+              text: 'Retry', 
+              onPress: () => {
+                // Retry after a short delay
+                setTimeout(() => {
+                  submitCategoryVerification(category);
+                }, 1000);
+              }
+            },
+            { text: 'OK', style: 'cancel' }
+          ]
+        );
+      } else {
+        // Other error
+        Alert.alert(
+          'Upload Failed',
+          error.message || 'Failed to submit documents. Please try again.',
+          [
+            { 
+              text: 'Retry', 
+              onPress: () => {
+                setTimeout(() => {
+                  submitCategoryVerification(category);
+                }, 1000);
+              }
+            },
+            { text: 'OK', style: 'cancel' }
+          ]
+        );
       }
-      
-      Alert.alert('Upload Error', errorMessage, [
-        { 
-          text: 'Retry', 
-          onPress: () => submitCategoryVerification(category)
-        },
-        { text: 'OK', style: 'cancel' }
-      ]);
     } finally {
       setUploading(null);
     }
