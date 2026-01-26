@@ -95,19 +95,48 @@ export default function DocumentVerificationPage() {
     // Listen for category verification submissions
     const handleCategorySubmitted = (data: any) => {
       console.log('📢 New category verification submission received:', data);
-      fetchWorkers();
+      // Refresh workers immediately to show new submission
+      setTimeout(() => {
+        fetchWorkers();
+      }, 500);
     };
 
     // Listen for document verification submissions (legacy)
     const handleDocumentSubmitted = (worker: any) => {
       console.log('📢 New document submission received:', worker);
-      fetchWorkers();
+      // Refresh workers immediately to show new submission
+      setTimeout(() => {
+        fetchWorkers();
+      }, 500);
+    };
+
+    // Listen for verification status updates (when admin approves/rejects)
+    const handleVerificationUpdated = (data: any) => {
+      console.log('📢 Verification status updated:', data);
+      // Refresh workers to show updated status
+      setTimeout(() => {
+        fetchWorkers();
+      }, 500);
     };
 
     // Wait a bit for connection to establish
     const connectTimeout = setTimeout(() => {
+      // Listen for new submissions
       socketService.on('category:verification:submitted', handleCategorySubmitted);
       socketService.on('document:verification:submitted', handleDocumentSubmitted);
+      
+      // Listen for status updates
+      socketService.on('category:verification:updated', handleVerificationUpdated);
+      socketService.on('document:verification:updated', handleVerificationUpdated);
+      
+      // Listen for notifications
+      socketService.on('notification:new', (notification: any) => {
+        console.log('📢 New notification received:', notification);
+        if (notification.type === 'category_verification_submitted') {
+          handleCategorySubmitted(notification.data);
+        }
+      });
+      
       console.log('✅ Socket.IO listeners registered for document verification');
     }, 1000);
     
@@ -121,6 +150,9 @@ export default function DocumentVerificationPage() {
       clearInterval(interval);
       socketService.off('category:verification:submitted', handleCategorySubmitted);
       socketService.off('document:verification:submitted', handleDocumentSubmitted);
+      socketService.off('category:verification:updated', handleVerificationUpdated);
+      socketService.off('document:verification:updated', handleVerificationUpdated);
+      socketService.off('notification:new');
     };
   }, [router]);
 
@@ -172,26 +204,38 @@ export default function DocumentVerificationPage() {
   const getCategoriesNeedingVerification = (worker: Worker): CategoryVerificationData[] => {
     const categories: CategoryVerificationData[] = [];
     
-    if (!worker.categoryDocuments || !worker.serviceCategories) {
+    // If worker has serviceCategories, use them
+    const categoriesToCheck = worker.serviceCategories && worker.serviceCategories.length > 0
+      ? worker.serviceCategories
+      : (worker.categoryDocuments ? Object.keys(worker.categoryDocuments) : []);
+    
+    if (categoriesToCheck.length === 0) {
       return categories;
     }
 
-    worker.serviceCategories.forEach(category => {
+    categoriesToCheck.forEach(category => {
       const catDocs = worker.categoryDocuments?.[category];
       const status = worker.categoryVerificationStatus?.[category] || 'pending';
       
       // Get documents from categoryDocuments (skillProof, experience)
       // Also check general documents for citizenship and license
+      // Handle experience as array or single value
+      const experienceValue = catDocs?.experience;
+      const experienceCertificate = Array.isArray(experienceValue) 
+        ? experienceValue[0] // Use first file if array
+        : experienceValue;   // Use single value
+      
       const documents = {
         serviceCertificate: catDocs?.skillProof,
-        experienceCertificate: catDocs?.experience,
+        experienceCertificate: experienceCertificate,
         citizenship: worker.documents?.citizenship,
         drivingLicense: worker.documents?.license,
       };
 
-      // Only include if at least one document exists
+      // Include category if it has documents OR if it has a status (to show verified/rejected categories)
       if (documents.serviceCertificate || documents.experienceCertificate || 
-          documents.citizenship || documents.drivingLicense) {
+          documents.citizenship || documents.drivingLicense ||
+          status === 'verified' || status === 'rejected') {
         categories.push({
           category,
           documents,
@@ -278,11 +322,17 @@ export default function DocumentVerificationPage() {
         
         // Update selected worker if it's the one being verified
         if (selectedWorker?._id === workerId) {
-          const updatedWorker = workers.find(w => w._id === workerId);
-          if (updatedWorker) {
-            setSelectedWorker(updatedWorker);
-            setSelectedCategory(null);
-            setRejectionReason('');
+          // Fetch fresh worker data
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+          const workerResponse = await fetch(`${apiUrl}/api/admin/workers`);
+          if (workerResponse.ok) {
+            const allWorkers = await workerResponse.json();
+            const updatedWorker = allWorkers.find((w: any) => w._id === workerId);
+            if (updatedWorker) {
+              setSelectedWorker(updatedWorker);
+              setSelectedCategory(null);
+              setRejectionReason('');
+            }
           }
         }
         
@@ -303,11 +353,15 @@ export default function DocumentVerificationPage() {
   };
 
   // Get document URL with proper path
-  const getDocumentUrl = (filename: string | undefined): string | null => {
+  const getDocumentUrl = (filename: string | undefined | string[]): string | null => {
     if (!filename) return null;
+    // Handle array (for experience certificate)
+    const file = Array.isArray(filename) ? filename[0] : filename;
+    if (!file) return null;
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-    if (filename.startsWith('http')) return filename;
-    return `${apiUrl}/uploads/${filename}`;
+    if (typeof file === 'string' && file.startsWith('http')) return file;
+    if (typeof file === 'string') return `${apiUrl}/uploads/${file}`;
+    return null;
   };
 
   const DocumentViewer = ({ documentUrl, documentType, documentName }: { 
