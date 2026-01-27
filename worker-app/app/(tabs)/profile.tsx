@@ -66,6 +66,12 @@ export default function ProfileScreen() {
   const [pendingImageUpdate, setPendingImageUpdate] = useState(false);
   const [workerRating, setWorkerRating] = useState<number>((worker as any)?.rating || 0);
   const [completedJobs, setCompletedJobs] = useState<number>((worker as any)?.completedJobs || 0);
+  const [workerBadge, setWorkerBadge] = useState<'Iron' | 'Silver' | 'Gold' | 'Platinum'>((worker as any)?.badge || 'Iron');
+  const [rankScore, setRankScore] = useState<number>((worker as any)?.rankScore || 0);
+  const [rewardPoints, setRewardPoints] = useState<number>((worker as any)?.rewardPoints || 0);
+  const [totalEarnings, setTotalEarnings] = useState<number>((worker as any)?.totalEarnings || 0);
+  const [serviceJobsCompleted, setServiceJobsCompleted] = useState<number>((worker as any)?.serviceJobsCompleted || 0);
+  const [deliveryJobsCompleted, setDeliveryJobsCompleted] = useState<number>((worker as any)?.deliveryJobsCompleted || 0);
   const [formData, setFormData] = useState({
     name: worker?.name || '',
     email: worker?.email || '',
@@ -194,12 +200,26 @@ export default function ProfileScreen() {
               setWorkerRating(realRating);
               setCompletedJobs(realCompletedJobs);
               
+              // Update badge, rankScore, rewardPoints, earnings from workerData
+              setWorkerBadge(workerData.badge || 'Iron');
+              setRankScore(workerData.rankScore || 0);
+              setRewardPoints(workerData.rewardPoints || 0);
+              setTotalEarnings(workerData.totalEarnings || 0);
+              setServiceJobsCompleted(workerData.serviceJobsCompleted || 0);
+              setDeliveryJobsCompleted(workerData.deliveryJobsCompleted || 0);
+              
               // Also update worker context if data changed
               if (realRating !== (worker as any)?.rating || realCompletedJobs !== (worker as any)?.completedJobs) {
                 updateWorker({
                   ...worker,
                   rating: realRating,
                   completedJobs: realCompletedJobs,
+                  badge: workerData.badge || 'Iron',
+                  rankScore: workerData.rankScore || 0,
+                  rewardPoints: workerData.rewardPoints || 0,
+                  totalEarnings: workerData.totalEarnings || 0,
+                  serviceJobsCompleted: workerData.serviceJobsCompleted || 0,
+                  deliveryJobsCompleted: workerData.deliveryJobsCompleted || 0,
                 } as any);
               }
             } else {
@@ -269,12 +289,44 @@ export default function ProfileScreen() {
     // Fetch immediately
     fetchWorkerStats();
     
+    // Connect to socket for real-time updates
+    socketService.connect(worker.id, 'worker');
+    
+    // Listen for worker stats updates
+    const handleWorkerStatsUpdated = (data: any) => {
+      console.log('📊 Worker stats updated via socket:', data);
+      if (data.workerId === worker.id) {
+        if (data.badge) setWorkerBadge(data.badge);
+        if (data.rankScore !== undefined) setRankScore(data.rankScore);
+        if (data.totalEarnings !== undefined) setTotalEarnings(data.totalEarnings);
+        if (data.completedJobs !== undefined) setCompletedJobs(data.completedJobs);
+        if (data.serviceJobsCompleted !== undefined) setServiceJobsCompleted(data.serviceJobsCompleted);
+        if (data.deliveryJobsCompleted !== undefined) setDeliveryJobsCompleted(data.deliveryJobsCompleted);
+      }
+    };
+    
+    // Listen for reward points updates
+    const handleRewardPointsUpdated = (data: any) => {
+      console.log('🎁 Worker reward points updated:', data);
+      if (data.workerId === worker.id) {
+        setRewardPoints(data.totalPoints);
+      }
+    };
+    
+    const socketAny = socketService as any;
+    socketAny.on('worker:stats_updated', handleWorkerStatsUpdated);
+    socketAny.on('worker:reward_points_updated', handleRewardPointsUpdated);
+    
     // Refresh every 10 seconds for real-time updates
     const intervalId = setInterval(() => {
       fetchWorkerStats();
     }, 10000);
     
-    return () => clearInterval(intervalId);
+    return () => {
+      clearInterval(intervalId);
+      socketAny.off('worker:stats_updated', handleWorkerStatsUpdated);
+      socketAny.off('worker:reward_points_updated', handleRewardPointsUpdated);
+    };
   }, [worker?.id]);
 
   // Listen to socket events for real-time updates
@@ -1336,18 +1388,66 @@ export default function ProfileScreen() {
             {/* Badge Display */}
             {(() => {
               const badge = getWorkerBadge(completedJobs);
+              const badgeColor = workerBadge === 'Platinum' ? '#E5E4E2' :
+                                workerBadge === 'Gold' ? '#FFD700' :
+                                workerBadge === 'Silver' ? '#C0C0C0' : '#8B7355';
+              const badgeIcon = workerBadge === 'Platinum' ? 'diamond' :
+                               workerBadge === 'Gold' ? 'medal' :
+                               workerBadge === 'Silver' ? 'medal' : 'shield';
               return (
-                <View style={[styles.badgeContainer, { backgroundColor: badge.color + '20', borderColor: badge.color }]}>
-                  <Ionicons name={badge.icon as any} size={20} color={badge.color} />
-                  <Text style={[styles.badgeText, { color: badge.color }]}>
-                    {badge.name} Worker
+                <View style={[styles.badgeContainer, { backgroundColor: badgeColor + '20', borderColor: badgeColor }]}>
+                  <Ionicons name={badgeIcon as any} size={20} color={badgeColor} />
+                  <Text style={[styles.badgeText, { color: badgeColor }]}>
+                    {workerBadge} Worker
                   </Text>
                   <Text style={styles.badgeSubtext}>
                     {completedJobs} tasks completed
                   </Text>
+                  {rankScore > 0 && (
+                    <Text style={styles.rankScoreText}>
+                      Rank Score: {rankScore.toFixed(1)}
+                    </Text>
+                  )}
                 </View>
               );
             })()}
+            
+            {/* Stats Cards */}
+            <View style={styles.statsContainer}>
+              <View style={styles.statCard}>
+                <Ionicons name="cash-outline" size={24} color="#4CAF50" />
+                <Text style={styles.statValue}>Rs. {totalEarnings.toLocaleString()}</Text>
+                <Text style={styles.statLabel}>Total Earnings</Text>
+              </View>
+              <View style={styles.statCard}>
+                <Ionicons name="star-outline" size={24} color="#FFD700" />
+                <Text style={styles.statValue}>{rewardPoints}</Text>
+                <Text style={styles.statLabel}>Reward Points</Text>
+              </View>
+            </View>
+            
+            {/* Category-wise Stats */}
+            {(serviceJobsCompleted > 0 || deliveryJobsCompleted > 0) && (
+              <View style={styles.categoryStatsContainer}>
+                <Text style={styles.categoryStatsTitle}>Job Breakdown</Text>
+                {serviceJobsCompleted > 0 && (
+                  <View style={styles.categoryStatRow}>
+                    <Ionicons name="construct-outline" size={18} color="#FF7A2C" />
+                    <Text style={styles.categoryStatText}>
+                      Service Jobs: {serviceJobsCompleted}
+                    </Text>
+                  </View>
+                )}
+                {deliveryJobsCompleted > 0 && (
+                  <View style={styles.categoryStatRow}>
+                    <Ionicons name="cube-outline" size={18} color="#4CAF50" />
+                    <Text style={styles.categoryStatText}>
+                      Delivery Jobs: {deliveryJobsCompleted}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Earning and Reward Buttons - Below Badge */}
             <View style={styles.actionButtonsContainer}>
@@ -1907,6 +2007,64 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginLeft: 'auto',
+  },
+  rankScoreText: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+    paddingHorizontal: 20,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#666',
+  },
+  categoryStatsContainer: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+  },
+  categoryStatsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  categoryStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  categoryStatText: {
+    fontSize: 13,
+    color: '#666',
   },
   detailsSection: {
     backgroundColor: '#fff',
