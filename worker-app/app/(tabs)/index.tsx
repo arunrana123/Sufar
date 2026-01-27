@@ -165,7 +165,7 @@ export default function HomeScreen() {
     
     try {
       // Extract unique service categories from services
-      const serviceCategories = [...new Set(services.map(service => service.category))];
+      const serviceCategories = [...new Set(services.map((service: any) => service.category))];
       
       const apiUrl = getApiUrl();
       
@@ -212,7 +212,7 @@ export default function HomeScreen() {
   // Update service in services list
   const updateServiceInList = (updatedService: any) => {
     setServices(prev => 
-      prev.map(service => 
+      prev.map((service: any) => 
         service.id === updatedService._id || service._id === updatedService._id
           ? { ...service, ...updatedService, price: updatedService.price }
           : service
@@ -245,7 +245,7 @@ export default function HomeScreen() {
             priceType: 'hour' as const,
             description: `Professional ${category} services`,
           }));
-        console.log('✅ IMMEDIATELY setting services from context:', immediateServices.length, 'services:', immediateServices.map(s => s.category));
+        console.log('✅ IMMEDIATELY setting services from context:', immediateServices.length, 'services:', immediateServices.map((s: any) => s.category));
         // FORCE set services - this will trigger re-render
         setServices([...immediateServices]);
       } else {
@@ -269,7 +269,7 @@ export default function HomeScreen() {
       serviceCategoriesCount: worker?.serviceCategories?.length || 0,
       serviceCategories: worker?.serviceCategories,
       currentServicesCount: services.length,
-      currentServices: services.map(s => s.category),
+      currentServices: services.map((s: any) => s.category),
     });
 
     if (worker?.serviceCategories && Array.isArray(worker.serviceCategories) && worker.serviceCategories.length > 0) {
@@ -286,7 +286,7 @@ export default function HomeScreen() {
           description: `Professional ${category} services`,
         }));
       
-      console.log('✅ FORCED update services from worker context:', allServices.length, 'Services:', allServices.map(s => s.category));
+      console.log('✅ FORCED update services from worker context:', allServices.length, 'Services:', allServices.map((s: any) => s.category));
       // Use spread operator to create new array reference and force re-render
       setServices([...allServices]);
     } else if (worker?.id && services.length === 0) {
@@ -419,7 +419,7 @@ export default function HomeScreen() {
         setTimeout(() => {
           Alert.alert(
             'Document Verification Required',
-            `You have ${worker.serviceCategories.length} service${worker.serviceCategories.length > 1 ? 's' : ''} (${worker.serviceCategories.join(', ')}) that need document verification. Please submit required documents to verify these services before you can start accepting jobs.`,
+            `You have ${worker.serviceCategories?.length || 0} service${(worker.serviceCategories?.length || 0) > 1 ? 's' : ''} (${worker.serviceCategories?.join(', ') || 'none'}) that need document verification. Please submit required documents to verify these services before you can start accepting jobs.`,
             [
               { text: 'Later', style: 'cancel' },
               { 
@@ -454,7 +454,7 @@ export default function HomeScreen() {
             description: `Professional ${category} services`,
           }));
           setServices(immediateServices);
-          console.log('✅ Set services from context on focus:', immediateServices.map(s => s.name));
+          console.log('✅ Set services from context on focus:', immediateServices.map((s: any) => s.name));
         }
         // Then fetch from backend to ensure we have latest data
         fetchWorkerServices();
@@ -488,7 +488,7 @@ export default function HomeScreen() {
           ...worker,
           serviceCategories: data.serviceCategories,
         } as any);
-        console.log('✅ Socket: Services updated from socket:', updatedServices.map(s => s.category));
+        console.log('✅ Socket: Services updated from socket:', updatedServices.map((s: any) => s.category));
       }
     };
 
@@ -522,7 +522,7 @@ export default function HomeScreen() {
           description: `Professional ${category} services`,
         }));
         
-        console.log('✅ Socket: FORCING services update:', updatedServices.map(s => s.category));
+        console.log('✅ Socket: FORCING services update:', updatedServices.map((s: any) => s.category));
         setServices(updatedServices);
         updateWorker({
           ...worker,
@@ -590,16 +590,19 @@ export default function HomeScreen() {
       // Listen for notification read events to update count
       const handleNotificationRead = (data: any) => {
         console.log('✅ Notification read event received:', data);
-        // Decrement count immediately
-        setUnreadCount(prev => Math.max(0, prev - 1));
-        // Refresh from backend to ensure accuracy
-        setTimeout(() => fetchUnreadCount(), 500);
+        // Only update if it's for this worker
+        if (data.userId === worker.id || data.userId === String(worker.id) || !data.userId) {
+          // Decrement count immediately
+          setUnreadCount(prev => Math.max(0, prev - 1));
+          // Refresh from backend to ensure accuracy
+          setTimeout(() => fetchUnreadCount(), 500);
+        }
       };
 
       // Listen for notification deleted events
       const handleNotificationDeleted = (data: any) => {
         console.log('🗑️ Notification deleted event received:', data);
-        // Refresh count from backend
+        // Refresh count from backend to ensure accuracy
         setTimeout(() => fetchUnreadCount(), 500);
       };
 
@@ -608,6 +611,8 @@ export default function HomeScreen() {
         console.log('🗑️ All notifications cleared event received:', data);
         if (data.userId === worker.id || String(data.userId) === String(worker.id)) {
           setUnreadCount(0);
+          // Refresh from backend to ensure accuracy
+          setTimeout(() => fetchUnreadCount(), 300);
         }
       };
 
@@ -617,7 +622,7 @@ export default function HomeScreen() {
         if (data.userId === worker.id || String(data.userId) === String(worker.id)) {
           setUnreadCount(0);
           // Refresh from backend to ensure accuracy
-          setTimeout(() => fetchUnreadCount(), 500);
+          setTimeout(() => fetchUnreadCount(), 300);
         }
       };
 
@@ -787,11 +792,11 @@ export default function HomeScreen() {
   // Handles adding or updating services, shows toast notification, requires verification
   // Triggered by: Worker adds or edits a service in ServiceRegistrationModal
   const handleAddService = async (service: any) => {
-    const previousCategories = [...new Set(services.map(s => s.category))];
+    const previousCategories = [...new Set(services.map((s: any) => s.category))];
     
     if (editingService) {
       // Update existing service
-      setServices(prev => prev.map(s => s.id === editingService.id ? service : s));
+      setServices(prev => prev.map((s: any) => s.id === editingService.id ? service : s));
       setEditingService(null);
       setToast({
         visible: true,
@@ -822,7 +827,7 @@ export default function HomeScreen() {
       setServices(prev => [...prev, ...newServices]);
       
       // SECOND: Sync service categories with backend IMMEDIATELY to save them
-      const newCategories = newServices.map(s => s.category);
+      const newCategories = newServices.map((s: any) => s.category);
       const allCategories = [...new Set([...previousCategories, ...newCategories])];
       
       // Update worker context immediately
@@ -861,7 +866,7 @@ export default function HomeScreen() {
           
           // Show success notification
           const serviceCount = newServices.length;
-          const serviceNames = newServices.map(s => s.category).join(', ');
+          const serviceNames = newServices.map((s: any) => s.category).join(', ');
           setToast({
             visible: true,
             message: serviceCount > 1 
@@ -1089,7 +1094,7 @@ export default function HomeScreen() {
             {(() => {
               console.log('🎯 RENDERING ServiceCart - Current services state:', {
                 count: services.length,
-                services: services.map(s => ({ id: s.id, name: s.name, category: s.category })),
+                services: services.map((s: any) => ({ id: s.id, name: s.name, category: s.category })),
                 workerServiceCategories: worker?.serviceCategories,
               });
               return null;
