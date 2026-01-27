@@ -48,9 +48,9 @@ export default function MenuScreen() {
         </View>
 
         <View style={styles.content}>
-          {menuItems.map((item, index) => (
+          {menuItems.map((item) => (
             <Pressable
-              key={index}
+              key={item.title}
               style={[
                 styles.menuItem,
                 (item as any).isSmall ? styles.smallMenuItem : null,
