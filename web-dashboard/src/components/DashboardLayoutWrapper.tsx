@@ -9,6 +9,7 @@ const DASHBOARD_ROUTES = [
   '/users',
   '/workers',
   '/services',
+  '/market',
   '/requests',
   '/connection-status',
   '/document-verification',
