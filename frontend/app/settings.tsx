@@ -7,6 +7,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { useAuth } from '@/contexts/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
+import UserOnboarding from '@/components/UserOnboarding';
 import { useState, useEffect } from 'react';
 
 export default function SettingsScreen() {
@@ -15,6 +16,7 @@ export default function SettingsScreen() {
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   useEffect(() => {
     checkBiometricAvailability();
@@ -119,6 +121,10 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false);
+  };
+
   const settingsSections = [
     {
       title: 'Security',
@@ -191,6 +197,14 @@ export default function SettingsScreen() {
       title: 'About',
       items: [
         {
+          icon: 'school-outline',
+          title: 'How to Use App',
+          subtitle: 'View step-by-step guide',
+          onPress: () => {
+            setShowOnboarding(true);
+          },
+        },
+        {
           icon: 'help-circle-outline',
           title: 'Help & Support',
           subtitle: 'Get help and contact support',
@@ -223,6 +237,16 @@ export default function SettingsScreen() {
       ],
     },
   ];
+
+  // Show onboarding if requested
+  if (showOnboarding) {
+    return <UserOnboarding onComplete={handleOnboardingComplete} />;
+  }
+
+  // Show onboarding if requested
+  if (showOnboarding) {
+    return <UserOnboarding onComplete={handleOnboardingComplete} />;
+  }
 
   return (
     <ThemedView style={styles.container}>
