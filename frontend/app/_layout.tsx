@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
+import { CartProvider } from '../contexts/CartContext';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
@@ -119,6 +120,18 @@ function RootLayoutNav() {
         <Stack.Screen name="profile" options={{ headerShown: false }} />
         <Stack.Screen name="search-services" options={{ headerShown: false }} />
         <Stack.Screen name="optimized-home" options={{ headerShown: false }} />
+        <Stack.Screen name="market" options={{ headerShown: false }} />
+        <Stack.Screen name="market-wholesale" options={{ headerShown: false }} />
+        <Stack.Screen name="market-furniture" options={{ headerShown: false }} />
+        <Stack.Screen name="market-hardware" options={{ headerShown: false }} />
+        <Stack.Screen name="market-farm" options={{ headerShown: false }} />
+        <Stack.Screen name="market-product" options={{ headerShown: false }} />
+        <Stack.Screen name="cart" options={{ headerShown: false }} />
+        <Stack.Screen name="select-address" options={{ headerShown: false }} />
+        <Stack.Screen name="checkout" options={{ headerShown: false }} />
+        <Stack.Screen name="payment-process" options={{ headerShown: false }} />
+        <Stack.Screen name="order-tracking" options={{ headerShown: false }} />
+        <Stack.Screen name="order-review" options={{ headerShown: false }} />
         <Stack.Screen name="+not-found" />
       </Stack>
       {/* Global notification handler - shows floating toasts on all screens */}
@@ -132,7 +145,9 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <RootLayoutNav />
+        <CartProvider>
+          <RootLayoutNav />
+        </CartProvider>
       </AuthProvider>
     </ThemeProvider>
   );
