@@ -30,6 +30,10 @@ interface Job {
   location: {
     address: string;
     city?: string;
+    coordinates?: {
+      latitude: number;
+      longitude: number;
+    };
   };
   status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled';
   price: number;
@@ -39,13 +43,108 @@ interface Job {
   actualDuration?: number;
 }
 
+interface MarketOrder {
+  _id: string;
+  orderId: string;
+  userId: string;
+  userInfo?: {
+    firstName: string;
+    lastName: string;
+    email?: string;
+    phone?: string;
+  };
+  items: Array<{
+    productId: string;
+    name: string;
+    label?: string;
+    quantity: number;
+    price: number;
+    deliveryAddress?: string;
+  }>;
+  status: 'pending' | 'confirmed' | 'preparing' | 'assigned' | 'picked' | 'on_way' | 'delivered' | 'cancelled';
+  deliveryBoy?: {
+    id: string;
+    name: string;
+    phone: string;
+    location?: {
+      latitude: number;
+      longitude: number;
+    };
+  };
+  total: number;
+  paymentMethod: 'online' | 'cod';
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';
+  deliveryAddress: string;
+  createdAt: string;
+}
+
 export default function TrackingScreen() {
   const { worker } = useAuth();
   const [activeJobs, setActiveJobs] = useState<Job[]>([]);
   const [completedJobs, setCompletedJobs] = useState<Job[]>([]);
+  const [activeOrders, setActiveOrders] = useState<MarketOrder[]>([]);
+  const [completedOrders, setCompletedOrders] = useState<MarketOrder[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<MarketOrder | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [completedJobsCount, setCompletedJobsCount] = useState<number>(0);
+  const [completedOrdersCount, setCompletedOrdersCount] = useState<number>(0);
+  const [showOrderTracking, setShowOrderTracking] = useState(false);
+
+  const fetchMarketOrders = async () => {
+    try {
+      if (!worker?.id) return;
+
+      const apiUrl = getApiUrl();
+      console.log('📦 Fetching market orders for worker:', worker.id);
+      
+      // Fetch orders assigned to this worker as delivery boy
+      const response = await fetch(`${apiUrl}/api/orders/delivery/${worker.id}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const orders = Array.isArray(data) ? data : (data.orders || []);
+        console.log('✅ Market orders fetched:', orders.length);
+        
+        // Separate active and completed orders
+        const active = orders.filter((o: MarketOrder) => 
+          o.status !== 'delivered' && o.status !== 'cancelled'
+        );
+        const completed = orders.filter((o: MarketOrder) => 
+          o.status === 'delivered'
+        );
+        
+        // Sort by creation date (newest first)
+        active.sort((a: MarketOrder, b: MarketOrder) => 
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        completed.sort((a: MarketOrder, b: MarketOrder) => 
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        
+        setActiveOrders(active);
+        setCompletedOrders(completed);
+        setCompletedOrdersCount(completed.length);
+        
+        // Save completed orders to AsyncStorage
+        if (completed.length > 0 && worker?.id) {
+          try {
+            const storageKey = `completed_delivery_orders_${worker.id}`;
+            await AsyncStorage.setItem(storageKey, JSON.stringify(completed));
+            console.log('✅ Completed delivery orders saved:', completed.length);
+          } catch (storageError) {
+            console.error('Error saving completed orders:', storageError);
+          }
+        }
+        
+        console.log('📊 Active orders:', active.length, 'Completed:', completed.length);
+      } else {
+        console.error('❌ Failed to fetch market orders:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Error fetching market orders:', error);
+    }
+  };
 
   const fetchJobs = async () => {
     try {
@@ -185,6 +284,7 @@ export default function TrackingScreen() {
     if (worker?.id) {
       loadCompletedJobsCount();
       fetchJobs();
+      fetchMarketOrders();
 
       // Connect to socket for real-time updates
       socketService.connect(worker.id, 'worker');
@@ -328,12 +428,41 @@ export default function TrackingScreen() {
         }
       };
 
+      // Listen for delivery assignment
+      const handleDeliveryAssignment = (data: any) => {
+        console.log('🚚 Delivery assignment received:', data);
+        if (data.deliveryBoy?.id === worker.id || data.deliveryBoyId === worker.id) {
+          console.log('✅ New delivery order assigned to this worker');
+          // Refresh market orders
+          setTimeout(() => {
+            fetchMarketOrders();
+          }, 500);
+        }
+      };
+
+      // Listen for order status updates
+      const handleOrderStatusUpdate = (data: any) => {
+        console.log('📦 Order status updated:', data);
+        if (data.orderId) {
+          // Refresh market orders if this order is assigned to this worker
+          setTimeout(() => {
+            fetchMarketOrders();
+          }, 500);
+        }
+      };
+
       // Set up socket listeners
       socketService.on('booking:accepted', handleBookingAccepted);
       socketService.on('work:started', handleWorkStarted);
       socketService.on('work:completed', handleWorkCompleted);
       socketService.on('booking:updated', handleBookingUpdated);
       socketService.on('booking:request', handleBookingRequest);
+      
+      // Listen for order-related events (using any to bypass type checking for custom events)
+      const socketAny = socketService as any;
+      socketAny.on('delivery:new_assignment', handleDeliveryAssignment);
+      socketAny.on('order:status_updated', handleOrderStatusUpdate);
+      socketAny.on('order:delivery_assigned', handleDeliveryAssignment);
 
       return () => {
         socketService.off('booking:accepted', handleBookingAccepted);
@@ -341,6 +470,9 @@ export default function TrackingScreen() {
         socketService.off('work:completed', handleWorkCompleted);
         socketService.off('booking:updated', handleBookingUpdated);
         socketService.off('booking:request', handleBookingRequest);
+        socketAny.off('delivery:new_assignment', handleDeliveryAssignment);
+        socketAny.off('order:status_updated', handleOrderStatusUpdate);
+        socketAny.off('order:delivery_assigned', handleDeliveryAssignment);
       };
     }
   }, [worker?.id]);
@@ -384,6 +516,16 @@ export default function TrackingScreen() {
     return 0;
   };
 
+  // Calculate progress for delivery orders
+  const calculateOrderProgress = (order: MarketOrder): number => {
+    if (order.status === 'delivered') return 100;
+    if (order.status === 'on_way') return 75;
+    if (order.status === 'picked') return 50;
+    if (order.status === 'assigned') return 25;
+    if (order.status === 'preparing' || order.status === 'confirmed') return 10;
+    return 0;
+  };
+
   const handleJobPress = (jobId: string) => {
     router.push({
       pathname: '/job-navigation',
@@ -415,7 +557,7 @@ export default function TrackingScreen() {
           <View style={styles.completedJobsBarContent}>
             <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
             <Text style={styles.completedJobsBarText}>
-              Completed Jobs: {completedJobsCount}
+              Completed: {completedJobsCount} Jobs • {completedOrdersCount} Deliveries
             </Text>
           </View>
         </View>
@@ -424,7 +566,13 @@ export default function TrackingScreen() {
           style={styles.content} 
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={fetchJobs} />
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={() => {
+                fetchJobs();
+                fetchMarketOrders();
+              }} 
+            />
           }
         >
           {loading ? (
@@ -532,10 +680,175 @@ export default function TrackingScreen() {
                 </View>
               )}
 
+              {/* Market Orders - Delivery Tracking */}
+              {activeOrders.length > 0 && (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    Delivery Orders ({activeOrders.length})
+                  </Text>
+                  {activeOrders.map((order) => (
+                    <TouchableOpacity
+                      key={order._id}
+                      style={styles.jobCard}
+                      onPress={() => {
+                        setSelectedOrder(order);
+                        setShowOrderTracking(true);
+                      }}
+                    >
+                      <View style={styles.jobHeader}>
+                        <View style={styles.clientInfo}>
+                          <View style={[styles.clientAvatar, { backgroundColor: '#E3F2FD' }]}>
+                            <Ionicons name="cube" size={24} color="#2196F3" />
+                          </View>
+                          <View>
+                            <Text style={styles.clientName}>Order #{order.orderId}</Text>
+                            <Text style={styles.jobTime}>{formatTimeAgo(order.createdAt)}</Text>
+                          </View>
+                        </View>
+                        <View style={[
+                          styles.statusBadge,
+                          order.status === 'on_way' ? styles.inProgressBadge : styles.acceptedBadge
+                        ]}>
+                          <View style={[
+                            styles.statusDot,
+                            order.status === 'on_way' ? styles.inProgressDot : styles.acceptedDot
+                          ]} />
+                          <Text style={[
+                            styles.statusText,
+                            order.status === 'on_way' ? styles.inProgressText : styles.acceptedText
+                          ]}>
+                            {order.status === 'on_way' ? 'On Way' : order.status === 'picked' ? 'Picked' : 'Assigned'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Progress Bar for Delivery Orders */}
+                      {(() => {
+                        const progress = calculateOrderProgress(order);
+                        return (
+                          <View style={styles.progressContainer}>
+                            <View style={styles.progressBar}>
+                              <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                            </View>
+                            <Text style={styles.progressText}>{progress}% Complete</Text>
+                          </View>
+                        );
+                      })()}
+
+                      <View style={styles.jobDetails}>
+                        <View style={styles.detailRow}>
+                          <Ionicons name="cube-outline" size={16} color="#666" />
+                          <Text style={styles.detailText}>
+                            {order.items?.length || 0} {order.items?.length === 1 ? 'item' : 'items'}
+                            {order.items && order.items.length > 0 && (
+                              <Text style={[styles.detailText, { color: '#666', fontSize: 12 }]}>
+                                {' - '}
+                                {order.items.slice(0, 2).map((item: any) => item.label || item.name).join(', ')}
+                                {order.items.length > 2 && '...'}
+                              </Text>
+                            )}
+                          </Text>
+                        </View>
+                        <View style={styles.detailRow}>
+                          <Ionicons name="location-outline" size={16} color="#666" />
+                          <Text style={styles.detailText} numberOfLines={2}>
+                            {order.deliveryAddress || 'Address not specified'}
+                          </Text>
+                        </View>
+                        <View style={styles.detailRow}>
+                          <Ionicons name="cash-outline" size={16} color="#666" />
+                          <Text style={styles.detailText}>
+                            Rs. {order.total?.toLocaleString() || '0'} ({order.paymentMethod === 'cod' ? 'COD' : 'Paid'})
+                          </Text>
+                        </View>
+                        {order.userInfo && (
+                          <View style={styles.detailRow}>
+                            <Ionicons name="person-outline" size={16} color="#666" />
+                            <Text style={styles.detailText}>
+                              {order.userInfo.firstName} {order.userInfo.lastName}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <TouchableOpacity
+                        style={styles.viewDetailsButton}
+                        onPress={() => {
+                          router.push({
+                            pathname: '/order-delivery-tracking' as any,
+                            params: { orderId: order.orderId || order._id },
+                          });
+                        }}
+                      >
+                        <Text style={styles.viewDetailsText}>Track Delivery</Text>
+                        <Ionicons name="navigate" size={16} color="#FF7A2C" />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Completed Delivery Orders */}
+              {completedOrders.length > 0 && (
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>Completed Deliveries ({completedOrders.length})</Text>
+                  {completedOrders.map((order) => (
+                    <TouchableOpacity
+                      key={order._id}
+                      style={styles.jobCard}
+                      onPress={() => {
+                        router.push({
+                          pathname: '/order-delivery-tracking' as any,
+                          params: { orderId: order.orderId || order._id },
+                        });
+                      }}
+                    >
+                      <View style={styles.jobHeader}>
+                        <View style={styles.clientInfo}>
+                          <View style={[styles.clientAvatar, { backgroundColor: '#E8F5E9' }]}>
+                            <Ionicons name="cube" size={24} color="#4CAF50" />
+                          </View>
+                          <View>
+                            <Text style={styles.clientName}>Order #{order.orderId}</Text>
+                            <Text style={styles.jobTime}>
+                              {formatTimeAgo(order.createdAt)} • Delivered
+                            </Text>
+                          </View>
+                        </View>
+                        <Ionicons name="checkmark-circle" size={28} color="#4CAF50" />
+                      </View>
+
+                      <View style={styles.jobDetails}>
+                        <View style={styles.detailRow}>
+                          <Ionicons name="cube-outline" size={16} color="#666" />
+                          <Text style={styles.detailText}>
+                            {order.items?.length || 0} items • Rs. {order.total?.toLocaleString() || '0'}
+                          </Text>
+                        </View>
+                        <View style={styles.detailRow}>
+                          <Ionicons name="location-outline" size={16} color="#666" />
+                          <Text style={styles.detailText} numberOfLines={1}>
+                            {order.deliveryAddress || 'Address not specified'}
+                          </Text>
+                        </View>
+                        {order.userInfo && (
+                          <View style={styles.detailRow}>
+                            <Ionicons name="person-outline" size={16} color="#666" />
+                            <Text style={styles.detailText}>
+                              {order.userInfo.firstName} {order.userInfo.lastName}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
               {/* Completed Jobs */}
               {completedJobs.length > 0 && (
                 <View style={styles.section}>
-                  <Text style={styles.sectionTitle}>Completed Jobs</Text>
+                  <Text style={styles.sectionTitle}>Completed Jobs ({completedJobs.length})</Text>
                   {completedJobs.map((job) => {
                     const clientName = `${job.userId.firstName} ${job.userId.lastName || ''}`.trim();
                     return (
@@ -760,6 +1073,16 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#FF7A2C',
     borderRadius: 4,
+  },
+  progressContainer: {
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  progressText: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 4,
+    textAlign: 'right',
   },
   viewDetailsButton: {
     flexDirection: 'row',
