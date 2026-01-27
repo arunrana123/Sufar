@@ -1,5 +1,5 @@
 // SERVICE RECORDS SCREEN - Displays user's service bookings with stats, live tracking, and cancellation options
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   SafeAreaView,
   StyleSheet,
@@ -84,13 +84,13 @@ export default function RecordScreen() {
 
   // Shows toast notification for 3 seconds
   // Triggered by: Booking events (created, accepted, cancelled, completed)
-  const showToast = (message: string, title?: string, type?: 'success' | 'error' | 'info' | 'warning') => {
+  const showToast = useCallback((message: string, title?: string, type?: 'success' | 'error' | 'info' | 'warning') => {
     setToast({ visible: true, message, title, type });
-  };
+  }, []);
 
   // Fetches user's bookings from backend API
   // Triggered by: Component mount, pull-to-refresh, after cancel/clear operations
-  const fetchBookings = async () => {
+  const fetchBookings = useCallback(async () => {
     if (!user?.id) {
       setLoading(false);
       setRefreshing(false);
@@ -115,7 +115,7 @@ export default function RecordScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [user?.id]);
 
   // Sets up Socket.IO listeners for real-time booking updates
   // Triggered by: Component mount or when user.id changes
@@ -126,7 +126,6 @@ export default function RecordScreen() {
       
       // Listen for booking deletion from backend
       socketService.on('booking:deleted', (data: any) => {
-        console.log('📢 Booking deleted notification received:', data);
         if (data.bookingId) {
           setBookings(prevBookings => 
             prevBookings.filter(booking => booking._id !== data.bookingId)
@@ -142,7 +141,6 @@ export default function RecordScreen() {
 
       // Listen for new notifications from backend
       socketService.on('notification:new', (notification: any) => {
-        console.log('📢 New notification received in user app:', notification);
         if (notification.type === 'booking') {
           if (notification.data?.status === 'cancelled') {
             showToast(
@@ -174,11 +172,6 @@ export default function RecordScreen() {
       
       // Listen for booking updates from backend (handles all status changes)
       socketService.on('booking:updated', (updatedBooking: any) => {
-        console.log('📢 Booking updated notification received:', {
-          bookingId: updatedBooking._id,
-          status: updatedBooking.status,
-          paymentStatus: updatedBooking.paymentStatus,
-        });
         if (updatedBooking._id) {
           setBookings(prevBookings => 
             prevBookings.map(booking => 
@@ -205,7 +198,6 @@ export default function RecordScreen() {
 
       // Listen for booking accepted
       socketService.on('booking:accepted', (data: any) => {
-        console.log('✅ Booking accepted event received in record:', data);
         const bookingId = data.bookingId || data.booking?._id;
         if (bookingId) {
           setBookings(prev => 
@@ -228,7 +220,6 @@ export default function RecordScreen() {
 
       // Listen for booking cancelled
       socketService.on('booking:cancelled', (data: any) => {
-        console.log('🚫 Booking cancelled event received in record:', data);
         const bookingId = data.bookingId || data.booking?._id;
         if (bookingId) {
           setBookings(prev => 
@@ -246,7 +237,6 @@ export default function RecordScreen() {
 
       // Listen for booking rejected
       socketService.on('booking:rejected', (data: any) => {
-        console.log('❌ Booking rejected event received in record:', data);
         const bookingId = data.bookingId || data.booking?._id;
         if (bookingId) {
           setBookings(prev => 
@@ -264,7 +254,6 @@ export default function RecordScreen() {
 
       // Listen for payment status updates
       socketService.on('payment:status_updated', (data: any) => {
-        console.log('💳 Payment status updated event received in record:', data);
         const bookingId = data.bookingId || data.booking?._id;
         if (bookingId) {
           setBookings(prev => 
@@ -289,7 +278,6 @@ export default function RecordScreen() {
 
       // Listen for work started
       socketService.on('work:started', (data: any) => {
-        console.log('🔨 Work started event received in record:', data);
         if (data.bookingId) {
           setBookings(prev => 
             prev.map(b => 
@@ -306,7 +294,6 @@ export default function RecordScreen() {
 
       // Listen for work completed
       socketService.on('work:completed', (data: any) => {
-        console.log('✅ Work completed event received in record:', data);
         if (data.bookingId) {
           setBookings(prev => 
             prev.map(b => 
@@ -341,13 +328,18 @@ export default function RecordScreen() {
       socketService.off('work:completed');
       socketService.off('notification:new');
     };
-  }, [user?.id]);
+  }, [user?.id, fetchBookings, showToast]);
 
   // Handles pull-to-refresh gesture
   // Triggered by: User pulls down screen
   const onRefresh = () => {
     setRefreshing(true);
     fetchBookings();
+  };
+
+  // Helper function to check if a booking can be deleted
+  const canDeleteBooking = (status: string): boolean => {
+    return ['pending', 'accepted', 'cancelled'].includes(status);
   };
 
   // Cancels a single booking via API DELETE request
@@ -358,11 +350,23 @@ export default function RecordScreen() {
       return;
     }
 
+    // Check if booking can be deleted before attempting
+    const booking = bookings.find(b => b._id === bookingId);
+    if (booking && !canDeleteBooking(booking.status)) {
+      showToast(
+        `Cannot delete booking with status: ${booking.status}. Only pending, accepted, or cancelled bookings can be deleted.`,
+        'Cannot Delete',
+        'error'
+      );
+      setDeleteModalVisible(false);
+      setSelectedBooking(null);
+      return;
+    }
+
     setCancelling(true);
     
     try {
       const apiUrl = getApiUrl();
-      console.log('🚫 Cancelling booking:', bookingId);
       
       const response = await fetch(`${apiUrl}/api/bookings/${bookingId}`, {
         method: 'DELETE',
@@ -377,7 +381,6 @@ export default function RecordScreen() {
       const data = await response.json();
       
       if (response.ok) {
-        console.log('✅ Booking cancelled successfully:', data);
         
         // Remove the booking from UI immediately (no refetch needed)
         setBookings(prevBookings => 
@@ -388,12 +391,17 @@ export default function RecordScreen() {
         showToast(
           'Your service booking has been cancelled successfully. You will be notified if any refund is processed.',
           'Booking Cancelled',
-          'error'
+          'success'
         );
       } else {
         console.error('❌ Failed to cancel booking:', data);
+        // Provide more helpful error message
+        let errorMessage = data.message || 'Failed to cancel service booking. Please try again.';
+        if (data.message && data.message.includes('Cannot delete booking with status')) {
+          errorMessage = `Cannot delete this booking. Only pending, accepted, or cancelled bookings can be deleted. This booking has status: ${booking?.status || 'unknown'}.`;
+        }
         showToast(
-          data.message || 'Failed to cancel service booking. Please try again.',
+          errorMessage,
           'Cancellation Failed',
           'error'
         );
@@ -444,6 +452,7 @@ export default function RecordScreen() {
 
   // Deletes all bookings in parallel with proper response checking
   // Triggered by: User confirms "Clear All" in modal
+  // Only attempts to delete bookings that can actually be deleted (pending, accepted, cancelled)
   const handleClearAllBookings = async () => {
     if (!user?.id) {
       Alert.alert('Error', 'User information not available');
@@ -455,15 +464,28 @@ export default function RecordScreen() {
       return;
     }
 
+    // Filter to only bookings that can be deleted
+    const deletableBookings = bookings.filter(booking => canDeleteBooking(booking.status));
+    const nonDeletableBookings = bookings.filter(booking => !canDeleteBooking(booking.status));
+    
+    if (deletableBookings.length === 0) {
+      showToast(
+        `None of your bookings can be deleted. Only pending, accepted, or cancelled bookings can be deleted. Completed or in-progress bookings cannot be deleted.`,
+        'Cannot Delete',
+        'info'
+      );
+      setClearAllModalVisible(false);
+      setClearAllConfirmVisible(false);
+      return;
+    }
+
     setClearingAll(true);
 
     try {
       const apiUrl = getApiUrl();
-      console.log('🗑️ Clearing all bookings for user:', user.id);
-      console.log('📝 Total bookings to delete:', bookings.length);
 
-      // Delete all bookings and check actual HTTP responses
-      const deletePromises = bookings.map(async (booking) => {
+      // Delete only deletable bookings and check actual HTTP responses
+      const deletePromises = deletableBookings.map(async (booking) => {
         try {
           const response = await fetch(`${apiUrl}/api/bookings/${booking._id}`, {
             method: 'DELETE',
@@ -476,7 +498,6 @@ export default function RecordScreen() {
           });
           
           if (response.ok) {
-            console.log(`✅ Successfully deleted booking: ${booking._id}`);
             return { success: true, bookingId: booking._id };
           } else {
             const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
@@ -499,9 +520,6 @@ export default function RecordScreen() {
       const successfulDeletions = successfulResults.length;
       const failedDeletions = results.length - successfulDeletions;
 
-      console.log(`✅ Successfully deleted: ${successfulDeletions} bookings`);
-      console.log(`❌ Failed to delete: ${failedDeletions} bookings`);
-
       // Clear the UI state immediately for successful deletions
       if (successfulDeletions > 0) {
         const successfulBookingIds = successfulResults.map(r => r.value.bookingId);
@@ -513,15 +531,22 @@ export default function RecordScreen() {
       }
 
       // Show appropriate feedback
-      if (failedDeletions === 0) {
+      if (failedDeletions === 0 && nonDeletableBookings.length === 0) {
         showToast(
           'All service bookings have been cleared successfully.',
           'All Cleared',
           'success'
         );
       } else if (successfulDeletions > 0) {
+        let message = `${successfulDeletions} booking${successfulDeletions > 1 ? 's' : ''} cleared successfully.`;
+        if (nonDeletableBookings.length > 0) {
+          message += ` ${nonDeletableBookings.length} completed or in-progress booking${nonDeletableBookings.length > 1 ? 's' : ''} cannot be deleted.`;
+        }
+        if (failedDeletions > 0) {
+          message += ` ${failedDeletions} failed to delete.`;
+        }
         showToast(
-          `${successfulDeletions} bookings cleared successfully. ${failedDeletions} could not be deleted.`,
+          message,
           'Partially Cleared',
           'warning'
         );
@@ -896,7 +921,7 @@ export default function RecordScreen() {
                       </TouchableOpacity>
                     )}
                     
-                    {canDelete(booking.status) && (
+                    {canDeleteBooking(booking.status) && (
                       <TouchableOpacity
                         style={[styles.deleteButton, { borderColor: theme.danger }]}
                         onPress={() => showDeleteConfirmation(booking)}
