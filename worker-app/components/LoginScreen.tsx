@@ -181,12 +181,13 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
       }
       
       // Verify IP address is correct (allow localhost and 10.0.2.2 for emulators)
-      const defaultIp = '192.168.1.66';
-      if (!apiUrl.includes(defaultIp) && !apiUrl.includes('localhost') && !apiUrl.includes('10.0.2.2')) {
-        console.error(`❌ ERROR: API URL does not contain expected IP (${defaultIp}):`, apiUrl);
+      // Use the default IP from config instead of hardcoding
+      const expectedIp = '192.168.1.66'; // Should match DEFAULT_API_URL in config.ts
+      if (!apiUrl.includes(expectedIp) && !apiUrl.includes('localhost') && !apiUrl.includes('10.0.2.2')) {
+        console.error(`❌ ERROR: API URL does not contain expected IP (${expectedIp}):`, apiUrl);
         Alert.alert(
           'Configuration Error',
-          `Wrong server IP detected: ${apiUrl}\n\nExpected: http://${defaultIp}:5001\n\nPlease check your configuration.`,
+          `Wrong server IP detected: ${apiUrl}\n\nExpected: http://${expectedIp}:5001\n\nPlease check your configuration.`,
           [{ text: 'OK' }]
         );
         setLoading(false);
