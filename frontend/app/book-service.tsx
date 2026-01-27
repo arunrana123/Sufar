@@ -516,8 +516,8 @@ export default function BookServiceScreen() {
             
             {images.length > 0 && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imageList}>
-                {images.map((uri, index) => (
-                  <View key={index} style={styles.imageContainer}>
+                {images.map((uri) => (
+                  <View key={uri} style={styles.imageContainer}>
                     <Image source={{ uri }} style={styles.uploadedImage} />
                     <TouchableOpacity
                       style={styles.removeImageButton}
@@ -586,9 +586,9 @@ export default function BookServiceScreen() {
                 
                 {/* Quick Date Selection - Next 7 Days */}
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.dateScrollView}>
-                  {getNext7Days().map((date, index) => (
+                  {getNext7Days().map((date) => (
                     <TouchableOpacity
-                      key={index}
+                      key={date.toISOString()}
                       style={[
                         styles.dateCard,
                         selectedDate.toDateString() === date.toDateString() && styles.selectedDateCard
