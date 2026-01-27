@@ -63,14 +63,21 @@ export interface SocketEvents {
   // Notification events
   'notification:new': (notification: any) => void;
   'notification:read': (notificationId: string) => void;
+  'notification:deleted': (data: any) => void;
+  'notifications:cleared': (data?: any) => void;
+  'notifications:all-read': (data?: any) => void;
 
   // Worker stats events
   'worker:stats_updated': (data: { workerId: string; message?: string }) => void;
+
+  // Worker profile events
+  'worker:profile_updated': (data: { workerId: string; name?: string; email?: string; phone?: string; profileImage?: string; [key: string]: any }) => void;
 
   // Service events
   'service:updated': (service: any) => void;
   'service:created': (service: any) => void;
   'service:deleted': (serviceId: string) => void;
+  'worker:service_updated': (data: { workerId: string; services: any[] }) => void;
 
   // Document verification events
   'document:verification:updated': (data: { workerId: string; documentType: string; status: string; overallStatus?: string }) => void;
@@ -110,8 +117,9 @@ export class SocketService {
       // Use getApiUrl() from config to ensure correct IP
       const apiUrl = getApiUrl();
       console.log('✅ Initializing socket connection to:', apiUrl);
-      const defaultIp = '192.168.1.66';
-      console.log(`   Using correct IP (${defaultIp}):`, apiUrl.includes(defaultIp) || apiUrl.includes('localhost') || apiUrl.includes('10.0.2.2'));
+      // Verify IP is correct (192.168.1.66 for physical devices, localhost/10.0.2.2 for emulators)
+      const expectedIp = '192.168.1.66'; // Should match DEFAULT_API_URL in config.ts
+      console.log(`   Using correct IP (${expectedIp}):`, apiUrl.includes(expectedIp) || apiUrl.includes('localhost') || apiUrl.includes('10.0.2.2'));
       
       this.socket = io(apiUrl, {
         transports: ['websocket', 'polling'], // Fallback to polling if websocket fails
