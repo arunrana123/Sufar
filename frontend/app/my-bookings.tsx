@@ -24,6 +24,7 @@ import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { socketService } from '@/lib/SocketService';
+import { notificationSoundService } from '@/lib/NotificationSoundService';
 import { getApiUrl } from '@/lib/config';
 import { MapView, Marker, Polyline, PROVIDER_GOOGLE } from '@/components/react-native-maps';
 
@@ -184,6 +185,28 @@ export default function MyBookingsScreen() {
         
         // Check if this booking belongs to the current user
         if (updatedBooking.userId === user.id || String(updatedBooking.userId) === String(user.id)) {
+          // Find the previous booking to check status changes
+          const prevBooking = bookings.find(b => b._id === updatedBooking._id);
+          
+          // Play haptic feedback and sound for status updates
+          if (prevBooking && updatedBooking.status && updatedBooking.status !== prevBooking.status) {
+            const status = updatedBooking.status;
+            if (status === 'accepted') {
+              notificationSoundService.playNotificationSound('booking', 'accepted');
+            } else if (status === 'completed') {
+              notificationSoundService.playNotificationSound('booking', 'completed');
+            } else if (status === 'cancelled') {
+              notificationSoundService.playNotificationSound('booking', 'cancelled');
+            }
+          }
+          
+          // Play sound for payment status updates
+          if (prevBooking && updatedBooking.paymentStatus && updatedBooking.paymentStatus !== prevBooking.paymentStatus) {
+            if (updatedBooking.paymentStatus === 'paid') {
+              notificationSoundService.playNotificationSound('payment', 'paid');
+            }
+          }
+          
           // Update the specific booking in state immediately with all fields
           setBookings(prev => 
             prev.map(b => 
