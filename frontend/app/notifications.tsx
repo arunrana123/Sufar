@@ -487,7 +487,11 @@ export default function NotificationsScreen() {
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <TouchableOpacity 
             style={styles.backButton}
-            onPress={() => router.back()}
+            onPress={() => {
+              // Use replace instead of back to avoid GO_BACK error
+              // Navigate to home screen as safe fallback
+              router.replace('/home');
+            }}
           >
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
