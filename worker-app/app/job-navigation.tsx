@@ -86,6 +86,9 @@ export default function JobNavigationScreen() {
   const [totalRouteDistance, setTotalRouteDistance] = useState<number>(0);
   const previousLocationRef = useRef<any>(null);
   const routeRecalculationInterval = useRef<any>(null);
+  const [mapReady, setMapReady] = useState<boolean>(false);
+  const [canRenderChildren, setCanRenderChildren] = useState<boolean>(false);
+  const mapReadyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // ARCHITECTURE: Live GPS stored in useRef, React state only for UI updates
   const liveLocationRef = useRef<any>(null);
@@ -158,6 +161,14 @@ export default function JobNavigationScreen() {
       stopLocationTracking();
       socketService.off('booking:updated');
       socketService.off('payment:status_updated');
+      // Clear map ready timeout
+      if (mapReadyTimeoutRef.current) {
+        clearTimeout(mapReadyTimeoutRef.current);
+        mapReadyTimeoutRef.current = null;
+      }
+      // Reset map ready states
+      setMapReady(false);
+      setCanRenderChildren(false);
     };
   }, [bookingId]);
 
@@ -350,7 +361,11 @@ export default function JobNavigationScreen() {
 
     try {
       setRouteError(null);
-      console.log(' Fetching route from Mapbox...');
+      console.log('🗺️ [MAPBOX REQUEST] Fetching route from Mapbox...', {
+        origin: `${origin.latitude.toFixed(6)}, ${origin.longitude.toFixed(6)}`,
+        destination: `${destination.latitude.toFixed(6)}, ${destination.longitude.toFixed(6)}`,
+        timestamp: new Date().toISOString(),
+      });
       const route = await getDirections(
         [origin.longitude, origin.latitude],
         [destination.longitude, destination.latitude],
@@ -360,6 +375,13 @@ export default function JobNavigationScreen() {
       if (!route || !route.geometry) {
         throw new Error('Invalid route data received from Mapbox');
       }
+      
+      console.log('✅ [MAPBOX SUCCESS] Route fetched:', {
+        distance: route.distance ? `${(route.distance / 1000).toFixed(2)} km` : 'N/A',
+        duration: route.duration ? `${Math.ceil(route.duration / 60)} min` : 'N/A',
+        points: route.geometry?.coordinates?.length || 0,
+        requestTime: new Date().toISOString(),
+      });
       
       setRouteData(route);
       const routeDistanceKm = (route.distance || 0) / 1000; // Convert to km
@@ -1015,13 +1037,40 @@ export default function JobNavigationScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <SafeAreaView style={styles.safe}>
+    <View style={styles.container} collapsable={false}>
+      <SafeAreaView style={styles.safe} collapsable={false}>
         {/* Map - Using react-native-maps only, Mapbox Directions API for routes */}
         {mapsAvailable && RNMapView ? (
           <RNMapView
+            key="map-component-stable-never-unmount"
             ref={mapRef}
             style={styles.map}
+            removeClippedSubviews={false}
+            collapsable={false}
+            onMapReady={() => {
+              console.log('✅ Map ready in job-navigation');
+              setMapReady(true);
+              
+              // CRITICAL FIX: Longer delay for lower-end Android devices (Samsung A70, Realme 14C)
+              if (Platform.OS === 'android') {
+                if (mapReadyTimeoutRef.current) {
+                  clearTimeout(mapReadyTimeoutRef.current);
+                }
+                
+                // Universal delay: Works on ALL Android devices (low-end to high-end)
+                // Use 2 frames + 500ms delay - balanced for all devices
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    mapReadyTimeoutRef.current = setTimeout(() => {
+                      console.log('✅ Map children can now render safely (universal delay)');
+                      setCanRenderChildren(true);
+                    }, 500);
+                  });
+                });
+              } else {
+                setCanRenderChildren(true);
+              }
+            }}
             onRegionChangeComplete={(region: any) => {
               // Prevent unnecessary updates
               if (navStatus !== 'navigating') {
@@ -1040,62 +1089,62 @@ export default function JobNavigationScreen() {
               longitudeDelta: 0.05,
             }}
           >
-            {/* Worker marker - Always mounted, coordinate updates via props */}
-            <RNMarker
-              key="worker-marker"
-              identifier="worker-marker"
-              coordinate={workerLocation ? {
-                latitude: workerLocation.latitude,
-                longitude: workerLocation.longitude,
-              } : { latitude: 0, longitude: 0 }}
-              title="Your Location"
-              description={navStatus === 'navigating' ? 'Navigating...' : 'Worker Location'}
-              anchor={{ x: 0.5, y: 0.5 }}
-              flat={navStatus === 'navigating'}
-              rotation={0}
-            >
-              <View style={[
-                styles.workerMarkerContainer,
-                navStatus === 'navigating' && styles.workerMarkerNavigating
-              ]}>
-                <Ionicons 
-                  name={navStatus === 'navigating' ? 'navigate' : 'person'} 
-                  size={navStatus === 'navigating' ? 28 : 24} 
-                  color="#fff" 
-                />
-              </View>
-            </RNMarker>
+            {/* UNIVERSAL FIX: Use native markers (pinColor) for maximum compatibility across all devices/OS */}
+            {/* Render markers only when map is ready - works on ALL devices (Android/iOS, any model) */}
+            {mapReady && canRenderChildren && (
+              <>
+                {/* Worker marker - Use native pinColor for universal compatibility */}
+                {workerLocation && workerLocation.latitude !== 0 && workerLocation.longitude !== 0 && (
+                  <RNMarker
+                    key="worker-marker-universal"
+                    identifier="worker-marker"
+                    coordinate={{
+                      latitude: workerLocation.latitude,
+                      longitude: workerLocation.longitude,
+                    }}
+                    title="Your Location"
+                    description={navStatus === 'navigating' ? 'Navigating...' : 'Worker Location'}
+                    pinColor={navStatus === 'navigating' ? '#2563EB' : '#10B981'}
+                    anchor={{ x: 0.5, y: 1 }}
+                    flat={false}
+                    tracksViewChanges={false}
+                  />
+                )}
 
-            {/* Customer marker - Always mounted, coordinate updates via props */}
-            <RNMarker
-              key="customer-marker"
-              identifier="customer-marker"
-              coordinate={userLocation ? {
-                latitude: userLocation.latitude,
-                longitude: userLocation.longitude,
-              } : { latitude: 0, longitude: 0 }}
-              title="Customer Location"
-              description={booking.location?.address || 'Destination'}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.customerMarkerContainer}>
-                <Ionicons name="home" size={24} color="#fff" />
-              </View>
-            </RNMarker>
+                {/* Customer marker - Use native pinColor for universal compatibility */}
+                {userLocation && userLocation.latitude !== 0 && userLocation.longitude !== 0 && (
+                  <RNMarker
+                    key="customer-marker-universal"
+                    identifier="customer-marker"
+                    coordinate={{
+                      latitude: userLocation.latitude,
+                      longitude: userLocation.longitude,
+                    }}
+                    title="Customer Location"
+                    description={booking.location?.address || 'Destination'}
+                    pinColor="#DC2626"
+                    anchor={{ x: 0.5, y: 1 }}
+                    tracksViewChanges={false}
+                  />
+                )}
 
-            {/* Route Line - Display route from Mapbox Directions API on react-native-maps Polyline */}
-            <RNPolyline
-              key="route-polyline"
-              identifier="route-polyline"
-              coordinates={memoizedRouteCoordinates}
-              strokeColor={navStatus === 'navigating' ? '#2563EB' : '#9CA3AF'}
-              strokeWidth={memoizedRouteCoordinates.length > 0 ? (navStatus === 'navigating' ? 8 : 6) : 0}
-              lineCap="round"
-              lineJoin="round"
-              geodesic={false}
-              tappable={false}
-              zIndex={1}
-            />
+                {/* Route Line - Mapbox route visualization on road - ALWAYS render when route exists */}
+                {memoizedRouteCoordinates.length > 0 && (
+                  <RNPolyline
+                    key={`route-polyline-${memoizedRouteCoordinates.length}`}
+                    identifier="route-polyline"
+                    coordinates={memoizedRouteCoordinates}
+                    strokeColor={navStatus === 'navigating' ? '#2563EB' : '#9CA3AF'}
+                    strokeWidth={Platform.OS === 'ios' ? 6 : (navStatus === 'navigating' ? 8 : 6)}
+                    lineCap="round"
+                    lineJoin="round"
+                    geodesic={false}
+                    tappable={false}
+                    zIndex={1}
+                  />
+                )}
+              </>
+            )}
             
             {/* Show loading indicator only when route is being calculated */}
             {workerLocation && userLocation && !routeData && navStatus === 'navigating' && (
