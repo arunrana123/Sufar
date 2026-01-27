@@ -160,18 +160,24 @@ router.post('/', async (req: Request, res: Response) => {
             }
             
             // Calculate badge priority (higher = better)
-            // Gold (1200+): 3, Silver (500-1199): 2, Iron (0-499): 1
+            // Platinum (2000+): 4, Gold (1200-1999): 3, Silver (500-1199): 2, Iron (0-499): 1
             const completedJobs = worker.completedJobs || 0;
+            const workerBadge = worker.badge || 'Iron';
             let badgePriority = 1; // Iron
-            if (completedJobs >= 1200) {
+            if (workerBadge === 'Platinum' || completedJobs >= 2000) {
+              badgePriority = 4; // Platinum
+            } else if (workerBadge === 'Gold' || completedJobs >= 1200) {
               badgePriority = 3; // Gold
-            } else if (completedJobs >= 500) {
+            } else if (workerBadge === 'Silver' || completedJobs >= 500) {
               badgePriority = 2; // Silver
             }
             
-            // Combine badge priority with rating for overall priority score
+            // Use rankScore if available, otherwise calculate from badge and rating
             const rating = worker.rating || 0;
-            const priorityScore = (badgePriority * 100) + (rating * 10); // Badge is more important than rating
+            const rankScore = worker.rankScore || 0;
+            const priorityScore = rankScore > 0 
+              ? rankScore 
+              : (badgePriority * 100) + (rating * 10); // Badge is more important than rating
             
             return { worker, distance, badgePriority, priorityScore };
           })
@@ -502,12 +508,39 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
             const totalRating = ratedBookings.reduce((sum, b) => sum + (b.rating || 0), 0);
             const avgRating = ratedBookings.length > 0 ? totalRating / ratedBookings.length : 0;
             
-            // Update worker with real data
+            // Calculate badge based on completed jobs
+            let badge: 'Iron' | 'Silver' | 'Gold' | 'Platinum' = 'Iron';
+            if (completedBookingsCount >= 2000) {
+              badge = 'Platinum';
+            } else if (completedBookingsCount >= 1200) {
+              badge = 'Gold';
+            } else if (completedBookingsCount >= 500) {
+              badge = 'Silver';
+            }
+            
+            // Calculate rankScore: (rating * 20) + (reviews * 2) + (completedJobs * 0.5)
+            const totalReviews = ratedBookings.length;
+            const rankScore = (avgRating * 20) + (totalReviews * 2) + (completedBookingsCount * 0.5);
+            
+            // Calculate total earnings from completed paid bookings
+            const paidBookings = await Booking.find({
+              workerId: workerId,
+              status: 'completed',
+              paymentStatus: 'paid',
+            });
+            const totalEarnings = paidBookings.reduce((sum, b) => sum + (b.price || 0), 0);
+            
+            // Update worker with all stats (reward points are updated separately when payment is confirmed)
             await WorkerUser.findByIdAndUpdate(workerId, {
               status: 'available',
               currentBookingId: null,
               completedJobs: completedBookingsCount,
+              serviceJobsCompleted: completedBookingsCount, // Service jobs
               rating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
+              totalReviews: totalReviews,
+              badge: badge,
+              rankScore: Math.round(rankScore * 10) / 10, // Round to 1 decimal
+              totalEarnings: totalEarnings,
             });
             
             console.log('✅ Worker stats updated:', {
@@ -682,14 +715,30 @@ router.patch('/:id/review', async (req: Request, res: Response) => {
         ? workerBookings.reduce((sum, b) => sum + (b.rating || 0), 0) / totalReviews 
         : 0;
       
-      // Calculate worker rank based on rating and total reviews
-      // Higher rating + more reviews = higher rank priority
-      const rankScore = (avgRating * 20) + (totalReviews * 2); // Max 100 from rating + bonus for reviews
+      // Calculate badge based on completed jobs
+      const completedJobs = await Booking.countDocuments({
+        workerId: workerId,
+        status: 'completed',
+      });
+      
+      let badge: 'Iron' | 'Silver' | 'Gold' | 'Platinum' = 'Iron';
+      if (completedJobs >= 2000) {
+        badge = 'Platinum';
+      } else if (completedJobs >= 1200) {
+        badge = 'Gold';
+      } else if (completedJobs >= 500) {
+        badge = 'Silver';
+      }
+      
+      // Calculate rankScore: (rating * 20) + (reviews * 2) + (completedJobs * 0.5)
+      const rankScore = (avgRating * 20) + (totalReviews * 2) + (completedJobs * 0.5);
       
       await WorkerUser.findByIdAndUpdate(workerId, { 
         rating: Math.round(avgRating * 10) / 10, // Round to 1 decimal
         totalReviews: totalReviews,
-        rankScore: rankScore,
+        rankScore: Math.round(rankScore * 10) / 10, // Round to 1 decimal
+        badge: badge,
+        completedJobs: completedJobs,
       });
       
       console.log('✅ Worker profile updated:', {
@@ -819,7 +868,7 @@ router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
         }
       }
       
-      // Award reward points
+      // Award reward points to user
       if (pointsEarned > 0) {
         const User = (await import('../models/User.model')).default;
         const user = await User.findById(booking.userId);
@@ -836,6 +885,44 @@ router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
               userId: booking.userId,
               pointsEarned,
               totalPoints: newPoints,
+              bookingId: id,
+            });
+          }
+        }
+      }
+      
+      // Award reward points to worker: 10 points per job + 1 point per Rs. 100 earned
+      if (booking.workerId) {
+        const worker = await WorkerUser.findById(booking.workerId);
+        if (worker) {
+          let workerPoints = 10; // Base points per completed job
+          if (amountPaid) {
+            workerPoints += Math.floor(amountPaid / 100); // 1 point per Rs. 100
+          }
+          
+          const currentWorkerPoints = worker.rewardPoints || 0;
+          const newWorkerPoints = currentWorkerPoints + workerPoints;
+          
+          // Update worker earnings and reward points
+          const currentEarnings = worker.totalEarnings || 0;
+          const newEarnings = currentEarnings + amountPaid;
+          
+          await WorkerUser.findByIdAndUpdate(booking.workerId, {
+            rewardPoints: newWorkerPoints,
+            totalEarnings: newEarnings,
+          });
+          
+          console.log(`🎁 Awarded ${workerPoints} reward points to worker ${booking.workerId} (Total: ${newWorkerPoints})`);
+          console.log(`💰 Updated worker earnings: Rs. ${newEarnings}`);
+          
+          // Emit worker reward points update
+          const io = req.app.get('io');
+          if (io) {
+            io.to(String(booking.workerId)).emit('worker:reward_points_updated', {
+              workerId: booking.workerId,
+              pointsEarned: workerPoints,
+              totalPoints: newWorkerPoints,
+              earningsUpdated: newEarnings,
               bookingId: id,
             });
           }
