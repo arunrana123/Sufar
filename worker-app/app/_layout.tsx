@@ -117,6 +117,7 @@ function RootLayoutNav() {
           <Stack.Screen name="rewards" options={{ headerShown: false }} />
           <Stack.Screen name="settings" options={{ headerShown: false }} />
           <Stack.Screen name="security" options={{ headerShown: false }} />
+          <Stack.Screen name="order-delivery-tracking" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         {/* Global booking alert - shows on ANY screen when new request arrives */}
