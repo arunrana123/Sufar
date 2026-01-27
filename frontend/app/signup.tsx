@@ -16,9 +16,11 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getApiUrl } from '@/lib/config';
+import UserOnboarding from '@/components/UserOnboarding';
 
 export default function SignupScreen() {
   const [username, setUsername] = useState('');
@@ -34,6 +36,7 @@ export default function SignupScreen() {
   const [emailValid, setEmailValid] = useState<boolean | null>(null);
   const [passwordStrength, setPasswordStrength] = useState<'weak' | 'medium' | 'strong' | null>(null);
   const [passwordsMatch, setPasswordsMatch] = useState<boolean | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const { theme } = useTheme();
   const { login } = useAuth();
 
@@ -136,7 +139,15 @@ export default function SignupScreen() {
         };
         
         await login(userData);
-        router.replace('/home');
+        
+        // Check if user has completed onboarding
+        const hasCompletedOnboarding = await AsyncStorage.getItem('hasCompletedOnboarding');
+        if (!hasCompletedOnboarding) {
+          // Show onboarding for new users
+          setShowOnboarding(true);
+        } else {
+          router.replace('/home');
+        }
       } else {
         Alert.alert('Signup Failed', data.message || 'Failed to create account');
       }
@@ -149,10 +160,21 @@ export default function SignupScreen() {
     }
   };
 
+  const handleOnboardingComplete = async () => {
+    await AsyncStorage.setItem('hasCompletedOnboarding', 'true');
+    setShowOnboarding(false);
+    router.replace('/home');
+  };
+
   const isValidEmail = (email: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
   };
+
+  // Show onboarding for new users
+  if (showOnboarding) {
+    return <UserOnboarding onComplete={handleOnboardingComplete} />;
+  }
 
   return (
     <KeyboardAvoidingView
