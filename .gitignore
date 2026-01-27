@@ -1,1 +1,40 @@
-backend/uploads/
+# Expo
+.expo/
+dist/
+web-build/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build
+*.log
+*.tgz
+*.tar.gz
+
+# Metro
+.metro-health-check*
+
+# Watchman
+.watchmanconfig
+
+# Temporary files
+*.tmp
+*.temp
