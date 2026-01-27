@@ -3,13 +3,13 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
-    "start": "expo start",
-    "start:tunnel": "expo start --tunnel",
-    "start:ios": "expo start --ios",
+    "start": "EXPO_NO_DOTENV=1 expo start --port 8082",
+    "start:tunnel": "expo start --tunnel --port 8082",
+    "start:ios": "expo start --ios --port 8082",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web",
+    "web": "expo start --web --port 8082",
     "lint": "expo lint",
     "prebuild:ios": "expo prebuild --platform ios",
     "prebuild:android": "expo prebuild --platform android"
