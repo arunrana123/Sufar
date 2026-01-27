@@ -22,6 +22,13 @@ export interface IWorkerUser extends Document {
   rating: number;
   totalJobs: number;
   completedJobs: number;
+  totalReviews: number;
+  rankScore: number;
+  badge: 'Iron' | 'Silver' | 'Gold' | 'Platinum';
+  rewardPoints: number;
+  totalEarnings: number;
+  deliveryJobsCompleted?: number; // For delivery workers
+  serviceJobsCompleted?: number; // For service workers
   availableAfter?: Date;
   profileImage?: string;
   googleId?: string;
@@ -77,6 +84,13 @@ const WorkerUserSchema: Schema = new Schema({
   rating: { type: Number, default: 0 },
   totalJobs: { type: Number, default: 0 },
   completedJobs: { type: Number, default: 0 },
+  totalReviews: { type: Number, default: 0 },
+  rankScore: { type: Number, default: 0 },
+  badge: { type: String, enum: ['Iron', 'Silver', 'Gold', 'Platinum'], default: 'Iron' },
+  rewardPoints: { type: Number, default: 0 },
+  totalEarnings: { type: Number, default: 0 },
+  deliveryJobsCompleted: { type: Number, default: 0 }, // For delivery workers
+  serviceJobsCompleted: { type: Number, default: 0 }, // For service workers
   availableAfter: { type: Date },
   profileImage: { type: String },
   googleId: { type: String, unique: true, sparse: true }, // Google Sign-In ID
