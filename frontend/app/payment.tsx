@@ -21,6 +21,9 @@ export default function PaymentScreen() {
   const { user } = useAuth();
   const params = useLocalSearchParams();
   const bookingId = params.bookingId as string;
+  const orderId = params.orderId as string;
+  const orderType = params.orderType as string || 'service';
+  const orderData = params.orderData ? JSON.parse(params.orderData as string) : null;
   const amount = parseFloat(params.amount as string) || 0;
   const serviceTitle = params.serviceTitle as string;
   
@@ -136,7 +139,10 @@ export default function PaymentScreen() {
       if (selectedMethod !== 'cash') {
         const paymentData: PaymentRequest = {
           amount: useRewardPoints ? finalAmount : amount,
-          bookingId,
+          bookingId: bookingId || orderId,
+          orderId: orderId,
+          orderType: orderType as 'service' | 'market',
+          orderData: orderData,
           serviceName: serviceTitle,
           customerName: user.firstName + ' ' + user.lastName,
           customerEmail: user.email,
@@ -157,6 +163,24 @@ export default function PaymentScreen() {
           case 'phonepe':
             paymentResult = await paymentService.initiatePhonePePayment(paymentData);
             break;
+          case 'phonepay':
+            paymentResult = await paymentService.initiatePhonePayStripe({
+              ...paymentData,
+              walletProvider: 'phonepay',
+            });
+            break;
+          case 'esewa-stripe':
+            paymentResult = await paymentService.initiateEsewaStripe({
+              ...paymentData,
+              walletProvider: 'esewa',
+            });
+            break;
+          case 'stripe':
+            paymentResult = await paymentService.initiateStripeCard({
+              ...paymentData,
+              walletProvider: 'stripe',
+            });
+            break;
           default:
             throw new Error('Invalid payment method');
         }
@@ -171,23 +195,58 @@ export default function PaymentScreen() {
                 onPress: () => {
                   // In a real app, you would open the payment URL
                   // For now, we'll simulate successful payment
-                  setTimeout(() => {
-                    Alert.alert(
-                      'Payment Successful!',
-                      'Your payment has been processed successfully.',
-                      [
-                        {
-                          text: 'Leave Review',
-                          onPress: () => router.replace({
-                            pathname: '/review',
-                            params: {
-                              bookingId,
-                              serviceTitle,
+                  setTimeout(async () => {
+                    if (orderType === 'market' && orderData) {
+                      // Create order after payment
+                      const apiUrl = getApiUrl();
+                      const orderResponse = await fetch(`${apiUrl}/api/orders`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          ...orderData,
+                          paymentStatus: 'paid',
+                          transactionId: paymentResult.paymentId,
+                        }),
+                      });
+                      
+                      if (orderResponse.ok) {
+                        const orderData_result = await orderResponse.json();
+                        Alert.alert(
+                          'Order Placed!',
+                          'Your order has been placed successfully.',
+                          [
+                            {
+                              text: 'Track Order',
+                              onPress: () => router.replace({
+                                pathname: '/order-tracking',
+                                params: { orderId: orderData_result.orderId || orderData_result._id },
+                              }),
                             },
-                          }),
-                        },
-                      ]
-                    );
+                            {
+                              text: 'OK',
+                              onPress: () => router.replace('/home'),
+                            },
+                          ]
+                        );
+                      }
+                    } else {
+                      Alert.alert(
+                        'Payment Successful!',
+                        'Your payment has been processed successfully.',
+                        [
+                          {
+                            text: 'Leave Review',
+                            onPress: () => router.replace({
+                              pathname: '/review',
+                              params: {
+                                bookingId,
+                                serviceTitle,
+                              },
+                            }),
+                          },
+                        ]
+                      );
+                    }
                   }, 2000);
                 },
               },
@@ -211,33 +270,73 @@ export default function PaymentScreen() {
           paymentBody.finalAmount = finalAmount;
         }
         
-        const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/payment`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(paymentBody),
-        });
+        let response;
+        if (orderType === 'market' && orderData) {
+          // Market order payment
+          response = await fetch(`${apiUrl}/api/orders`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ...orderData,
+              paymentStatus: 'paid',
+              transactionId: 'CASH_PAYMENT',
+              rewardPointsUsed: useRewardPoints ? pointsToUse : 0,
+              discountAmount: discountAmount,
+              finalAmount: finalAmount,
+            }),
+          });
+        } else {
+          // Service booking payment
+          response = await fetch(`${apiUrl}/api/bookings/${bookingId}/payment`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(paymentBody),
+          });
+        }
 
         const data = await response.json();
 
         if (response.ok) {
-          Alert.alert(
-            'Payment Successful!',
-            'Your payment has been processed successfully.',
-            [
-              {
-                text: 'Leave Review',
-                onPress: () => router.replace({
-                  pathname: '/review',
-                  params: {
-                    bookingId,
-                    serviceTitle,
-                  },
-                }),
-              },
-            ]
-          );
+          if (orderType === 'market') {
+            Alert.alert(
+              'Order Placed!',
+              'Your order has been placed successfully.',
+              [
+                {
+                  text: 'Track Order',
+                  onPress: () => router.replace({
+                    pathname: '/order-tracking',
+                    params: { orderId: data.orderId || data._id },
+                  }),
+                },
+                {
+                  text: 'OK',
+                  onPress: () => router.replace('/home'),
+                },
+              ]
+            );
+          } else {
+            Alert.alert(
+              'Payment Successful!',
+              'Your payment has been processed successfully.',
+              [
+                {
+                  text: 'Leave Review',
+                  onPress: () => router.replace({
+                    pathname: '/review',
+                    params: {
+                      bookingId,
+                      serviceTitle,
+                    },
+                  }),
+                },
+              ]
+            );
+          }
         } else {
           Alert.alert('Payment Failed', data.message || 'Failed to process payment');
         }
