@@ -31,6 +31,7 @@ import { socketService } from '@/lib/SocketService';
 import { router } from 'expo-router';
 import ToastNotification from '@/components/ToastNotification';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notificationSoundService } from '@/lib/NotificationSoundService';
 
 interface Booking {
   _id: string;
@@ -56,12 +57,45 @@ interface Booking {
   workerId?: string;
 }
 
+interface MarketOrder {
+  _id: string;
+  orderId: string;
+  userId: string;
+  userInfo?: {
+    firstName: string;
+    lastName: string;
+    email?: string;
+    phone?: string;
+  };
+  items: Array<{
+    productId: string;
+    name: string;
+    label?: string;
+    quantity: number;
+    price: number;
+  }>;
+  status: 'pending' | 'confirmed' | 'preparing' | 'assigned' | 'picked' | 'on_way' | 'delivered' | 'cancelled';
+  deliveryBoy?: {
+    id: string;
+    name: string;
+    phone: string;
+  };
+  total: number;
+  paymentMethod: 'online' | 'cod';
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';
+  deliveryAddress: string;
+  createdAt: string;
+  type?: 'delivery'; // To distinguish from bookings
+}
+
 export default function RequestsScreen() {
   const { worker } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [deliveryOrders, setDeliveryOrders] = useState<MarketOrder[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [incomingBooking, setIncomingBooking] = useState<any | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [selectedOrder, setSelectedOrder] = useState<MarketOrder | null>(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
   
   // Track accepted and rejected requests
@@ -317,61 +351,187 @@ export default function RequestsScreen() {
         const data = await response.json();
         console.log('✅ Bookings fetched successfully:', data.length, 'bookings');
         console.log('📋 Booking IDs:', data.map((b: any) => b._id));
+        console.log('📋 Booking statuses:', data.map((b: any) => ({ id: b._id, status: b.status, workerId: b.workerId })));
         
-        // Filter bookings to only show those for VERIFIED service categories
+        // Filter bookings based on status and verification
         const filteredBookings = data.filter((booking: any) => {
-          if (!booking.serviceCategory || !worker?.serviceCategories) {
-            return false;
+          // For accepted bookings, check if this worker is assigned
+          if (booking.status === 'accepted' || booking.status === 'in_progress') {
+            const bookingWorkerId = booking.workerId ? String(booking.workerId) : null;
+            const currentWorkerId = String(worker.id);
+            
+            // Only show accepted bookings assigned to this worker
+            if (bookingWorkerId !== currentWorkerId) {
+              console.log(`⚠️ Filtering out accepted booking not assigned to this worker: ${booking._id} (WorkerId: ${bookingWorkerId}, Current: ${currentWorkerId})`);
+              return false;
+            }
+            
+            // For accepted bookings, still check verification if service category exists
+            if (booking.serviceCategory && worker?.serviceCategories) {
+              const categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+              const isServiceVerified = categoryStatus === 'verified';
+              
+              if (!isServiceVerified) {
+                console.log(`⚠️ Filtering out accepted booking for unverified service: ${booking.serviceCategory}`);
+                // Still show it but log a warning - accepted bookings should be shown even if verification is pending
+              }
+            }
+            
+            return true;
           }
           
-          // Check if worker has this service category
-          const bookingCategory = booking.serviceCategory.toLowerCase().trim();
-          const hasCategory = worker.serviceCategories.some(
-            (cat: string) => cat.toLowerCase().trim() === bookingCategory
-          );
-          
-          if (!hasCategory) {
-            return false;
+          // For pending bookings, check verification
+          if (booking.status === 'pending') {
+            if (!booking.serviceCategory || !worker?.serviceCategories) {
+              return false;
+            }
+            
+            // Check if worker has this service category
+            const bookingCategory = booking.serviceCategory.toLowerCase().trim();
+            const hasCategory = worker.serviceCategories.some(
+              (cat: string) => cat.toLowerCase().trim() === bookingCategory
+            );
+            
+            if (!hasCategory) {
+              return false;
+            }
+            
+            // CRITICAL: Only show pending bookings for VERIFIED service categories
+            const categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+            const isServiceVerified = categoryStatus === 'verified';
+            
+            if (!isServiceVerified) {
+              console.log(`⚠️ Filtering out pending booking for unverified service: ${booking.serviceCategory} (Status: ${categoryStatus})`);
+              return false;
+            }
+            
+            return true;
           }
           
-          // CRITICAL: Only show bookings for VERIFIED service categories
-          const categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
-          const isServiceVerified = categoryStatus === 'verified';
-          
-          if (!isServiceVerified) {
-            console.log(`⚠️ Filtering out booking for unverified service: ${booking.serviceCategory} (Status: ${categoryStatus})`);
-            return false;
+          // For other statuses (completed, cancelled), show if assigned to this worker
+          if (booking.workerId) {
+            const bookingWorkerId = String(booking.workerId);
+            const currentWorkerId = String(worker.id);
+            return bookingWorkerId === currentWorkerId;
           }
           
-          return true;
+          return false;
         });
         
-        console.log('✅ Filtered bookings (verified services only):', filteredBookings.length, 'out of', data.length);
-        // Store filtered bookings (only verified services) in state
+        console.log('✅ Filtered bookings:', filteredBookings.length, 'out of', data.length);
+        console.log('📋 Filtered booking statuses:', filteredBookings.map((b: any) => ({ id: b._id, status: b.status })));
+        
+        // Store filtered bookings in state
         setBookings(filteredBookings);
         
         // Update stats after fetching bookings
         await loadRequestStats();
       } else {
-        const errorText = await response.text();
+        const errorText = await response.text().catch(() => 'Unknown error');
         console.error('❌ Failed to fetch bookings:', response.status, errorText);
+        // Set empty array on error to prevent crashes
+        setBookings([]);
       }
     } catch (error) {
       console.error('❌ Error fetching bookings:', error);
+      // Set empty array on error to prevent crashes
+      setBookings([]);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  // Check if worker has delivery service category
+  const hasDeliveryService = (): boolean => {
+    if (!worker?.serviceCategories || !Array.isArray(worker.serviceCategories)) {
+      return false;
+    }
+    
+    // Check if worker has delivery-related service categories (case-insensitive)
+    const deliveryCategories = ['delivery', 'delivery boy', 'delivery service', 'courier', 'food delivery'];
+    const workerCategories = worker.serviceCategories.map((cat: string) => cat.toLowerCase().trim());
+    
+    return deliveryCategories.some(deliveryCat => 
+      workerCategories.some(workerCat => workerCat.includes(deliveryCat) || deliveryCat.includes(workerCat))
+    );
+  };
+
+  // Fetch delivery orders assigned to this worker
+  const fetchDeliveryOrders = async () => {
+    try {
+      if (!worker?.id) {
+        console.log('⚠️ Cannot fetch delivery orders: No worker ID');
+        setDeliveryOrders([]);
+        return;
+      }
+
+      // Only fetch delivery orders if worker has delivery service category
+      if (!hasDeliveryService()) {
+        console.log('ℹ️ Worker does not have delivery service category - skipping delivery orders fetch');
+        setDeliveryOrders([]);
+        return;
+      }
+
+      const apiUrl = getApiUrl();
+      console.log('📦 Fetching delivery orders for worker:', worker.id);
+      console.log('📋 Worker service categories:', worker.serviceCategories);
+      
+      const response = await fetch(`${apiUrl}/api/orders/delivery/${worker.id}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Handle both response formats: { success: true, orders: [...] } or direct array
+        const orders = data.orders || (Array.isArray(data) ? data : []);
+        
+        console.log('✅ Delivery orders fetched:', orders.length);
+        
+        // Filter only assigned/pending/on_way delivery orders (not delivered/cancelled)
+        const activeOrders = orders.filter((order: any) => 
+          order.status && 
+          order.status !== 'delivered' && 
+          order.status !== 'cancelled'
+        );
+        
+        setDeliveryOrders(activeOrders);
+      } else if (response.status === 404) {
+        // 404 means no orders found - this is OK, not an error
+        console.log('ℹ️ No delivery orders found for this worker (404)');
+        setDeliveryOrders([]);
+      } else {
+        // Only log error for actual failures (not 404)
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.warn('⚠️ Failed to fetch delivery orders:', response.status, errorText);
+        // Set empty array on error to prevent crashes - worker is still ready to receive requests
+        setDeliveryOrders([]);
+      }
+    } catch (error: any) {
+      // Network errors or other exceptions - don't show error, just log and set empty array
+      console.warn('⚠️ Error fetching delivery orders (non-critical):', error?.message || error);
+      // Set empty array on error to prevent crashes - worker is still ready to receive requests
+      setDeliveryOrders([]);
     }
   };
 
   useEffect(() => {
     if (worker?.id) {
       console.log('🚀 Setting up requests page for worker:', worker.id);
+      console.log('📋 Worker service categories:', worker.serviceCategories);
+      console.log('✅ Worker verification status:', worker.categoryVerificationStatus);
       
       // Load request stats
       loadRequestStats();
       
       // Initial fetch
       fetchBookings();
+      
+      // Only fetch delivery orders if worker has delivery service
+      if (hasDeliveryService()) {
+        fetchDeliveryOrders();
+      } else {
+        console.log('ℹ️ Worker does not have delivery service - skipping delivery orders');
+        setDeliveryOrders([]);
+      }
       
       // Connect to socket for real-time updates
       console.log('🔌 Connecting to socket as worker:', worker.id);
@@ -445,6 +605,11 @@ export default function RequestsScreen() {
           // Only show request if worker has the category AND it's verified
           // Unverified workers should NOT receive job requests
           if (hasServiceCategory && isServiceVerified) {
+            // IMMEDIATELY play notification sound and vibrate (checking settings)
+            if (worker?.id) {
+              notificationSoundService.playNotificationSound('booking', 'new', worker.id);
+            }
+            
             // IMMEDIATELY add to state (optimistic update)
             setBookings(prevBookings => {
               // Check if booking already exists
@@ -582,6 +747,51 @@ export default function RequestsScreen() {
             }, 500);
           }
         });
+
+        // Listen for delivery order assignments (only if worker has delivery service)
+        const handleDeliveryAssignment = (data: any) => {
+          if (!hasDeliveryService()) {
+            console.log('ℹ️ Delivery assignment received but worker does not have delivery service - ignoring');
+            return;
+          }
+          
+          console.log('🚚 Delivery assignment received in requests:', data);
+          if (data.deliveryBoy?.id === worker.id || data.deliveryBoyId === worker.id || 
+              (data.order && data.order.deliveryBoy?.id === worker.id)) {
+            console.log('✅ New delivery order assigned to this worker');
+            // Play alert for new delivery assignment
+            playRequestAlert();
+            // Refresh delivery orders
+            setTimeout(() => {
+              fetchDeliveryOrders();
+            }, 500);
+            showToast(
+              `New delivery order assigned: ${data.order?.orderId || 'Order'}`,
+              'Delivery Assignment',
+              'info'
+            );
+          }
+        };
+
+        // Listen for order status updates (only if worker has delivery service)
+        const handleOrderStatusUpdate = (data: any) => {
+          if (!hasDeliveryService()) {
+            return;
+          }
+          
+          console.log('📦 Order status updated in requests:', data);
+          if (data.orderId) {
+            setTimeout(() => {
+              fetchDeliveryOrders();
+            }, 500);
+          }
+        };
+
+        // Set up delivery order listeners (using any to bypass type checking)
+        const socketAny = socketService as any;
+        socketAny.on('delivery:new_assignment', handleDeliveryAssignment);
+        socketAny.on('order:status_updated', handleOrderStatusUpdate);
+        socketAny.on('order:delivery_assigned', handleDeliveryAssignment);
         
         console.log('✅ All socket listeners set up successfully');
       };
@@ -596,6 +806,10 @@ export default function RequestsScreen() {
       socketService.off('booking:cancelled');
       socketService.off('booking:updated');
       socketService.off('booking:accepted');
+      const socketAny = socketService as any;
+      socketAny.off('delivery:new_assignment');
+      socketAny.off('order:status_updated');
+      socketAny.off('order:delivery_assigned');
       // Stop any playing sounds when component unmounts
       stopRequestAlert();
     };
@@ -604,10 +818,43 @@ export default function RequestsScreen() {
   const onRefresh = () => {
     setRefreshing(true);
     fetchBookings(true);
+    
+    // Only fetch delivery orders if worker has delivery service
+    if (hasDeliveryService()) {
+      fetchDeliveryOrders();
+    } else {
+      setDeliveryOrders([]);
+    }
+  };
+
+  // Handle accepting delivery order (navigate to tracking)
+  const handleAcceptDeliveryOrder = async (orderId: string) => {
+    // INSTANTLY stop vibration and sound when accepting
+    stopRequestAlert();
+    
+    // Also cancel any ongoing vibration
+    if (Platform.OS !== 'web') {
+      Vibration.cancel();
+    }
+    
+    // Play success sound
+    if (worker?.id) {
+      notificationSoundService.playNotificationSound('booking', 'accepted', worker.id);
+    }
+    
+    console.log('🚚 Accepting delivery order:', orderId);
+    // Navigate directly to order tracking screen
+    router.push({
+      pathname: '/order-delivery-tracking',
+      params: { orderId: String(orderId) },
+    });
   };
 
   const pendingBookings = bookings.filter(b => b.status === 'pending');
-  const acceptedBookings = bookings.filter(b => b.status === 'accepted');
+  const acceptedBookings = bookings.filter(b => 
+    (b.status === 'accepted' || b.status === 'in_progress') && 
+    (b.workerId === worker?.id || String(b.workerId) === String(worker?.id))
+  );
 
   // Update accepted count in real-time when bookings change
   useEffect(() => {
@@ -654,6 +901,14 @@ export default function RequestsScreen() {
 
   const handleAccept = async (bookingId: string) => {
     try {
+      // INSTANTLY stop vibration and sound when accepting
+      stopRequestAlert();
+      
+      // Also cancel any ongoing vibration
+      if (Platform.OS !== 'web') {
+        Vibration.cancel();
+      }
+      
       const apiUrl = getApiUrl();
       const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/accept`, {
         method: 'PATCH',
@@ -668,6 +923,11 @@ export default function RequestsScreen() {
       if (response.ok) {
         const booking = await response.json();
         console.log('✅ Booking accepted successfully:', booking._id);
+        
+        // Play success sound
+        if (worker?.id) {
+          notificationSoundService.playNotificationSound('booking', 'accepted', worker.id);
+        }
         
         // Update booking in state immediately for real-time UI update
         setBookings(prevBookings =>
@@ -1004,8 +1264,75 @@ export default function RequestsScreen() {
             </View>
           )}
 
+          {/* Delivery Orders */}
+          {deliveryOrders.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Delivery Orders ({deliveryOrders.length})</Text>
+              {deliveryOrders.map((order) => (
+                <View key={order._id} style={styles.requestCard}>
+                  <View style={styles.requestHeader}>
+                    <View style={styles.clientInfo}>
+                      <View style={[styles.clientAvatar, { backgroundColor: '#4CAF5020' }]}>
+                        <Ionicons name="cube-outline" size={24} color="#4CAF50" />
+                      </View>
+                      <View>
+                        <Text style={styles.clientName}>
+                          {order.userInfo ? `${order.userInfo.firstName} ${order.userInfo.lastName || ''}`.trim() : 'Customer'}
+                        </Text>
+                        <Text style={styles.requestTime}>
+                          Order #{order.orderId} • {new Date(order.createdAt).toLocaleString()}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={[styles.statusBadge, { backgroundColor: '#4CAF5020' }]}>
+                      <Text style={[styles.statusText, { color: '#4CAF50' }]}>
+                        {order.status === 'assigned' ? 'Assigned' : 
+                         order.status === 'picked' ? 'Picked' :
+                         order.status === 'on_way' ? 'On Way' : order.status}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.requestDetails}>
+                    <View style={styles.detailRow}>
+                      <Ionicons name="cube-outline" size={16} color="#666" />
+                      <Text style={styles.detailText}>
+                        {order.items.length} item{order.items.length > 1 ? 's' : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.detailRow}>
+                      <Ionicons name="location-outline" size={16} color="#666" />
+                      <Text style={styles.detailText} numberOfLines={2}>
+                        {order.deliveryAddress}
+                      </Text>
+                    </View>
+                    <View style={styles.detailRow}>
+                      <Ionicons name="cash-outline" size={16} color="#666" />
+                      <Text style={styles.detailText}>Rs. {order.total.toLocaleString()}</Text>
+                      <Text style={[styles.detailText, { marginLeft: 8, color: order.paymentMethod === 'cod' ? '#FF9800' : '#4CAF50' }]}>
+                        ({order.paymentMethod === 'cod' ? 'COD' : 'Paid'})
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.actionButtons}>
+                    <TouchableOpacity 
+                      style={[styles.acceptButton, { backgroundColor: '#4CAF50' }]}
+                      onPress={() => handleAcceptDeliveryOrder(order.orderId || order._id)}
+                    >
+                      <Ionicons name="navigate" size={16} color="#fff" style={{ marginRight: 4 }} />
+                      <Text style={styles.acceptButtonText}>
+                        {order.status === 'assigned' ? 'Start Delivery' : 'Track Order'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+
           {/* Empty State */}
-          {bookings.length === 0 && (
+          {bookings.length === 0 && deliveryOrders.length === 0 && (
             <View style={styles.emptyState}>
               <Ionicons name="clipboard-outline" size={64} color="#ccc" />
               <Text style={styles.emptyTitle}>No requests yet</Text>
