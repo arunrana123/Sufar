@@ -129,18 +129,26 @@ router.get('/workers', async (req, res) => {
         { 'documents.license': { $exists: true, $ne: null } },
       ]
     })
-      .select('name email phone skills documents verificationStatus verificationNotes verificationSubmitted submittedAt profileImage rating completedJobs experience createdAt')
+      .select('name email phone skills serviceCategories documents categoryDocuments categoryVerificationStatus verificationStatus verificationNotes verificationSubmitted submittedAt profileImage rating completedJobs experience createdAt updatedAt')
       .sort({ submittedAt: -1, createdAt: -1 })
       .lean();
     
-    // Filter to only include workers with non-empty document values
+    // Filter to only include workers with non-empty document values (general or category documents)
     const workers = allWorkersWithDocs.filter((worker: any) => {
-      if (!worker.documents) return false;
-      const docKeys = Object.keys(worker.documents).filter(key => {
+      // Check general documents
+      const hasGeneralDocs = worker.documents && Object.keys(worker.documents).some(key => {
         const value = worker.documents[key];
         return value && value !== null && value !== '';
       });
-      return docKeys.length > 0;
+      
+      // Check category documents
+      const hasCategoryDocs = worker.categoryDocuments && 
+        Object.keys(worker.categoryDocuments).length > 0 &&
+        Object.values(worker.categoryDocuments).some((catDocs: any) => 
+          catDocs && typeof catDocs === 'object' && (catDocs.skillProof || catDocs.experience)
+        );
+      
+      return hasGeneralDocs || hasCategoryDocs;
     });
     
     console.log(`✅ Found ${workers.length} workers with verification submitted or documents`);
