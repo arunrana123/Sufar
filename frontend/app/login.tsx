@@ -18,10 +18,12 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getApiUrl } from '@/lib/config';
 import { loginRequest } from '@/lib/networkUtils';
+import UserOnboarding from '@/components/UserOnboarding';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
@@ -32,6 +34,7 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const { login } = useAuth();
   const [googleLoading, setGoogleLoading] = useState(false);
 
@@ -87,7 +90,16 @@ export default function LoginScreen() {
           profilePhoto: data.profilePhoto,
         };
         await login(userData);
-        router.replace('/home');
+        
+        // Check if user has completed onboarding
+        const hasCompletedOnboarding = await AsyncStorage.getItem('hasCompletedOnboarding');
+        
+        if (!hasCompletedOnboarding) {
+          // Show onboarding for new users (both regular and Google sign-in)
+          setShowOnboarding(true);
+        } else {
+          router.replace('/home');
+        }
       } else {
         Alert.alert('Login Failed', data.message || 'Failed to authenticate with Google');
       }
@@ -103,6 +115,11 @@ export default function LoginScreen() {
     // Configure WebBrowser for AuthSession
     WebBrowser.maybeCompleteAuthSession();
   }, []);
+
+  // Show onboarding for new users
+  if (showOnboarding) {
+    return <UserOnboarding onComplete={handleOnboardingComplete} />;
+  }
   
   // Forgot password flow states
   const [forgotVisible, setForgotVisible] = useState(false);
@@ -121,6 +138,12 @@ export default function LoginScreen() {
       setGoogleLoading(false);
       Alert.alert('Error', 'Failed to start Google Sign-In');
     });
+  };
+
+  const handleOnboardingComplete = async () => {
+    await AsyncStorage.setItem('hasCompletedOnboarding', 'true');
+    setShowOnboarding(false);
+    router.replace('/home');
   };
 
   const handleLogin = async () => {
@@ -209,8 +232,16 @@ export default function LoginScreen() {
           
           console.log('Login successful, storing user data:', userData);
           await login(userData);
-          console.log('User data stored, navigating to home');
-          router.replace('/home');
+          console.log('User data stored');
+          
+          // Check if user has completed onboarding
+          const hasCompletedOnboarding = await AsyncStorage.getItem('hasCompletedOnboarding');
+          if (!hasCompletedOnboarding) {
+            // Show onboarding for new users
+            setShowOnboarding(true);
+          } else {
+            router.replace('/home');
+          }
         } else {
           Alert.alert('Login Failed', data.message || 'Invalid credentials');
         }
