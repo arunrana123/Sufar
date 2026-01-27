@@ -31,6 +31,17 @@ interface Booking {
   serviceCategory: string;
 }
 
+interface DeliveryOrder {
+  _id: string;
+  orderId: string;
+  total: number;
+  deliveryCharge?: number;
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';
+  status: 'pending' | 'confirmed' | 'preparing' | 'assigned' | 'picked' | 'on_way' | 'delivered' | 'cancelled';
+  deliveredAt?: string | Date;
+  createdAt: string;
+}
+
 interface DailyEarning {
   date: string;
   dateLabel: string;
@@ -42,11 +53,14 @@ interface DailyEarning {
 export default function EarningsScreen() {
   const { worker } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [deliveryOrders, setDeliveryOrders] = useState<DeliveryOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [totalEarnings, setTotalEarnings] = useState(0);
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [todayCount, setTodayCount] = useState(0);
+  const [serviceEarnings, setServiceEarnings] = useState(0);
+  const [deliveryEarnings, setDeliveryEarnings] = useState(0);
 
   // Fetch earnings data from backend
   const fetchEarnings = async (isRefresh = false) => {
@@ -58,48 +72,95 @@ export default function EarningsScreen() {
     try {
       const apiUrl = getApiUrl();
       
+      // Declare variables at function scope
+      let paidBookings: Booking[] = [];
+      let paidOrders: DeliveryOrder[] = [];
+      
       // Fetch all completed bookings with paid status
-      const response = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
+      const bookingsResponse = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
         cache: 'no-cache',
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        const paidBookings = Array.isArray(data) 
-          ? data.filter((b: Booking) => b.paymentStatus === 'paid' && b.status === 'completed')
+      // Fetch delivery orders
+      const ordersResponse = await fetch(`${apiUrl}/api/orders/delivery/${worker.id}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-cache',
+      });
+
+      if (bookingsResponse.ok) {
+        const bookingsData = await bookingsResponse.json();
+        paidBookings = Array.isArray(bookingsData) 
+          ? bookingsData.filter((b: Booking) => b.paymentStatus === 'paid' && b.status === 'completed')
           : [];
         
         setBookings(paidBookings);
-        
-        // Calculate total earnings
-        const total = paidBookings.reduce((sum: number, b: Booking) => sum + (b.price || 0), 0);
-        setTotalEarnings(total);
-        
-        // Calculate today's earnings
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
-        const todayBookings = paidBookings.filter((b: Booking) => {
-          const completedDate = b.completedAt ? new Date(b.completedAt) : new Date(b.createdAt);
-          completedDate.setHours(0, 0, 0, 0);
-          return completedDate.getTime() === today.getTime();
-        });
-        
-        const todayTotal = todayBookings.reduce((sum: number, b: Booking) => sum + (b.price || 0), 0);
-        setTodayEarnings(todayTotal);
-        setTodayCount(todayBookings.length);
-        
-        console.log('💰 Earnings fetched:', {
-          total: total,
-          today: todayTotal,
-          todayCount: todayBookings.length,
-          totalBookings: paidBookings.length,
-        });
-      } else {
-        console.error('Failed to fetch earnings:', response.status);
       }
+      
+      if (ordersResponse.ok) {
+        const ordersData = await ordersResponse.json();
+        paidOrders = Array.isArray(ordersData) 
+          ? ordersData.filter((o: DeliveryOrder) => 
+              o.status === 'delivered' && 
+              (o.paymentStatus === 'paid' || o.paymentMethod === 'cod')
+            )
+          : [];
+        
+        setDeliveryOrders(paidOrders);
+      }
+      
+      // Calculate service earnings
+      const calculatedServiceEarnings = paidBookings.reduce((sum: number, b: Booking) => sum + (b.price || 0), 0);
+      setServiceEarnings(calculatedServiceEarnings);
+      
+      // Calculate delivery earnings (deliveryCharge or 10% of total)
+      const calculatedDeliveryEarnings = paidOrders.reduce((sum: number, o: DeliveryOrder) => {
+        const earning = o.deliveryCharge || (o.total * 0.1);
+        return sum + earning;
+      }, 0);
+      setDeliveryEarnings(calculatedDeliveryEarnings);
+      
+      // Calculate total earnings
+      const total = calculatedServiceEarnings + calculatedDeliveryEarnings;
+      setTotalEarnings(total);
+      
+      // Calculate today's earnings
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const todayBookings = paidBookings.filter((b: Booking) => {
+        const completedDate = b.completedAt ? new Date(b.completedAt) : new Date(b.createdAt);
+        completedDate.setHours(0, 0, 0, 0);
+        return completedDate.getTime() === today.getTime();
+      });
+      
+      const todayOrders = paidOrders.filter((o: DeliveryOrder) => {
+        const deliveredDate = o.deliveredAt ? new Date(o.deliveredAt) : new Date(o.createdAt);
+        deliveredDate.setHours(0, 0, 0, 0);
+        return deliveredDate.getTime() === today.getTime();
+      });
+      
+      const todayServiceTotal = todayBookings.reduce((sum: number, b: Booking) => sum + (b.price || 0), 0);
+      const todayDeliveryTotal = todayOrders.reduce((sum: number, o: DeliveryOrder) => {
+        const earning = o.deliveryCharge || (o.total * 0.1);
+        return sum + earning;
+      }, 0);
+      
+      const todayTotal = todayServiceTotal + todayDeliveryTotal;
+      setTodayEarnings(todayTotal);
+      setTodayCount(todayBookings.length + todayOrders.length);
+      
+      console.log('💰 Earnings fetched:', {
+        serviceEarnings: calculatedServiceEarnings,
+        deliveryEarnings: calculatedDeliveryEarnings,
+        total: total,
+        today: todayTotal,
+        todayCount: todayBookings.length + todayOrders.length,
+        serviceJobs: paidBookings.length,
+        deliveryJobs: paidOrders.length,
+      });
     } catch (error) {
       console.error('Error fetching earnings:', error);
     } finally {
@@ -108,10 +169,11 @@ export default function EarningsScreen() {
     }
   };
 
-  // Group earnings by date
+  // Group earnings by date (including both bookings and delivery orders)
   const dailyEarnings = useMemo(() => {
     const grouped: { [key: string]: DailyEarning } = {};
     
+    // Add service bookings
     bookings.forEach((booking) => {
       const completedDate = booking.completedAt 
         ? new Date(booking.completedAt) 
@@ -150,11 +212,50 @@ export default function EarningsScreen() {
       grouped[dateKey].bookings.push(booking);
     });
     
+    // Add delivery orders
+    deliveryOrders.forEach((order) => {
+      const deliveredDate = order.deliveredAt 
+        ? new Date(order.deliveredAt) 
+        : new Date(order.createdAt);
+      
+      const dateKey = deliveredDate.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      if (!grouped[dateKey]) {
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        
+        let dateLabel = deliveredDate.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric',
+          year: deliveredDate.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
+        });
+        
+        if (dateKey === today.toISOString().split('T')[0]) {
+          dateLabel = 'Today';
+        } else if (dateKey === yesterday.toISOString().split('T')[0]) {
+          dateLabel = 'Yesterday';
+        }
+        
+        grouped[dateKey] = {
+          date: dateKey,
+          dateLabel,
+          amount: 0,
+          count: 0,
+          bookings: [],
+        };
+      }
+      
+      const deliveryEarning = order.deliveryCharge || (order.total * 0.1);
+      grouped[dateKey].amount += deliveryEarning;
+      grouped[dateKey].count += 1;
+    });
+    
     // Convert to array and sort by date (newest first)
     return Object.values(grouped).sort((a, b) => 
       new Date(b.date).getTime() - new Date(a.date).getTime()
     );
-  }, [bookings]);
+  }, [bookings, deliveryOrders]);
 
   useEffect(() => {
     if (worker?.id) {
@@ -262,7 +363,23 @@ export default function EarningsScreen() {
                 <Text style={styles.cardTitle}>Total Earnings</Text>
               </View>
               <Text style={styles.earningsAmount}>Rs. {totalEarnings.toLocaleString()}</Text>
-              <Text style={styles.cardSubtitle}>{bookings.length} completed jobs</Text>
+              <Text style={styles.cardSubtitle}>
+                {bookings.length} service jobs • {deliveryOrders.length} deliveries
+              </Text>
+              {(serviceEarnings > 0 || deliveryEarnings > 0) && (
+                <View style={styles.earningsBreakdown}>
+                  {serviceEarnings > 0 && (
+                    <Text style={styles.breakdownText}>
+                      Service: Rs. {serviceEarnings.toLocaleString()}
+                    </Text>
+                  )}
+                  {deliveryEarnings > 0 && (
+                    <Text style={styles.breakdownText}>
+                      Delivery: Rs. {deliveryEarnings.toLocaleString()}
+                    </Text>
+                  )}
+                </View>
+              )}
             </View>
 
             {/* Today's Earnings Card */}
@@ -465,6 +582,17 @@ const styles = StyleSheet.create({
   cardSubtitle: {
     fontSize: 14,
     color: '#666',
+  },
+  earningsBreakdown: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    gap: 4,
+  },
+  breakdownText: {
+    fontSize: 12,
+    color: '#999',
   },
   historySection: {
     backgroundColor: '#fff',
