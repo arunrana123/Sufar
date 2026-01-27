@@ -29,49 +29,25 @@ export default function HomeScreen() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   
-  // Syncs profile image state when user data changes
-  // Triggered by: User profile updates or screen focus
+  // Loads and syncs user's profile image from AuthContext
+  // Triggered by: User login, profile photo update, or user ID change
   useEffect(() => {
-    console.log('Home screen - Profile image state changed to:', profileImage);
-  }, [profileImage]);
-
-  // Loads user's profile image from AuthContext
-  // Triggered by: User login or profile photo update
-  useEffect(() => {
-    console.log('Home screen - User data:', user);
-    console.log('Home screen - Profile photo:', user?.profilePhoto);
     if (user?.profilePhoto) {
       setProfileImage(user.profilePhoto);
     } else {
       setProfileImage(null);
-    }
-  }, [user?.profilePhoto, user?.firstName, user?.lastName, user?.email]);
-
-  // Updates profile image when user changes or re-authenticates
-  // Triggered by: User ID change or profile photo update
-  useEffect(() => {
-    console.log('Home screen - User ID changed, refreshing profile image');
-    console.log('Home screen - Current profile photo:', user?.profilePhoto);
-    if (user?.profilePhoto) {
-      setProfileImage(user.profilePhoto);
-      console.log('Home screen - Profile image set to:', user.profilePhoto);
-    } else {
-      setProfileImage(null);
-      console.log('Home screen - No profile photo, setting to null');
     }
   }, [user?.id, user?.profilePhoto]);
 
   // Refreshes profile image from current user data
   // Triggered by: Screen focus, manual refresh
-  const refreshProfileImage = () => {
-    console.log('Refreshing profile image for user:', user?.id);
-    console.log('Profile photo URL:', user?.profilePhoto);
+  const refreshProfileImage = useCallback(() => {
     if (user?.profilePhoto) {
       setProfileImage(user.profilePhoto);
     } else {
       setProfileImage(null);
     }
-  };
+  }, [user?.profilePhoto]);
 
   // Refreshes profile when user navigates back to home screen
   // Triggered by: Screen comes into focus (useFocusEffect hook)
@@ -84,11 +60,10 @@ export default function HomeScreen() {
         try {
           const detectedLocation = await detectLocation();
           if (detectedLocation && detectedLocation !== selectedLocation) {
-            console.log('📍 Location updated on focus:', detectedLocation);
             setSelectedLocation(detectedLocation);
           }
         } catch (error) {
-          console.error('Error updating location on focus:', error);
+          // Silently handle location detection errors
         }
       };
       
@@ -333,6 +308,21 @@ export default function HomeScreen() {
 
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
           <ThemedText style={styles.welcome}>Welcome to our Service Hub</ThemedText>
+          
+          {/* On Tap Magic World Button */}
+          <Pressable
+            style={[styles.magicWorldButton, { borderColor: '#FF7A2C' }]}
+            onPress={() => router.push('/market')}
+          >
+            <Image
+              source={require('@/assets/hand-icon.png')}
+              style={styles.handIcon}
+              resizeMode="contain"
+            />
+            <ThemedText style={[styles.magicWorldText, { color: theme.text }]}>
+              On Tap Magic World
+            </ThemedText>
+          </Pressable>
           
           {/* Available Services Grid */}
           <View style={styles.servicesSection}>
@@ -654,6 +644,27 @@ const styles = StyleSheet.create({
   },
   content: { flex: 1, paddingTop: 14 },
   welcome: { fontSize: 15, fontWeight: '600', textAlign: 'center', marginBottom: 16, paddingHorizontal: 12 },
+  magicWorldButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 12,
+    marginBottom: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: '#fff',
+    gap: 6,
+  },
+  handIcon: {
+    width: 18,
+    height: 18,
+  },
+  magicWorldText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   
   // Horizontal sections
   horizontalSection: { marginBottom: 20 },
