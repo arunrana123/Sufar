@@ -4,9 +4,15 @@ import { useState, useRef, useEffect } from 'react';
 
 interface FloatingActionButtonProps {
   onAddService: () => void;
+  label?: string;
+  description?: string;
 }
 
-export default function FloatingActionButton({ onAddService }: FloatingActionButtonProps) {
+export default function FloatingActionButton({ 
+  onAddService, 
+  label = 'Add New Service',
+  description = 'Create a new service offering'
+}: FloatingActionButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -58,8 +64,8 @@ export default function FloatingActionButton({ onAddService }: FloatingActionBut
               </svg>
             </div>
             <div>
-              <div className="font-medium">Add New Service</div>
-              <div className="text-xs text-gray-500">Create a new service offering</div>
+              <div className="font-medium">{label}</div>
+              <div className="text-xs text-gray-500">{description}</div>
             </div>
           </button>
         </div>
@@ -117,7 +123,7 @@ export default function FloatingActionButton({ onAddService }: FloatingActionBut
           after:-translate-y-1/2 after:border-4 after:border-transparent
           after:border-l-gray-900
         `}>
-          Add Service
+          {label}
         </div>
       </button>
     </div>
