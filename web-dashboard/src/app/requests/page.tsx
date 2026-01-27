@@ -91,26 +91,38 @@ export default function RequestsPage() {
         fetchRequests();
       }, 500);
     };
-
-    // Wait a bit for connection to establish, then register listeners
-    const connectTimeout = setTimeout(() => {
+    
+    const registerSocketListeners = () => {
       // Listen for verification status updates (when admin approves/rejects)
       socketService.on('document:verification:updated', handleVerificationUpdated);
       socketService.on('category:verification:updated', handleVerificationUpdated);
       
       // Listen for new document submissions (when worker submits documents)
       socketService.on('document:verification:submitted', handleDocumentSubmitted);
-      socketService.on('category:verification:submitted', handleDocumentSubmitted);
       
-      // Also listen for notification events
+      // Also listen for notification events that might indicate new submissions
       socketService.on('notification:new', (notification: any) => {
         console.log('📢 New notification received:', notification);
-        if (notification.type === 'category_verification_submitted') {
-          handleDocumentSubmitted(notification.data);
+        if (notification.type === 'document_verification' || notification.type === 'category_verification_submitted') {
+          handleDocumentSubmitted(notification.data || { _id: notification.userId });
         }
       });
       
       console.log('✅ Socket.IO listeners registered for requests page');
+    };
+
+    // Wait a bit for connection to establish, then register listeners
+    const connectTimeout = setTimeout(() => {
+      if (!socketService.getIsConnected()) {
+        console.warn('⚠️ Socket not connected yet, retrying listener registration...');
+        // Retry after another second if not connected
+        setTimeout(() => {
+          registerSocketListeners();
+        }, 1000);
+        return;
+      }
+      
+      registerSocketListeners();
     }, 1000);
     
     // Auto-refresh every 30 seconds as backup
@@ -124,7 +136,6 @@ export default function RequestsPage() {
       socketService.off('document:verification:updated', handleVerificationUpdated);
       socketService.off('category:verification:updated', handleVerificationUpdated);
       socketService.off('document:verification:submitted', handleDocumentSubmitted);
-      socketService.off('category:verification:submitted', handleDocumentSubmitted);
       socketService.off('notification:new');
     };
   }, [router]);
@@ -357,17 +368,18 @@ export default function RequestsPage() {
             const hasCategoryDocs = worker.categoryDocuments && 
               Object.keys(worker.categoryDocuments).length > 0 &&
               Object.values(worker.categoryDocuments).some((catDocs: any) => 
-                catDocs.skillProof || catDocs.experience
+                (catDocs && typeof catDocs === 'object' && (catDocs.skillProof || catDocs.experience))
               );
             
             // Check if worker has general documents submitted
             const hasGeneralDocs = worker.documents && 
-              Object.values(worker.documents).some((doc: any) => doc && doc !== '');
+              Object.values(worker.documents).some((doc: any) => doc && doc !== null && doc !== '');
             
             // Check if verification was submitted
             const hasSubmitted = worker.verificationSubmitted === true;
             
-            return hasCategoryDocs || (hasGeneralDocs && hasSubmitted);
+            // Include workers with category documents OR general documents (with or without verificationSubmitted flag)
+            return hasCategoryDocs || hasGeneralDocs;
           });
           
           console.log(`📊 Found ${workersWithSubmissions.length} workers with verification submissions out of ${data.length} total`);
@@ -379,7 +391,14 @@ export default function RequestsPage() {
             lastName: worker.name?.split(' ').slice(1).join(' ') || '',
             email: worker.email || '',
             phone: worker.phone || '',
-            serviceCategory: worker.serviceCategories?.[0] || worker.skills?.[0] || 'Service',
+            serviceCategory: (() => {
+              // If worker has category documents, show those categories
+              if (worker.categoryDocuments && Object.keys(worker.categoryDocuments).length > 0) {
+                return Object.keys(worker.categoryDocuments)[0];
+              }
+              // Otherwise use serviceCategories or skills
+              return worker.serviceCategories?.[0] || worker.skills?.[0] || 'Service';
+            })(),
             experience: parseInt(worker.experience) || 0,
             rating: worker.rating || 0,
             isAvailable: worker.isActive || false,
@@ -404,36 +423,50 @@ export default function RequestsPage() {
             documents: (() => {
               const docs: any[] = [];
               // Add general documents
-              if (worker.documents) {
+              if (worker.documents && typeof worker.documents === 'object') {
                 Object.entries(worker.documents).forEach(([name, url]: [string, any]) => {
-                  if (url) {
+                  if (url && url !== null && url !== '') {
+                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+                    const docUrl = url.toString().startsWith('http') 
+                      ? url 
+                      : `${apiUrl}/uploads/${url}`;
                     docs.push({
                       name: name.replace(/([A-Z])/g, ' $1').trim(),
                       type: url?.toString().split('.').pop() || 'pdf',
-                      url: url || '',
-                      uploadedAt: worker.submittedAt || new Date().toISOString(),
+                      url: docUrl,
+                      uploadedAt: worker.submittedAt || worker.updatedAt || new Date().toISOString(),
                     });
                   }
                 });
               }
               // Add category documents
-              if (worker.categoryDocuments) {
+              if (worker.categoryDocuments && typeof worker.categoryDocuments === 'object') {
                 Object.entries(worker.categoryDocuments).forEach(([category, catDocs]: [string, any]) => {
-                  if (catDocs?.skillProof) {
-                    docs.push({
-                      name: `${category} - Service Certificate`,
-                      type: catDocs.skillProof?.toString().split('.').pop() || 'pdf',
-                      url: catDocs.skillProof || '',
-                      uploadedAt: worker.submittedAt || new Date().toISOString(),
-                    });
-                  }
-                  if (catDocs?.experience) {
-                    docs.push({
-                      name: `${category} - Experience Certificate`,
-                      type: catDocs.experience?.toString().split('.').pop() || 'pdf',
-                      url: catDocs.experience || '',
-                      uploadedAt: worker.submittedAt || new Date().toISOString(),
-                    });
+                  if (catDocs && typeof catDocs === 'object') {
+                    if (catDocs.skillProof && catDocs.skillProof !== null && catDocs.skillProof !== '') {
+                      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+                      const docUrl = catDocs.skillProof.toString().startsWith('http') 
+                        ? catDocs.skillProof 
+                        : `${apiUrl}/uploads/${catDocs.skillProof}`;
+                      docs.push({
+                        name: `${category} - Service Certificate`,
+                        type: catDocs.skillProof?.toString().split('.').pop() || 'pdf',
+                        url: docUrl,
+                        uploadedAt: worker.submittedAt || new Date().toISOString(),
+                      });
+                    }
+                    if (catDocs.experience && catDocs.experience !== null && catDocs.experience !== '') {
+                      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+                      const docUrl = catDocs.experience.toString().startsWith('http') 
+                        ? catDocs.experience 
+                        : `${apiUrl}/uploads/${catDocs.experience}`;
+                      docs.push({
+                        name: `${category} - Experience Certificate`,
+                        type: catDocs.experience?.toString().split('.').pop() || 'pdf',
+                        url: docUrl,
+                        uploadedAt: worker.submittedAt || new Date().toISOString(),
+                      });
+                    }
                   }
                 });
               }
@@ -976,9 +1009,14 @@ export default function RequestsPage() {
                         <p className="text-xs text-gray-500 mb-3">
                           Uploaded: {new Date(doc.uploadedAt).toLocaleDateString()}
                         </p>
-                        <button className="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                        >
                           View Document
-                        </button>
+                        </a>
                       </div>
                     ))}
                   </div>
