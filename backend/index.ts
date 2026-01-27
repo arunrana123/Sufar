@@ -14,8 +14,10 @@ import notificationRoutes from "./src/routes/notification.routes";
 import dashboardRoutes from "./src/routes/dashboard.routes";
 import serviceRoutes from "./src/routes/service.routes";
 import bookingRoutes from "./src/routes/booking.routes";
+import orderRoutes from "./src/routes/order.routes";
 import syncRoutes from "./src/routes/sync.routes";
 import adminRoutes from "./src/routes/admin.routes";
+import marketRoutes from "./src/routes/market.routes";
 import { googleAuthRoutes } from "./src/routes/google-auth.routes";
 
 dotenv.config();
@@ -434,8 +436,10 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/services", serviceRoutes);
 app.use("/api/bookings", bookingRoutes);
+app.use("/api/orders", orderRoutes);
 app.use("/api/sync", syncRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/market", marketRoutes);
 
 // Document upload route
 app.post('/api/workers/upload-documents', upload.fields([
