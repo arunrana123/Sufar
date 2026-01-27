@@ -4,11 +4,14 @@ import { getApiUrl } from './config';
 
 export interface PaymentRequest {
   amount: number;
-  bookingId: string;
-  serviceName: string;
+  bookingId?: string;
+  orderId?: string;
+  serviceName?: string;
+  orderType?: 'service' | 'market';
   customerName: string;
   customerEmail: string;
   customerPhone: string;
+  walletProvider?: 'phonepay' | 'esewa' | 'stripe';
 }
 
 export interface PaymentResponse {
@@ -127,8 +130,64 @@ class PaymentService {
     }
   }
 
+  // Stripe Payment Integration (for Nepal wallets via Stripe)
+  async initiateStripePayment(
+    paymentData: PaymentRequest,
+    walletProvider: 'phonepay' | 'esewa' | 'stripe'
+  ): Promise<PaymentResponse> {
+    try {
+      const response = await fetch(`${this.getBaseUrl()}/api/payments/stripe/initiate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...paymentData,
+          walletProvider,
+          currency: 'npr',
+        }),
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        return {
+          success: true,
+          paymentId: result.paymentId,
+          redirectUrl: result.redirectUrl || result.clientSecret,
+        };
+      } else {
+        return {
+          success: false,
+          error: result.error || 'Stripe payment initiation failed',
+        };
+      }
+    } catch (error) {
+      console.error('Stripe payment error:', error);
+      return {
+        success: false,
+        error: 'Network error during Stripe payment',
+      };
+    }
+  }
+
+  // PhonePay via Stripe
+  async initiatePhonePayStripe(paymentData: PaymentRequest): Promise<PaymentResponse> {
+    return this.initiateStripePayment(paymentData, 'phonepay');
+  }
+
+  // eSewa via Stripe
+  async initiateEsewaStripe(paymentData: PaymentRequest): Promise<PaymentResponse> {
+    return this.initiateStripePayment(paymentData, 'esewa');
+  }
+
+  // Direct Stripe Card Payment
+  async initiateStripeCard(paymentData: PaymentRequest): Promise<PaymentResponse> {
+    return this.initiateStripePayment(paymentData, 'stripe');
+  }
+
   // Verify Payment Status
-  async verifyPayment(paymentId: string, method: 'esewa' | 'khalti' | 'phonepe'): Promise<PaymentResponse> {
+  async verifyPayment(paymentId: string, method: 'esewa' | 'khalti' | 'phonepe' | 'stripe'): Promise<PaymentResponse> {
     try {
       const response = await fetch(`${this.getBaseUrl()}/api/payments/${method}/verify`, {
         method: 'POST',
@@ -176,6 +235,27 @@ class PaymentService {
         description: 'Pay with PhonePe',
         icon: 'phone-portrait',
         color: '#5F259F',
+      },
+      {
+        id: 'phonepay',
+        name: 'PhonePay (via Stripe)',
+        description: 'Pay with PhonePay wallet via Stripe',
+        icon: 'phone-portrait',
+        color: '#5F259F',
+      },
+      {
+        id: 'esewa-stripe',
+        name: 'eSewa (via Stripe)',
+        description: 'Pay with eSewa wallet via Stripe',
+        icon: 'wallet',
+        color: '#00A651',
+      },
+      {
+        id: 'stripe',
+        name: 'Stripe Card',
+        description: 'Pay with credit/debit card via Stripe',
+        icon: 'card',
+        color: '#635BFF',
       },
     ];
   }
