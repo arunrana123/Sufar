@@ -66,14 +66,6 @@ const config = {
               NSIncludesSubdomains: true,
               NSTemporaryExceptionAllowsInsecureHTTPLoads: true,
             },
-            '192.168.1.92': {
-              NSIncludesSubdomains: true,
-              NSTemporaryExceptionAllowsInsecureHTTPLoads: true,
-            },
-            '192.168.1.88': {
-              NSIncludesSubdomains: true,
-              NSTemporaryExceptionAllowsInsecureHTTPLoads: true,
-            },
           },
         },
       },
