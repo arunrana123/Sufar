@@ -108,7 +108,7 @@ export default function RewardsScreen() {
   const [showClaimModal, setShowClaimModal] = useState(false);
   const [selectedBonus, setSelectedBonus] = useState<Bonus | null>(null);
 
-  // Fetch completed bookings to calculate reward points
+  // Fetch reward points from worker profile (backend calculates it)
   const fetchRewardsData = async (isRefresh = false) => {
     if (!worker?.id) {
       setLoading(false);
@@ -118,31 +118,55 @@ export default function RewardsScreen() {
     try {
       const apiUrl = getApiUrl();
       
-      // Fetch all completed bookings with paid status
-      const response = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
+      // Fetch worker profile to get reward points
+      const workerResponse = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
         cache: 'no-cache',
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        const paidBookings = Array.isArray(data) 
-          ? data.filter((b: Booking) => b.paymentStatus === 'paid' && b.status === 'completed')
-          : [];
+      if (workerResponse.ok) {
+        const workerData = await workerResponse.json();
+        const workerRewardPoints = workerData.rewardPoints || 0;
+        setTotalPoints(workerRewardPoints);
         
-        setBookings(paidBookings);
+        // Also fetch bookings for history display
+        const bookingsResponse = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-cache',
+        });
         
-        // Calculate total reward points
-        const points = calculateRewardPoints(paidBookings);
-        setTotalPoints(points);
+        if (bookingsResponse.ok) {
+          const bookingsData = await bookingsResponse.json();
+          const paidBookings = Array.isArray(bookingsData) 
+            ? bookingsData.filter((b: Booking) => b.paymentStatus === 'paid' && b.status === 'completed')
+            : [];
+          setBookings(paidBookings);
+        }
         
         console.log('🎁 Rewards data fetched:', {
-          totalPoints: points,
-          completedJobs: paidBookings.length,
+          totalPoints: workerRewardPoints,
+          fromBackend: true,
         });
       } else {
-        console.error('Failed to fetch rewards data:', response.status);
+        console.error('Failed to fetch worker rewards:', workerResponse.status);
+        // Fallback to calculating from bookings
+        const bookingsResponse = await fetch(`${apiUrl}/api/bookings/worker/${worker.id}?status=completed`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-cache',
+        });
+        
+        if (bookingsResponse.ok) {
+          const data = await bookingsResponse.json();
+          const paidBookings = Array.isArray(data) 
+            ? data.filter((b: Booking) => b.paymentStatus === 'paid' && b.status === 'completed')
+            : [];
+          setBookings(paidBookings);
+          const points = calculateRewardPoints(paidBookings);
+          setTotalPoints(points);
+        }
       }
     } catch (error) {
       console.error('Error fetching rewards data:', error);
@@ -236,9 +260,21 @@ export default function RewardsScreen() {
         }
       };
       
+      // Listen for worker reward points updates
+      const handleWorkerRewardPointsUpdated = (data: any) => {
+        console.log('🎁 Worker reward points updated:', data);
+        if (data.workerId === worker.id) {
+          setTotalPoints(data.totalPoints);
+        }
+      };
+      
       socketService.on('work:completed', handleWorkCompleted);
       socketService.on('payment:status_updated', handlePaymentStatusUpdated);
       socketService.on('booking:updated', handleBookingUpdated);
+      
+      // Listen for worker-specific reward updates (using any to bypass type checking)
+      const socketAny = socketService as any;
+      socketAny.on('worker:reward_points_updated', handleWorkerRewardPointsUpdated);
       
       // Auto-refresh every 30 seconds
       const intervalId = setInterval(() => {
@@ -250,6 +286,8 @@ export default function RewardsScreen() {
         socketService.off('work:completed', handleWorkCompleted);
         socketService.off('payment:status_updated', handlePaymentStatusUpdated);
         socketService.off('booking:updated', handleBookingUpdated);
+        const socketAny = socketService as any;
+        socketAny.off('worker:reward_points_updated', handleWorkerRewardPointsUpdated);
       };
     }
   }, [worker?.id]);
