@@ -96,7 +96,9 @@ export default function NotificationsScreen() {
               });
 
             setNotifications(allNotifications);
+            // Save to storage immediately
             await AsyncStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(allNotifications));
+            console.log('✅ Notifications loaded and saved to storage:', allNotifications.length);
             return;
           }
         } catch (apiError) {
@@ -131,13 +133,14 @@ export default function NotificationsScreen() {
   const saveNotifications = async (newNotifications: Notification[]) => {
     try {
       await AsyncStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(newNotifications));
+      console.log('💾 Notifications saved to storage:', newNotifications.length);
     } catch (error) {
       console.error('Error saving notifications:', error);
     }
   };
 
   // Add a new notification (from socket events)
-  const addNotification = (notification: Notification) => {
+  const addNotification = async (notification: Notification) => {
     setNotifications((prev) => {
       // Check if notification already exists (by id or _id)
       const exists = prev.some((n) => 
@@ -147,9 +150,11 @@ export default function NotificationsScreen() {
         (notification.id && n.id === notification.id)
       );
       if (exists) {
+        console.log('⚠️ Notification already exists, skipping:', notification.id || notification._id);
         return prev;
       }
       const updated = [notification, ...prev];
+      // Save to storage asynchronously
       saveNotifications(updated);
       const newUnreadCount = updated.filter((n) => !(n.read || n.isRead)).length;
       console.log('📊 New notification added, unread count:', newUnreadCount);
@@ -376,26 +381,39 @@ export default function NotificationsScreen() {
           addNotification(notification);
           
           // Play sound and send push notification
-          notificationSoundService.playNotificationSound(notification.type, 'new');
+          notificationSoundService.playNotificationSound(notification.type, 'new', worker.id);
           pushNotificationService.scheduleLocalNotification(
             notification.title,
             notification.message,
             { type: notification.type, ...notification.data },
-            true
+            true,
+            worker.id
           );
+          
+          // Reload notifications from backend to ensure sync
+          setTimeout(() => {
+            loadNotifications(true);
+          }, 500);
         }
       };
 
-      // Listen for notification deletion
+      // Listen for notification deletion (from backend or other devices)
       const handleNotificationDeleted = (data: any) => {
         console.log('🗑️ Notification deleted event received:', data);
         if (data.notificationId) {
           setNotifications((prev) => {
             const updated = prev.filter((n) => n._id !== data.notificationId && n.id !== data.notificationId);
+            // Save to storage immediately
             saveNotifications(updated);
+            console.log('📊 Notification deleted, remaining count:', updated.length);
             console.log('📊 Unread count after deletion:', updated.filter((n) => !(n.read || n.isRead)).length);
             return updated;
           });
+          
+          // Reload from backend to ensure sync
+          setTimeout(() => {
+            loadNotifications(true);
+          }, 300);
         }
       };
       
@@ -403,40 +421,63 @@ export default function NotificationsScreen() {
       const handleNotificationRead = (data: any) => {
         console.log('✅ Notification read event received:', data);
         if (data.notificationId) {
-          setNotifications((prev) => {
-            const updated = prev.map((n) => 
-              (n._id === data.notificationId || n.id === data.notificationId) 
-                ? { ...n, read: true, isRead: true } 
-                : n
-            );
-            saveNotifications(updated);
-            console.log('📊 Unread count after read event:', updated.filter((n) => !(n.read || n.isRead)).length);
-            return updated;
-          });
+          // Only update if it's for this worker
+          if (data.userId === worker.id || data.userId === String(worker.id) || !data.userId) {
+            setNotifications((prev) => {
+              const updated = prev.map((n) => 
+                (n._id === data.notificationId || n.id === data.notificationId) 
+                  ? { ...n, read: true, isRead: true } 
+                  : n
+              );
+              // Save to storage immediately
+              saveNotifications(updated);
+              console.log('📊 Notification marked as read, unread count:', updated.filter((n) => !(n.read || n.isRead)).length);
+              return updated;
+            });
+            
+            // Reload from backend to ensure sync
+            setTimeout(() => {
+              loadNotifications(true);
+            }, 300);
+          }
         }
       };
 
-      // Listen for all notifications cleared
+      // Listen for all notifications cleared (from backend or other devices)
       const handleNotificationsCleared = (data: any) => {
         console.log('🗑️ All notifications cleared event received:', data);
         if (data.userId === worker.id || data.userId === String(worker.id)) {
           setNotifications([]);
-          AsyncStorage.removeItem(NOTIFICATIONS_STORAGE_KEY);
+          // Clear storage immediately
+          AsyncStorage.removeItem(NOTIFICATIONS_STORAGE_KEY).catch(err => 
+            console.error('Error clearing storage:', err)
+          );
           console.log('📊 All notifications cleared, unread count: 0');
+          
+          // Reload from backend to ensure sync
+          setTimeout(() => {
+            loadNotifications(true);
+          }, 300);
         }
       };
       
-      // Listen for all notifications marked as read
+      // Listen for all notifications marked as read (from backend or other devices)
       const handleAllNotificationsRead = (data: any) => {
         console.log('✅ All notifications read event received:', data);
         if (data.userId === worker.id || String(data.userId) === String(worker.id)) {
           // Mark all as read in local state
           setNotifications((prev) => {
             const updated = prev.map((n) => ({ ...n, read: true, isRead: true }));
+            // Save to storage immediately
             saveNotifications(updated);
             console.log('📊 All notifications marked as read, unread count: 0');
             return updated;
           });
+          
+          // Reload from backend to ensure sync
+          setTimeout(() => {
+            loadNotifications(true);
+          }, 300);
         }
       };
 
@@ -517,7 +558,7 @@ export default function NotificationsScreen() {
     return 0;
   };
 
-  // Update unread count when notifications change
+  // Update unread count when notifications change and sync with backend
   useEffect(() => {
     if (worker?.id) {
       // Sync with backend count periodically
@@ -527,16 +568,17 @@ export default function NotificationsScreen() {
         
         // Use the higher count (backend might have more recent data)
         if (backendCount !== localCount) {
-          console.log('📊 Unread count sync:', { backendCount, localCount });
-          // If backend has more, reload notifications
-          if (backendCount > localCount) {
+          console.log('📊 Unread count sync mismatch:', { backendCount, localCount });
+          // If backend has different count, reload notifications to sync
+          if (Math.abs(backendCount - localCount) > 0) {
+            console.log('🔄 Reloading notifications to sync with backend...');
             loadNotifications(true);
           }
         }
       };
       
-      // Sync every 10 seconds
-      const interval = setInterval(syncCount, 10000);
+      // Sync every 15 seconds to ensure data consistency
+      const interval = setInterval(syncCount, 15000);
       return () => clearInterval(interval);
     }
   }, [notifications, worker?.id]);
@@ -557,8 +599,8 @@ export default function NotificationsScreen() {
 
           if (response.ok) {
             console.log('✅ Notification marked as read in backend:', notification._id);
-            // Emit socket event to notify other screens
-            socketService.emit('notification:read', { notificationId: notification._id });
+            // Emit socket event to notify other screens/devices
+            socketService.emit('notification:read', { notificationId: notification._id, userId: worker.id });
           }
         } catch (apiError) {
           console.error('Error marking as read in backend:', apiError);
@@ -571,7 +613,7 @@ export default function NotificationsScreen() {
         (n.id === id || n._id === id) ? { ...n, read: true, isRead: true } : n
       );
       setNotifications(updated);
-      saveNotifications(updated);
+      await saveNotifications(updated);
       
       console.log('📊 Unread count updated:', updated.filter((n) => !(n.read || n.isRead)).length);
     } catch (error) {
@@ -594,13 +636,8 @@ export default function NotificationsScreen() {
 
           if (response.ok) {
             console.log('✅ All notifications marked as read in backend');
-            // Emit socket event to notify other screens
-            const unreadNotifications = notifications.filter((n) => !(n.read || n.isRead));
-            unreadNotifications.forEach((n) => {
-              if (n._id) {
-                socketService.emit('notification:read', { notificationId: n._id });
-              }
-            });
+            // Emit socket event to notify other screens/devices
+            socketService.emit('notifications:all-read', { userId: worker.id });
           }
         } catch (apiError) {
           console.error('Error marking all as read in backend:', apiError);
@@ -611,7 +648,7 @@ export default function NotificationsScreen() {
       // Update local state immediately for instant UI feedback
       const updated = notifications.map((n) => ({ ...n, read: true, isRead: true }));
       setNotifications(updated);
-      saveNotifications(updated);
+      await saveNotifications(updated);
       
       console.log('📊 All notifications marked as read, unread count: 0');
     } catch (error) {
@@ -635,6 +672,8 @@ export default function NotificationsScreen() {
 
           if (response.ok) {
             console.log('✅ Notification deleted from backend:', notification._id);
+            // Emit socket event to notify other screens/devices
+            socketService.emit('notification:deleted', { notificationId: notification._id });
           } else {
             console.warn('⚠️ Failed to delete from backend, deleting locally only');
           }
@@ -644,10 +683,12 @@ export default function NotificationsScreen() {
         }
       }
 
-      // Remove from local state and storage
+      // Remove from local state and storage immediately for instant UI feedback
       const updated = notifications.filter((n) => n.id !== id && n._id !== id);
       setNotifications(updated);
-      saveNotifications(updated);
+      await saveNotifications(updated);
+      
+      console.log('📊 Notification deleted, remaining count:', updated.length);
     } catch (error) {
       console.error('Error deleting notification:', error);
     }
@@ -680,6 +721,8 @@ export default function NotificationsScreen() {
 
                   if (response.ok) {
                     console.log('✅ All notifications deleted from backend');
+                    // Emit socket event to notify other screens/devices
+                    socketService.emit('notifications:cleared', { userId: worker.id });
                   } else {
                     console.warn('⚠️ Failed to delete from backend, clearing locally only');
                   }
@@ -689,7 +732,7 @@ export default function NotificationsScreen() {
                 }
               }
 
-              // Clear local state and storage
+              // Clear local state and storage immediately for instant UI feedback
               setNotifications([]);
               await AsyncStorage.removeItem(NOTIFICATIONS_STORAGE_KEY);
               console.log('✅ All notifications cleared');
@@ -748,7 +791,11 @@ export default function NotificationsScreen() {
       <SafeAreaView style={styles.safe}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <TouchableOpacity onPress={() => {
+            // Use replace instead of back to avoid GO_BACK error
+            // This ensures we always have a valid navigation target
+            router.replace('/(tabs)');
+          }} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
           <View style={styles.headerContent}>
