@@ -167,7 +167,7 @@ export default function DocumentVerificationScreen() {
     }
 
     try {
-      const apiUrl = getApiUrl();
+      const apiUrl = getApiUrl().replace(/\/+$/, '');
       console.log('🔄 Loading verification data for worker:', worker.id);
       const response = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
         method: 'GET',
@@ -684,17 +684,22 @@ export default function DocumentVerificationScreen() {
     setUploading(category);
     
     // Get API URL outside try block so it's accessible in catch block
-    let apiUrl = getApiUrl();
+    const apiUrl = getApiUrl();
     
-    // CRITICAL: For web platform, ALWAYS use localhost (browsers can't connect to local network IPs)
-    // This is a runtime safety check in case config didn't convert it properly
-    if (Platform.OS === 'web' && apiUrl.match(/192\.168\.\d+\.\d+/)) {
-      const portMatch = apiUrl.match(/:(\d+)/);
-      const port = portMatch ? portMatch[1] : '5001';
-      apiUrl = `http://localhost:${port}`;
-      console.log('🌐 [document-verification] Web platform: Runtime conversion to localhost');
-      console.log('   Original:', getApiUrl());
-      console.log('   Converted:', apiUrl);
+    // CRITICAL: Clean and validate API URL outside try block so it's accessible in catch block
+    const cleanApiUrl = apiUrl.trim().replace(/\/+$/, '');
+    
+    // For Android physical devices, ensure we're NOT using localhost
+    if (Platform.OS === 'android' && (cleanApiUrl.includes('localhost') || cleanApiUrl.includes('127.0.0.1'))) {
+      console.error('❌ ERROR: Android physical device cannot use localhost!');
+      console.error('   Current URL:', cleanApiUrl);
+      console.error('   Please update EXPO_PUBLIC_API_URL in .env file to your computer\'s IP address');
+      Alert.alert(
+        'Configuration Error',
+        `Android device cannot use localhost!\n\nCurrent URL: ${cleanApiUrl}\n\nPlease update your .env file:\nEXPO_PUBLIC_API_URL=http://YOUR_COMPUTER_IP:5001\n\nFind your IP with: ifconfig (Mac) or ipconfig (Windows)`,
+        [{ text: 'OK' }]
+      );
+      return;
     }
     
     try {
@@ -1084,17 +1089,28 @@ export default function DocumentVerificationScreen() {
       }
 
       console.log('📤 Submitting documents for category:', category);
-      console.log('🌐 API URL:', apiUrl);
+      
+      // CRITICAL: Validate API URL format (cleanApiUrl already defined outside try block)
+      // Validate URL format
+      if (!cleanApiUrl.match(/^https?:\/\/[^\/]+:\d+$/)) {
+        const errorMsg = `❌ ERROR: Invalid API URL format: ${cleanApiUrl}\n\nExpected format: http://IP_ADDRESS:PORT (e.g., http://192.168.1.66:5001)`;
+        console.error(errorMsg);
+        Alert.alert('Configuration Error', errorMsg, [{ text: 'OK' }]);
+        return;
+      }
+      
+      console.log('🌐 API URL:', cleanApiUrl);
+      console.log('🌐 API URL validated:', /^https?:\/\/[^\/]+:\d+$/.test(cleanApiUrl));
       
       // CRITICAL: Verify the API URL is correct for physical device
       // Must NOT be localhost or 127.0.0.1 on physical Android device
       // Web platform can use localhost, so only check for Android
-      if (Platform.OS === 'android' && (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1'))) {
-        const errorMsg = `❌ ERROR: API URL contains localhost/127.0.0.1 which won't work on physical Android device!\nCurrent URL: ${apiUrl}\n\nPlease ensure your .env file has EXPO_PUBLIC_API_URL set to your computer's IP address (e.g., http://192.168.1.66:5001)`;
+      if (Platform.OS === 'android' && (cleanApiUrl.includes('localhost') || cleanApiUrl.includes('127.0.0.1'))) {
+        const errorMsg = `❌ ERROR: API URL contains localhost/127.0.0.1 which won't work on physical Android device!\nCurrent URL: ${cleanApiUrl}\n\nPlease ensure your .env file has EXPO_PUBLIC_API_URL set to your computer's IP address (e.g., http://192.168.1.66:5001)`;
         console.error(errorMsg);
         Alert.alert(
           'Configuration Error',
-          `API URL is incorrect for physical device:\n${apiUrl}\n\nPlease check your .env file and ensure EXPO_PUBLIC_API_URL is set to your computer's IP address.`,
+          `API URL is incorrect for physical device:\n${cleanApiUrl}\n\nPlease check your .env file and ensure EXPO_PUBLIC_API_URL is set to your computer's IP address.`,
           [{ text: 'OK' }]
         );
         return;
@@ -1105,7 +1121,8 @@ export default function DocumentVerificationScreen() {
         console.log('🌐 Web platform detected - localhost URLs are acceptable');
       }
       
-      const uploadUrl = `${apiUrl}/api/workers/upload-service-documents`;
+      // Construct upload URL - ensure no double slashes
+      const uploadUrl = `${cleanApiUrl}/api/workers/upload-service-documents`;
       console.log('📡 Final Upload URL:', uploadUrl);
       console.log('📱 Platform:', Platform.OS);
       console.log('📱 Device Type:', __DEV__ ? 'Development' : 'Production');
@@ -1165,7 +1182,7 @@ export default function DocumentVerificationScreen() {
       // Skip connectivity test on web (browser handles CORS/network errors differently)
       if (Platform.OS !== 'web') {
         console.log('🔍 Testing network connectivity before upload...');
-        const testUrl = `${apiUrl}/health`;
+        const testUrl = `${cleanApiUrl}/health`;
         console.log('   Test URL:', testUrl);
         
         try {
@@ -1195,20 +1212,20 @@ export default function DocumentVerificationScreen() {
             // This is a critical error - if we can't reach the server, the upload will definitely fail
             console.error('❌ Network connectivity test FAILED');
             console.error('   Error:', testError.message);
-            console.error('   This means the server at', apiUrl, 'is not reachable');
+            console.error('   This means the server at', cleanApiUrl, 'is not reachable');
             
             // Show user-friendly error with troubleshooting steps
             Alert.alert(
               'Cannot Reach Server',
-              `Cannot connect to server at:\n${apiUrl}\n\n` +
+              `Cannot connect to server at:\n${cleanApiUrl}\n\n` +
               `Please verify:\n` +
               `1. Backend is running (cd backend && bun run dev)\n` +
-              `2. Test in browser: ${apiUrl}/health\n` +
+              `2. Test in browser: ${cleanApiUrl}/health\n` +
               `3. Same WiFi network (device and computer)\n` +
               `4. Correct IP address (check with: ifconfig/ipconfig)\n` +
               `5. Firewall allows port 5001\n` +
               `6. Router doesn't block device-to-device communication\n\n` +
-              `Current API URL: ${apiUrl}`,
+              `Current API URL: ${cleanApiUrl}`,
               [
                 {
                   text: 'Retry',
@@ -1324,18 +1341,20 @@ export default function DocumentVerificationScreen() {
         }
         
         // Enhanced error message for network failures
+        // Get API URL again in case it's not in scope
+        const errorApiUrl = getApiUrl().replace(/\/+$/, '');
         if (fetchError.message?.includes('Network request failed') || 
             fetchError.message?.includes('Failed to fetch') ||
             fetchError.name === 'TypeError') {
           throw new Error(
-            `Network request failed: Cannot connect to ${apiUrl}\n\n` +
+            `Network request failed: Cannot connect to ${errorApiUrl}\n\n` +
             `Possible causes:\n` +
             `1. Backend server is not running\n` +
             `2. Wrong IP address (check .env file)\n` +
             `3. Device not on same WiFi network\n` +
             `4. Firewall blocking port 5001\n` +
             `5. Android cleartext traffic not allowed\n\n` +
-            `Current API URL: ${apiUrl}`
+            `Current API URL: ${errorApiUrl}`
           );
         }
         
@@ -1463,10 +1482,10 @@ export default function DocumentVerificationScreen() {
         // Network error - provide helpful message with retry
         Alert.alert(
           'Network Error',
-          `Cannot connect to server at ${apiUrl}\n\n` +
+          `Cannot connect to server at ${cleanApiUrl}\n\n` +
           `Please check:\n` +
           `1. Backend is running (cd backend && bun run dev)\n` +
-          `2. Test in phone browser: ${apiUrl}/health\n` +
+          `2. Test in phone browser: ${cleanApiUrl}/health\n` +
           `3. Same WiFi network\n` +
           `4. Firewall allows port 5001`,
           [
