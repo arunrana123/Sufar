@@ -52,10 +52,26 @@ class NotificationSoundService {
    */
   public async playNotificationSound(notificationType: string, status?: string) {
     try {
-      // Vibrate first
+      // Enhanced haptic feedback based on notification type
       if (Platform.OS !== 'web') {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        Vibration.vibrate(200);
+        if (notificationType === 'booking') {
+          if (status === 'accepted' || status === 'completed') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Vibration.vibrate(200);
+          } else if (status === 'cancelled' || status === 'rejected') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            Vibration.vibrate([100, 50, 100]);
+          } else {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            Vibration.vibrate(200);
+          }
+        } else if (notificationType === 'payment') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          Vibration.vibrate(200);
+        } else {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          Vibration.vibrate(200);
+        }
       }
 
       // Determine sound based on type and status
@@ -96,25 +112,31 @@ class NotificationSoundService {
   private async playSound(soundType: string) {
     try {
       if (Platform.OS === 'web') {
-        // Web: Use Web Audio API
+        // Web: Use Web Audio API with enhanced quality
         this.playWebBeep(soundType);
       } else if (AudioModule) {
-        // Native: Use expo-av (you can add sound files later)
-        // For now, just vibrate
+        // Native: Use haptic feedback as primary alert
         if (Platform.OS !== 'web') {
-          Vibration.vibrate(300);
+          if (soundType === 'success') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          } else if (soundType === 'error') {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          } else {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          }
         }
       }
     } catch (error) {
       console.warn('Could not play sound, using vibration only:', error);
       if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         Vibration.vibrate(200);
       }
     }
   }
 
   /**
-   * Play beep sound on web using Web Audio API
+   * Play beep sound on web using Web Audio API - Enhanced for better quality
    */
   private playWebBeep(soundType: string) {
     if (typeof window === 'undefined') return;
@@ -127,25 +149,29 @@ class NotificationSoundService {
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
       
-      // Different frequencies for different sound types
+      // Enhanced frequencies and durations for better sound quality
       let frequency = 800; // Default
       let duration = 0.2;
       
       if (soundType === 'success') {
-        frequency = 1000; // Higher pitch for success
+        frequency = 1200; // Higher pitch for success
         duration = 0.3;
       } else if (soundType === 'error') {
-        frequency = 600; // Lower pitch for error
+        frequency = 500; // Lower pitch for error
         duration = 0.25;
       } else if (soundType === 'promotion') {
         frequency = 900;
         duration = 0.4;
+      } else if (soundType === 'info') {
+        frequency = 800;
+        duration = 0.2;
       }
       
       oscillator.frequency.value = frequency;
-      oscillator.type = 'sine';
+      oscillator.type = 'sine'; // Sine wave for smoother sound
       
-      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      // Smooth gain envelope for better sound quality
+      gainNode.gain.setValueAtTime(0.35, audioContext.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
       
       oscillator.start(audioContext.currentTime);
