@@ -36,6 +36,7 @@ const config = {
       bundleIdentifier: "com.arun22.frontend",    // ✅ Added here
       supportsTablet: true,
       infoPlist: {
+        NSFaceIDUsageDescription: "Use Face ID to unlock the app and keep your account secure.",
         NSAppTransportSecurity: {
           NSAllowsArbitraryLoads: true,
           NSExceptionDomains: {
