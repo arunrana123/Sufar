@@ -24,7 +24,10 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   const [isLoaded, setIsLoaded] = useState(false);
 
   // Determine the actual color scheme based on theme mode
-  const colorScheme = themeMode === 'system' ? systemColorScheme : themeMode;
+  // Use system color scheme as fallback while loading
+  const colorScheme = isLoaded 
+    ? (themeMode === 'system' ? systemColorScheme : themeMode)
+    : systemColorScheme;
   const theme = Colors[colorScheme];
 
   useEffect(() => {
@@ -54,11 +57,6 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     }
   };
 
-  // Don't render children until theme is loaded to prevent flash
-  if (!isLoaded) {
-    return null;
-  }
-
   const value: ThemeContextType = {
     themeMode,
     colorScheme,
@@ -66,6 +64,8 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     setThemeMode,
   };
 
+  // Always render the provider with a valid value to maintain hook order
+  // This prevents the "fewer hooks than expected" error
   return (
     <ThemeContext.Provider value={value}>
       {children}
@@ -73,7 +73,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
   );
 }
 
-export function useTheme() {
+export function   useTheme() {
   const context = useContext(ThemeContext);
   if (context === undefined) {
     throw new Error('useTheme must be used within a ThemeProvider');
