@@ -69,8 +69,6 @@ export default function ProfileScreen() {
           const userData = await response.json();
           const points = userData.rewardPoints || 0;
           setRewardPoints(points);
-          
-          // Update user context
           if (userData.rewardPoints !== undefined) {
             updateUser({ ...user, rewardPoints: points } as any);
           }
@@ -88,8 +86,7 @@ export default function ProfileScreen() {
       
       // Listen for reward points updates
       const handleRewardPointsUpdate = (data: any) => {
-        if (data.userId === user.id) {
-          console.log('🎁 Reward points updated:', data);
+        if (data.userId === user.id && data.totalPoints !== undefined) {
           setRewardPoints(data.totalPoints);
           updateUser({ ...user, rewardPoints: data.totalPoints } as any);
         }
@@ -350,7 +347,7 @@ export default function ProfileScreen() {
             </Text>
             <Text style={[styles.imageEmail, { color: theme.secondary }]}>{user?.email || ''}</Text>
             
-            {/* Reward Points Display */}
+            {/* Reward Points - earn and use as discount only; live updating */}
             <View style={[styles.rewardPointsContainer, { backgroundColor: theme.primary + '15', borderColor: theme.primary }]}>
               <Ionicons name="star" size={20} color={theme.primary} />
               <Text style={[styles.rewardPointsLabel, { color: theme.text }]}>Reward Points:</Text>
@@ -358,6 +355,9 @@ export default function ProfileScreen() {
                 {rewardPoints.toLocaleString()}
               </Text>
             </View>
+            <Text style={[styles.rewardPointsHint, { color: theme.secondary }]}>
+              Earn on payments & reviews • Use as discount at Payment/Checkout when booking a service
+            </Text>
           </View>
 
           {/* Profile Details */}
@@ -678,6 +678,12 @@ const styles = StyleSheet.create({
   rewardPointsValue: {
     fontSize: 18,
     fontWeight: 'bold',
+  },
+  rewardPointsHint: {
+    fontSize: 12,
+    marginTop: 8,
+    paddingHorizontal: 4,
+    textAlign: 'center',
   },
 });
 
