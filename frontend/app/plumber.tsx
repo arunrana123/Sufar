@@ -54,9 +54,9 @@ export default function PlumberScreen() {
       <SafeAreaView style={styles.safe}>
         {/* Header */}
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
-          <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={28} color="#fff" />
-          </Pressable>
+          <TouchableOpacity onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/home'); }} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
           <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Plumber</ThemedText>
           <Pressable style={styles.searchBtn} onPress={() => setSearchVisible(true)}>
             <Ionicons name="search" size={24} color="#fff" />
@@ -197,10 +197,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  backBtn: {
+  backButton: {
     padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 20,
+    marginLeft: -8,
+    marginRight: 4,
   },
   headerTitle: {
     fontSize: 24,
