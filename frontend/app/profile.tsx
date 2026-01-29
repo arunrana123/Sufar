@@ -35,6 +35,7 @@ export default function ProfileScreen() {
     lastName: user?.lastName || '',
     username: user?.username || '',
     email: user?.email || '',
+    phone: (user as any)?.phone || '',
   });
   const [rewardPoints, setRewardPoints] = useState<number>((user as any)?.rewardPoints || 0);
   const [isSaving, setIsSaving] = useState(false);
@@ -48,6 +49,7 @@ export default function ProfileScreen() {
         lastName: user?.lastName || '',
         username: user?.username || '',
         email: user?.email || '',
+        phone: (user as any)?.phone || '',
       });
       setProfileImage(user?.profilePhoto || null);
     }
@@ -69,8 +71,8 @@ export default function ProfileScreen() {
           const userData = await response.json();
           const points = userData.rewardPoints || 0;
           setRewardPoints(points);
-          if (userData.rewardPoints !== undefined) {
-            updateUser({ ...user, rewardPoints: points } as any);
+          if (userData.rewardPoints !== undefined || userData.phone !== undefined) {
+            updateUser({ ...user, rewardPoints: points, phone: userData.phone } as any);
           }
         }
       } catch (error) {
@@ -233,6 +235,7 @@ export default function ProfileScreen() {
           firstName: formData.firstName.trim(),
           lastName: formData.lastName.trim(),
           email: formData.email.trim(),
+          phone: formData.phone?.trim() || undefined,
         }),
       });
 
@@ -249,13 +252,13 @@ export default function ProfileScreen() {
         firstName: updatedUserData.firstName,
         lastName: updatedUserData.lastName,
         email: updatedUserData.email,
-        phone: updatedUserData.phone,
+        phone: updatedUserData.phone ?? (user as any)?.phone,
         profilePhoto: updatedUserData.profilePhoto,
       };
 
       updateUser(updatedUser);
       setIsEditing(false);
-      Alert.alert('Success', 'Profile updated successfully!');
+      Alert.alert('Success', 'Saved successfully! Your profile and phone number have been updated.');
     } catch (error: any) {
       console.error('Error updating profile:', error);
       Alert.alert('Error', error.message || 'Failed to update profile. Please try again.');
@@ -270,6 +273,7 @@ export default function ProfileScreen() {
       lastName: user?.lastName || '',
       username: user?.username || '',
       email: user?.email || '',
+      phone: (user as any)?.phone || '',
     });
     setIsEditing(false);
   };
@@ -435,6 +439,25 @@ export default function ProfileScreen() {
               )}
             </View>
 
+            {/* Phone Number - Required to book service; worker uses it to call for location/updates */}
+            <View style={styles.fieldContainer}>
+              <Text style={styles.fieldLabel}>Phone Number (required for booking)</Text>
+              {isEditing ? (
+                <TextInput
+                  style={styles.fieldInput}
+                  value={formData.phone}
+                  onChangeText={(text) => setFormData({ ...formData, phone: text })}
+                  placeholder="e.g. 98XXXXXXXX"
+                  keyboardType="phone-pad"
+                />
+              ) : (
+                <Text style={styles.fieldValue}>{formData.phone || 'Not set'}</Text>
+              )}
+              <Text style={[styles.fieldHint, { color: theme.secondary }]}>
+                Required for booking — worker will use this to call you for location or updates
+              </Text>
+            </View>
+
             {/* Edit Buttons */}
             {isEditing && (
               <View style={styles.buttonContainer}>
@@ -451,7 +474,7 @@ export default function ProfileScreen() {
                   disabled={isSaving}
                 >
                   <Text style={styles.saveButtonText}>
-                    {isSaving ? 'Saving...' : 'Save Changes'}
+                    {isSaving ? 'Saving...' : 'Save'}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -607,6 +630,10 @@ const styles = StyleSheet.create({
     color: '#333',
     borderWidth: 1,
     borderColor: '#E0E0E0',
+  },
+  fieldHint: {
+    fontSize: 12,
+    marginTop: 4,
   },
   buttonContainer: {
     flexDirection: 'row',
