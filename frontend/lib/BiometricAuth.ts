@@ -23,6 +23,44 @@ export class BiometricAuth {
     }
   }
 
+  /** Returns true if device has Face ID and it is enrolled. */
+  static async isFaceIDEnrolled(): Promise<boolean> {
+    try {
+      const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+      const hasFaceID = types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION);
+      if (!hasFaceID) return false;
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      return isEnrolled;
+    } catch (error) {
+      console.error('Error checking Face ID enrollment:', error);
+      return false;
+    }
+  }
+
+  /** Register Face ID / biometric: authenticate once. Caller saves to AsyncStorage on success. */
+  static async registerFaceID(): Promise<{ success: boolean; error?: string }> {
+    try {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      if (!hasHardware || !isEnrolled) {
+        return { success: false, error: 'Please set up Face ID (or fingerprint) in your device Settings first.' };
+      }
+      const type = await this.getBiometricType();
+      const promptMessage = type === 'Face ID'
+        ? 'Register Face ID - Look at your device to enable Face ID unlock'
+        : 'Register Biometric - Use your fingerprint to enable unlock';
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage,
+        fallbackLabel: 'Use Password',
+        disableDeviceFallback: false,
+      });
+      return { success: result.success, error: result.success ? undefined : 'Registration cancelled or failed.' };
+    } catch (error) {
+      console.error('Face ID registration error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
   static async authenticate(): Promise<{ success: boolean; error?: string }> {
     try {
       const isEnabled = await this.isEnabled();
@@ -35,16 +73,19 @@ export class BiometricAuth {
         return { success: false, error: 'Biometric authentication is not available on this device' };
       }
 
+      const type = await this.getBiometricType();
+      const promptMessage = type === 'Face ID' ? 'Unlock with Face ID' : type === 'Fingerprint' ? 'Unlock with Fingerprint' : 'Unlock with Biometric';
+      const subPromptMessage = type === 'Face ID' ? 'Look at your device to unlock' : 'Use your biometric to continue';
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Biometric Login',
-        subPromptMessage: 'Use your biometric to continue',
+        promptMessage,
+        subPromptMessage,
         fallbackLabel: 'Use Password',
         disableDeviceFallback: false,
       });
 
-      return { 
-        success: result.success, 
-        error: result.success ? undefined : 'Biometric authentication failed' 
+      return {
+        success: result.success,
+        error: result.success ? undefined : 'Biometric authentication failed',
       };
     } catch (error) {
       console.error('Biometric authentication error:', error);
