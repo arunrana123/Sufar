@@ -28,7 +28,7 @@ interface UploadedDocument {
 }
 
 export default function UploadedDocumentsScreen() {
-  const { worker } = useAuth();
+  const { worker, updateWorker } = useAuth();
   const [loading, setLoading] = useState(true);
   const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocument[]>([]);
   const [viewDocument, setViewDocument] = useState<UploadedDocument | null>(null);
@@ -126,6 +126,15 @@ export default function UploadedDocumentsScreen() {
             license: workerData.verificationStatus.license || 'pending',
             overall: workerData.verificationStatus.overall || 'pending',
           });
+        }
+
+        // Sync worker context so QR screen and profile see verified status instantly
+        if (updateWorker && worker) {
+          updateWorker({
+            ...worker,
+            verificationStatus: workerData.verificationStatus || worker.verificationStatus,
+            categoryVerificationStatus: workerData.categoryVerificationStatus ?? worker.categoryVerificationStatus,
+          } as any);
         }
 
         // Load service categories
