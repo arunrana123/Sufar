@@ -1,4 +1,5 @@
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Platform, TextInput, Modal, TouchableOpacity } from 'react-native';
+import { SafeAreaView as RNSafeAreaView, StyleSheet, View, Pressable, ScrollView, Platform, TextInput, Modal, TouchableOpacity, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -110,7 +111,7 @@ export default function CarpenterScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
         {/* Header */}
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <TouchableOpacity onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/home'); }} style={styles.backButton}>
@@ -177,7 +178,7 @@ export default function CarpenterScreen() {
           onRequestClose={() => setSearchVisible(false)}
         >
           <View style={[styles.searchModal, { backgroundColor: theme.background }]}>
-            <SafeAreaView style={styles.searchSafe}>
+            <RNSafeAreaView style={styles.searchSafe}>
               {/* Search Header */}
               <View style={[styles.searchHeader, { backgroundColor: theme.card, borderBottomColor: theme.border }]}>
                 <TouchableOpacity onPress={() => setSearchVisible(false)} style={styles.closeBtn}>
@@ -236,7 +237,7 @@ export default function CarpenterScreen() {
                   )}
                 </View>
               </ScrollView>
-            </SafeAreaView>
+            </RNSafeAreaView>
           </View>
         </Modal>
       </SafeAreaView>
@@ -265,7 +266,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -306,7 +307,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     borderBottomWidth: 1,
   },
   closeBtn: {
