@@ -8,12 +8,13 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   ActivityIndicator,
   Alert,
   Image,
   Platform,
+  StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -1587,7 +1588,7 @@ export default function DocumentVerificationScreen() {
   if (loading) {
     return (
       <View style={styles.container}>
-        <SafeAreaView style={styles.safe}>
+        <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#FF7A2C" />
             <Text style={styles.loadingText}>Loading verification data...</Text>
@@ -1605,8 +1606,8 @@ export default function DocumentVerificationScreen() {
 
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safe}>
-        {/* Header */}
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
+        {/* Header - full-bleed on Android */}
         <View style={styles.header}>
           <TouchableOpacity 
             style={styles.backButton}
@@ -2128,7 +2129,7 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: '#FF7A2C',
     paddingHorizontal: 20,
-    paddingTop: 60,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 60,
     paddingBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
