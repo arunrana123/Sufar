@@ -6,39 +6,41 @@ import { ThemedView } from '@/components/ThemedView';
 import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import ServiceCard from '@/components/ServiceCard';
-import { getServicesByCategory, getCategoryInfo } from '@/lib/services';
-import { useState, useMemo } from 'react';
+import { getServicesByCategory, getCategoryInfo, getServicesByCategoryFromAPI } from '@/lib/services';
+import { useState, useEffect } from 'react';
+import type { Service } from '@/lib/services';
+
+const CATEGORY_SLUG = 'delivery';
 
 export default function DeliveryScreen() {
   const { theme } = useTheme();
   
-  const categoryInfo = getCategoryInfo('delivery');
-  const allServices = getServicesByCategory('delivery');
-  
-  // Search state
+  const categoryInfo = getCategoryInfo(CATEGORY_SLUG);
+  const fallbackServices = getServicesByCategory(CATEGORY_SLUG);
+  const [allServices, setAllServices] = useState<Service[]>(fallbackServices);
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filteredServices, setFilteredServices] = useState(allServices);
+  const [filteredServices, setFilteredServices] = useState<Service[]>(fallbackServices);
 
-  // Filter services based on search query
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-    if (query.trim() === '') {
+  useEffect(() => {
+    getServicesByCategoryFromAPI(CATEGORY_SLUG).then((api) => {
+      if (api.length > 0) setAllServices(api);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (searchQuery.trim() === '') {
       setFilteredServices(allServices);
     } else {
-      const filtered = allServices.filter(service =>
-        service.title.toLowerCase().includes(query.toLowerCase()) ||
-        service.description?.toLowerCase().includes(query.toLowerCase())
-      );
-      setFilteredServices(filtered);
+      setFilteredServices(allServices.filter(service =>
+        service.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (service.description?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false)
+      ));
     }
-  };
+  }, [allServices, searchQuery]);
 
-  const clearSearch = () => {
-    setSearchQuery('');
-    setFilteredServices(allServices);
-    setSearchVisible(false);
-  };
+  const handleSearch = (query: string) => setSearchQuery(query);
+  const clearSearch = () => { setSearchQuery(''); setSearchVisible(false); };
 
   return (
     <ThemedView style={styles.container}>
