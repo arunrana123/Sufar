@@ -1,4 +1,4 @@
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Alert, Switch, Modal } from 'react-native';
+import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Alert, Switch, Modal, TouchableOpacity } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
 import UserOnboarding from '@/components/UserOnboarding';
+import { BiometricAuth } from '@/lib/BiometricAuth';
 import { useState, useEffect } from 'react';
 
 export default function SettingsScreen() {
@@ -15,6 +16,7 @@ export default function SettingsScreen() {
   const { logout, user } = useAuth();
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricAvailable, setBiometricAvailable] = useState(false);
+  const [biometricType, setBiometricType] = useState<string>('');
   const [themeModalVisible, setThemeModalVisible] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
@@ -25,9 +27,12 @@ export default function SettingsScreen() {
 
   const checkBiometricAvailability = async () => {
     try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync();
-      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
-      setBiometricAvailable(hasHardware && isEnrolled);
+      const available = await BiometricAuth.isAvailable();
+      setBiometricAvailable(available);
+      if (available) {
+        const type = await BiometricAuth.getBiometricType();
+        setBiometricType(type);
+      }
     } catch (error) {
       console.error('Error checking biometric availability:', error);
     }
@@ -44,29 +49,54 @@ export default function SettingsScreen() {
 
   const toggleBiometric = async (value: boolean) => {
     if (value) {
-      // Enable biometric - authenticate first
       try {
-                 const result = await LocalAuthentication.authenticateAsync({
-                   promptMessage: 'Enable Biometric Login - Use your biometric to enable quick login',
-                   fallbackLabel: 'Use Password',
-                 });
-
-        if (result.success) {
+        const hasHardware = await LocalAuthentication.hasHardwareAsync();
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+        if (!hasHardware || !isEnrolled) {
+          Alert.alert(
+            'Face ID / Biometric Not Set Up',
+            'Please set up Face ID (or fingerprint) in your device Settings first, then try again.',
+          );
+          return;
+        }
+        const type = await BiometricAuth.getBiometricType();
+        const promptMessage = type === 'Face ID'
+          ? 'Register Face ID - Look at your device to enable Face ID unlock'
+          : 'Register Biometric - Use your fingerprint to enable unlock';
+        const authResult = await LocalAuthentication.authenticateAsync({
+          promptMessage,
+          fallbackLabel: 'Use Password',
+          disableDeviceFallback: false,
+          cancelLabel: 'Cancel',
+        });
+        if (authResult.success) {
           await AsyncStorage.setItem('biometricEnabled', 'true');
           setBiometricEnabled(true);
-          Alert.alert('Success', 'Biometric login enabled successfully!');
+          Alert.alert('Success', type === 'Face ID' ? 'Face ID registered. You can now unlock the app with Face ID.' : 'Biometric registered. You can now unlock the app.');
         } else {
-          Alert.alert('Authentication Failed', 'Biometric authentication was cancelled or failed.');
+          const err = (authResult as { error?: string }).error;
+          if (err === 'user_cancel' || err === 'user_fallback' || err === 'app_cancel' || err === 'system_cancel') {
+            Alert.alert('Cancelled', 'Registration was cancelled. Turn the switch on again to enable Face ID / biometric unlock.');
+          } else if (err === 'not_enrolled' || err === 'passcode_not_set') {
+            Alert.alert('Set Up Required', 'Please set up Face ID (or fingerprint) and device passcode in Settings > Face ID & Passcode (or Touch ID & Passcode), then try again.');
+          } else {
+            Alert.alert('Registration Failed', err || 'Face ID / biometric authentication failed. Please try again.');
+          }
         }
-      } catch (error) {
-        console.error('Biometric authentication error:', error);
-        Alert.alert('Error', 'Failed to enable biometric login. Please try again.');
+      } catch (error: unknown) {
+        console.error('Biometric registration error:', error);
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        Alert.alert('Error', `Failed to register Face ID / biometric. ${message} Please try again.`);
       }
     } else {
-      // Disable biometric
-      await AsyncStorage.setItem('biometricEnabled', 'false');
-      setBiometricEnabled(false);
-      Alert.alert('Biometric Disabled', 'Biometric login has been disabled.');
+      try {
+        await AsyncStorage.setItem('biometricEnabled', 'false');
+        setBiometricEnabled(false);
+        Alert.alert('Biometric Disabled', 'Face ID / biometric login has been disabled.');
+      } catch (error) {
+        console.error('Error disabling biometric:', error);
+        Alert.alert('Error', 'Failed to update setting.');
+      }
     }
   };
 
@@ -138,11 +168,13 @@ export default function SettingsScreen() {
           },
         },
         {
-          icon: 'finger-print-outline',
-          title: 'Biometric Login',
-          subtitle: biometricAvailable 
-            ? (biometricEnabled ? 'Enabled - Use biometric to login' : 'Use fingerprint or face ID')
-            : 'Not available on this device',
+          icon: biometricType === 'Face ID' ? 'face-recognition-outline' : 'finger-print-outline',
+          title: biometricType === 'Face ID' ? 'Face ID' : 'Biometric Login',
+          subtitle: biometricAvailable
+            ? (biometricEnabled
+              ? (biometricType === 'Face ID' ? 'Face ID registered - Unlock with Face ID' : 'Enabled - Use biometric to login')
+              : (biometricType === 'Face ID' ? 'Register Face ID to unlock the app' : 'Use fingerprint or Face ID'))
+            : 'Set up Face ID / fingerprint in device Settings first',
           onPress: biometricAvailable ? () => toggleBiometric(!biometricEnabled) : undefined,
           isToggle: biometricAvailable,
           toggleValue: biometricEnabled,
@@ -253,9 +285,12 @@ export default function SettingsScreen() {
       <Stack.Screen options={{ headerShown: false }} />
       <SafeAreaView style={styles.safe}>
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
-          <Pressable onPress={() => router.push('/menu')} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={28} color="#fff" />
-          </Pressable>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/menu'); }}
+          >
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
           <ThemedText type="title" style={[styles.headerTitle, { color: '#fff' }]}>Settings</ThemedText>
           <View style={{ width: 40 }} />
         </View>
@@ -397,10 +432,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 5,
   },
-  backBtn: {
+  backButton: {
     padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 20,
+    marginLeft: -8,
+    marginRight: 4,
   },
   headerTitle: {
     fontSize: 24,
