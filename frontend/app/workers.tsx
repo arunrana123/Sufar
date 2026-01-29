@@ -8,13 +8,24 @@ import { ThemedView } from '@/components/ThemedView';
 import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import ServiceCard from '@/components/ServiceCard';
-import { getServicesByCategory, getCategoryInfo } from '@/lib/services';
+import { getServicesByCategory, getCategoryInfo, getServicesByCategoryFromAPI } from '@/lib/services';
+import { useState, useEffect } from 'react';
+import type { Service } from '@/lib/services';
+
+const CATEGORY_SLUG = 'workers';
 
 export default function WorkersScreen() {
   const { theme } = useTheme();
   
-  const categoryInfo = getCategoryInfo('workers');
-  const services = getServicesByCategory('workers');
+  const categoryInfo = getCategoryInfo(CATEGORY_SLUG);
+  const fallbackServices = getServicesByCategory(CATEGORY_SLUG);
+  const [services, setServices] = useState<Service[]>(fallbackServices);
+
+  useEffect(() => {
+    getServicesByCategoryFromAPI(CATEGORY_SLUG).then((api) => {
+      if (api.length > 0) setServices(api);
+    });
+  }, []);
 
   const handleServicePress = (serviceId: string) => {
     // TODO: Navigate to service details or booking screen
