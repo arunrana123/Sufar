@@ -232,6 +232,30 @@ router.post('/reset-password', async (req: Request, res: Response) => {
   }
 });
 
+// Change password (logged-in user: current password + new password)
+router.post('/change-password', async (req: Request, res: Response) => {
+  try {
+    const { userId, currentPassword, newPassword } = req.body as { userId?: string; currentPassword?: string; newPassword?: string };
+    if (!userId || !currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'User ID, current password, and new password are required' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters long' });
+    }
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.password !== currentPassword) {
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+    user.password = newPassword;
+    await user.save();
+    return res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    return res.status(500).json({ message: 'Failed to change password', error: String(err) });
+  }
+});
+
 // Update profile photo - MUST come before /:id route to avoid route conflict
 router.patch('/profile-photo', uploadProfilePhoto.single('profilePhoto'), async (req: Request, res: Response) => {
   try {
