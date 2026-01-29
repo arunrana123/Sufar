@@ -1,4 +1,5 @@
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Alert, Switch, Modal, TouchableOpacity, TextInput, Linking, ActivityIndicator, Text } from 'react-native';
+import { StyleSheet, View, Pressable, ScrollView, Alert, Switch, Modal, TouchableOpacity, TextInput, Linking, ActivityIndicator, Text, Platform, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -361,7 +362,7 @@ export default function SettingsScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <TouchableOpacity
             style={styles.backButton}
@@ -591,7 +592,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
+    paddingBottom: 20,
     marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
