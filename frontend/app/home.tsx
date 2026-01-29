@@ -1,6 +1,7 @@
 // HOME SCREEN - Main landing page with service categories, search, and location selector
 // Features: Service search, location selection, quick actions, profile access, notification bell, helpful tooltips
-import { SafeAreaView, StyleSheet, View, TextInput, Pressable, Platform, Alert, ScrollView, Image } from 'react-native';
+import { StyleSheet, View, TextInput, Pressable, Platform, Alert, ScrollView, Image, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -18,7 +19,7 @@ import { detectLocation, AVAILABLE_LOCATIONS } from '@/lib/LocationDetector';
 import { useState, useEffect, useCallback } from 'react';
 
 export default function HomeScreen() {
-  const { theme } = useTheme();
+  const { theme, colorScheme } = useTheme();
   const { user } = useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -182,9 +183,9 @@ export default function HomeScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
         <View style={[styles.header, { backgroundColor: theme.primary }]}>
-          <Pressable style={styles.profileLogo} onPress={() => router.push('/profile')}>
+          <Pressable style={[styles.profileLogo, { backgroundColor: theme.tint + 'E6', borderColor: 'rgba(255,255,255,0.5)' }]} onPress={() => router.push('/profile')}>
             {profileImage ? (
               <Image
                 source={{ uri: profileImage }}
@@ -202,11 +203,14 @@ export default function HomeScreen() {
             )}
           </Pressable>
           <Pressable 
-            style={styles.locationWrap} 
+            style={[
+              styles.locationWrap,
+              { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.25)', borderWidth: 1, borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.35)' }
+            ]} 
             onPress={() => setShowLocationDropdown(!showLocationDropdown)}
           >
             <Ionicons name="location" size={16} color="#fff" style={styles.locationIcon} />
-            <ThemedText style={styles.locationText}>{selectedLocation}</ThemedText>
+            <ThemedText style={[styles.locationText, { color: '#fff' }]}>{selectedLocation}</ThemedText>
             <Ionicons 
               name={showLocationDropdown ? "chevron-up" : "chevron-down"} 
               size={14} 
@@ -239,11 +243,11 @@ export default function HomeScreen() {
               ))}
             </View>
           )}
-          <Pressable style={[styles.searchButton, { backgroundColor: theme.background }]} onPress={() => router.push('/search-services')}>
-            <Ionicons name="search" size={18} color={theme.text} />
+          <Pressable style={[styles.searchButton, { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.25)', borderWidth: 1, borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.35)' }]} onPress={() => router.push('/search-services')}>
+            <Ionicons name="search" size={18} color="#fff" />
           </Pressable>
-          <Pressable style={[styles.bellWrap, { backgroundColor: theme.background }]} onPress={() => router.replace('/notifications')}>
-            <Ionicons name="notifications-outline" size={18} color={theme.text} />
+          <Pressable style={[styles.bellWrap, { backgroundColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.25)', borderWidth: 1, borderColor: colorScheme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.35)' }]} onPress={() => router.replace('/notifications')}>
+            <Ionicons name="notifications-outline" size={18} color="#fff" />
             {unreadCount > 0 && (
               <View style={[styles.notificationBadge, { backgroundColor: theme.danger }]}>
                 <ThemedText style={styles.badgeText}>
@@ -452,11 +456,10 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   safe: { flex: 1 },
   header: {
-    backgroundColor: '#4A90E2',
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
     paddingHorizontal: 12,
-    paddingTop: 15,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     paddingBottom: 20,
     marginTop: 1,
     flexDirection: 'row',
@@ -467,12 +470,10 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 23,
-    backgroundColor: '#3B82F6',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 20,
     borderWidth: 2,
-    borderColor: '#fff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -488,7 +489,6 @@ const styles = StyleSheet.create({
   locationWrap: {
     flex: 1,
     height: 36,
-    backgroundColor: '#FF7A2C',
     borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
@@ -500,7 +500,6 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   locationText: {
-    color: '#fff',
     fontSize: 14,
     fontWeight: '600',
     flex: 1,
@@ -512,10 +511,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 50,
     left: 12,
-    backgroundColor: '#fff',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -529,17 +526,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: 'rgba(0,0,0,0.06)',
   },
-  selectedLocationOption: {
-    backgroundColor: '#FFF3E0',
-  },
+  selectedLocationOption: {},
   locationOptionText: {
     fontSize: 14,
-    color: '#333',
   },
   selectedLocationOptionText: {
-    color: '#FF7A2C',
     fontWeight: '600',
   },
   searchContainer: {
@@ -627,7 +620,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 20,
@@ -637,7 +629,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 20,
