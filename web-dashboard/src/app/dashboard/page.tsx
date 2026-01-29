@@ -241,9 +241,9 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Recent Activity Section - Collapsible */}
+        {/* Recent Activity Section - Collapsible; expands fully with content so page grows downward */}
         <div className={`mt-8 bg-white rounded-lg shadow transition-all duration-300 ${
-          isActivityOpen ? 'max-h-[800px] opacity-100 mb-20' : 'max-h-0 opacity-0 mb-0 overflow-hidden'
+          isActivityOpen ? 'max-h-none opacity-100 mb-20 overflow-visible' : 'max-h-0 opacity-0 mb-0 overflow-hidden'
         }`}>
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">Recent Activity</h3>
@@ -287,11 +287,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Floating Dropdown Button at Bottom */}
-        <div className="fixed bottom-6 right-6 z-50">
+        {/* Show/Hide Activity button - in flow so it moves to bottom as content grows */}
+        <div className="mt-6 flex justify-end pb-8">
           <button
             onClick={() => setIsActivityOpen(!isActivityOpen)}
-            className="bg-purple-600 hover:bg-purple-700 text-white rounded-full p-4 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2 group"
+            className="bg-purple-600 hover:bg-purple-700 text-white rounded-full p-4 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center gap-2 group relative"
             aria-label="Toggle Recent Activity"
           >
             <svg 
