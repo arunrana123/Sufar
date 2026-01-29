@@ -20,7 +20,7 @@ interface ServiceFormData {
 const categories = [
   'Plumber', 'Electrician', 'Carpenter', 'Cleaner', 'Mechanic', 
   'AC Repair', 'Painter', 'Mason', 'Cook', 'Driver', 'Security', 
-  'Beautician', 'Technician', 'Delivery', 'Gardener'
+  'Beautician', 'Technician', 'Delivery', 'Gardener', 'Workers'
 ];
 
 const priceTypes = [
