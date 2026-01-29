@@ -927,9 +927,12 @@ export default function ProfileScreen() {
   const loadServiceCategories = async () => {
     if (!worker?.id) return;
     
+    const apiUrl = getApiUrl();
+    if (!apiUrl || typeof apiUrl !== 'string') {
+      return; // Skip when API URL not configured (no console spam)
+    }
+    
     try {
-      const apiUrl = getApiUrl();
-      console.log('🔄 Loading service categories for worker:', worker.id);
       const response = await fetch(`${apiUrl}/api/workers/${worker.id}`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
@@ -937,7 +940,6 @@ export default function ProfileScreen() {
       if (response.ok) {
         const workerData = await response.json();
         const categories = workerData.serviceCategories || [];
-        console.log('✅ Service categories loaded:', categories);
         setServiceCategories(categories);
         
         const categoryDocs: { [key: string]: { skillProof: string | null; experience: string | null } } = {};
@@ -951,15 +953,14 @@ export default function ProfileScreen() {
           categoryStatus[cat] = workerData.categoryVerificationStatus?.[cat] || 'pending';
         });
         
-        console.log('📋 Category verification status:', categoryStatus);
-        console.log('📄 Category documents:', categoryDocs);
-        
         setCategoryVerificationDocs(categoryDocs);
         setCategoryVerificationStatus(categoryStatus);
-      } else {
-        console.error('❌ Failed to load service categories:', response.status);
       }
-    } catch (error) {
+    } catch (error: any) {
+      // Network request failed: backend unreachable or EXPO_PUBLIC_API_URL wrong (e.g. localhost on device)
+      if (error?.name === 'TypeError' && error?.message === 'Network request failed') {
+        return; // Fail silently; categories stay as-is, avoid repeated logs
+      }
       console.error('❌ Error loading service categories:', error);
     }
   };
