@@ -15,6 +15,7 @@ export interface IUser extends Document {
   role?: 'user' | 'admin';
   googleId?: string;
   rewardPoints?: number;
+  walletBalance?: number; // Cash from claimed reward points (100 points = Rs. 1)
   createdAt: Date;
   resetToken?: string;
   resetTokenExpires?: Date;
@@ -34,6 +35,7 @@ const UserSchema: Schema = new Schema({
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
   googleId: { type: String, unique: true, sparse: true }, // Google Sign-In ID
   rewardPoints: { type: Number, default: 0 }, // Reward points for discounts
+  walletBalance: { type: Number, default: 0 }, // Cash from claimed reward points
   createdAt: { type: Date, default: Date.now },
   resetToken: { type: String },
   resetTokenExpires: { type: Date },
