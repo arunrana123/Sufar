@@ -130,22 +130,108 @@ router.post('/', async (req: Request, res: Response) => {
       // Find all workers who:
       // 1. Have this service category in their serviceCategories array
       // 2. Are available (status === 'available' and isActive === true)
+      // 3. Are verified for this service category
       try {
+        // Normalize category name for matching (handle variations like "Carpenter" vs "Carpentry")
+        const normalizeCategory = (cat: string): string => {
+          const normalized = cat.toLowerCase().trim();
+          // Handle common variations
+          if (normalized.includes('carpenter') || normalized.includes('carpentry')) {
+            return 'carpenter';
+          }
+          return normalized;
+        };
+        
+        const normalizedCategory = normalizeCategory(booking.serviceCategory);
+        
+        // Use more flexible regex that matches category variations
+        // Match "Carpenter", "Carpentry", etc. for carpenter-related services
+        const categoryPattern = normalizedCategory === 'carpenter' 
+          ? '(carpenter|carpentry)' 
+          : normalizedCategory;
+        
+        // First, check all workers with this category (for debugging)
+        const allWorkersWithCategory = await WorkerUser.find({
+          serviceCategories: { $elemMatch: { $regex: new RegExp(categoryPattern, 'i') } },
+        }).select('_id name serviceCategories categoryVerificationStatus status isActive').lean();
+        
+        console.log(`🔍 Diagnostic: Found ${allWorkersWithCategory.length} total workers with category matching "${booking.serviceCategory}"`);
+        allWorkersWithCategory.forEach(w => {
+          console.log(`   - ${w.name}: status=${w.status}, isActive=${w.isActive}, categories=${w.serviceCategories?.join(', ')}, verified=${Object.keys(w.categoryVerificationStatus || {}).join(', ')}`);
+        });
+        
+        // Now query for available workers
         const availableWorkers = await WorkerUser.find({
-          serviceCategories: { $elemMatch: { $regex: new RegExp(`^${booking.serviceCategory}$`, 'i') } },
+          serviceCategories: { $elemMatch: { $regex: new RegExp(categoryPattern, 'i') } },
           isActive: true,
           status: 'available',
-        }).select('_id name email phone serviceCategories categoryVerificationStatus currentLocation rating completedJobs');
+        }).select('_id name email phone serviceCategories categoryVerificationStatus currentLocation rating completedJobs badge rankScore');
 
-        console.log(`🔍 Found ${availableWorkers.length} available workers with service category "${booking.serviceCategory}"`);
+        console.log(`✅ Found ${availableWorkers.length} available workers (isActive=true, status=available) with service category matching "${booking.serviceCategory}"`);
+        console.log(`📋 Available workers details:`, availableWorkers.map(w => ({
+          name: w.name,
+          id: w._id,
+          categories: w.serviceCategories,
+          verificationStatus: w.categoryVerificationStatus,
+          status: w.status,
+          isActive: w.isActive,
+        })));
 
-        // Filter workers who have this service category and calculate distance
+        // Filter workers who:
+        // 1. Have this service category (case-insensitive, handle variations)
+        // 2. Are VERIFIED for this service category (handle category variations)
         const eligibleWorkers = availableWorkers
           .filter((worker) => {
-            const hasCategory = worker.serviceCategories?.some(
-              (cat: string) => cat.toLowerCase() === booking.serviceCategory.toLowerCase()
-            );
-            return hasCategory;
+            // Check if worker has the category (flexible matching)
+            const hasCategory = worker.serviceCategories?.some((cat: string) => {
+              const workerCat = normalizeCategory(cat);
+              const bookingCat = normalizedCategory;
+              return workerCat === bookingCat || 
+                     workerCat.includes(bookingCat) || 
+                     bookingCat.includes(workerCat);
+            });
+            
+            if (!hasCategory) {
+              console.log(`⚠️ Worker ${worker.name} does not have category "${booking.serviceCategory}"`);
+              console.log(`   Worker categories:`, worker.serviceCategories);
+              return false;
+            }
+            
+            // CRITICAL: Only include workers who are VERIFIED for this category
+            // Check verification status with flexible category matching
+            let categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+            
+            // If not found with exact match, try to find matching category in verification status
+            if (!categoryStatus && worker.categoryVerificationStatus) {
+              const matchingCategory = Object.keys(worker.categoryVerificationStatus).find(cat => {
+                const normalizedCat = normalizeCategory(cat);
+                const normalizedBookingCat = normalizedCategory;
+                // Handle variations like "Carpenter" vs "Carpentry"
+                if (normalizedBookingCat.includes('carpenter') || normalizedBookingCat.includes('carpentry')) {
+                  return normalizedCat.includes('carpenter') || normalizedCat.includes('carpentry');
+                }
+                return normalizedCat === normalizedBookingCat || 
+                       normalizedCat.includes(normalizedBookingCat) || 
+                       normalizedBookingCat.includes(normalizedCat);
+              });
+              
+              if (matchingCategory) {
+                categoryStatus = worker.categoryVerificationStatus[matchingCategory];
+                console.log(`✅ Found matching verification status for worker ${worker.name}: "${matchingCategory}" -> ${categoryStatus}`);
+              }
+            }
+            
+            const isVerified = categoryStatus === 'verified';
+            
+            if (!isVerified) {
+              console.log(`⚠️ Worker ${worker.name} has category "${booking.serviceCategory}" but is not verified`);
+              console.log(`   Verification status: ${categoryStatus || 'not found'}`);
+              console.log(`   Available verification keys:`, Object.keys(worker.categoryVerificationStatus || {}));
+              return false;
+            }
+            
+            console.log(`✅ Worker ${worker.name} is eligible: has category and is verified`);
+            return true;
           })
           .map((worker) => {
             // Calculate distance if worker has location
@@ -190,9 +276,11 @@ router.post('/', async (req: Request, res: Response) => {
           });
 
         console.log(`✅ Found ${eligibleWorkers.length} eligible workers, sorted by badge priority and distance`);
+        console.log(`📋 Booking category: "${booking.serviceCategory}" (normalized: "${normalizedCategory}")`);
         eligibleWorkers.slice(0, 5).forEach((w, i) => {
-          const badgeName = w.badgePriority === 3 ? 'Gold' : w.badgePriority === 2 ? 'Silver' : 'Iron';
-          console.log(`  ${i+1}. ${w.worker.name} - ${badgeName} (${w.worker.completedJobs || 0} jobs, ${(w.worker.rating || 0).toFixed(1)}★) - ${w.distance === Infinity ? 'Unknown' : w.distance.toFixed(2) + ' km'}`);
+          const badgeName = w.badgePriority === 4 ? 'Platinum' : w.badgePriority === 3 ? 'Gold' : w.badgePriority === 2 ? 'Silver' : 'Iron';
+          const verificationStatus = w.worker.categoryVerificationStatus?.[booking.serviceCategory] || 'unknown';
+          console.log(`  ${i+1}. ${w.worker.name} - ${badgeName} (${w.worker.completedJobs || 0} jobs, ${(w.worker.rating || 0).toFixed(1)}★, verified: ${verificationStatus}) - ${w.distance === Infinity ? 'Unknown' : w.distance.toFixed(2) + ' km'}`);
         });
 
         const bookingRequest = {
@@ -208,9 +296,22 @@ router.post('/', async (req: Request, res: Response) => {
           createdAt: booking.createdAt,
         };
 
+        // Check how many workers are in the 'worker' room
+        const workerRoom = io.sockets.adapter.rooms.get('worker');
+        const workersInRoom = workerRoom ? workerRoom.size : 0;
+        console.log(`📊 Workers currently in 'worker' socket room: ${workersInRoom}`);
+
         if (eligibleWorkers.length === 0) {
-          console.warn(`⚠️ No available workers found for service category: "${booking.serviceCategory}"`);
-          // Still emit to worker room in case someone comes online
+          console.warn(`⚠️ No eligible workers found for service category: "${booking.serviceCategory}"`);
+          console.warn(`📊 Summary:`);
+          console.warn(`   - Total workers found in initial query: ${availableWorkers.length}`);
+          console.warn(`   - Workers filtered out (no category match or not verified): ${availableWorkers.length}`);
+          console.warn(`   - Booking category: "${booking.serviceCategory}" (normalized: "${normalizedCategory}")`);
+          console.warn(`   - Workers in socket room: ${workersInRoom}`);
+          
+          // Still emit to worker room as fallback - let worker app filter by verification
+          // This ensures workers who are online but might have slight category name differences still get notified
+          console.log(`📡 Emitting booking request to all ${workersInRoom} workers in 'worker' room as fallback`);
           io.to('worker').emit('booking:request', {
             ...bookingRequest,
             requiresVerification: true,
@@ -248,6 +349,9 @@ router.post('/', async (req: Request, res: Response) => {
             });
             
             // Also emit to general worker room as fallback
+            const workerRoom = io.sockets.adapter.rooms.get('worker');
+            const workersInRoom = workerRoom ? workerRoom.size : 0;
+            console.log(`📡 Also emitting to ${workersInRoom} workers in 'worker' room as fallback`);
             io.to('worker').emit('booking:request', {
               ...bookingRequest,
               requiresVerification: true,
@@ -939,26 +1043,20 @@ router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Booking not found after update' });
     }
 
-    // Emit real-time events
+    // Emit real-time events (include workerId so worker app can refresh wallet/earnings)
     const io = req.app.get('io');
     if (io) {
-      // Emit payment status update to both user and worker
-      io.to(String(booking.userId)).emit('payment:status_updated', {
+      const payload = {
         bookingId: id,
         paymentStatus: updatedBooking.paymentStatus,
         userConfirmed: updatedBooking.userConfirmedPayment,
         workerConfirmed: updatedBooking.workerConfirmedPayment,
+        workerId: booking.workerId ? String(booking.workerId) : undefined,
         booking: updatedBooking.toObject(),
-      });
-      
+      };
+      io.to(String(booking.userId)).emit('payment:status_updated', payload);
       if (booking.workerId) {
-        io.to(String(booking.workerId)).emit('payment:status_updated', {
-          bookingId: id,
-          paymentStatus: updatedBooking.paymentStatus,
-          userConfirmed: updatedBooking.userConfirmedPayment,
-          workerConfirmed: updatedBooking.workerConfirmedPayment,
-          booking: updatedBooking.toObject(),
-        });
+        io.to(String(booking.workerId)).emit('payment:status_updated', payload);
       }
 
       // Also emit booking:updated for general updates
@@ -1018,12 +1116,13 @@ router.patch('/:id/payment', async (req: Request, res: Response) => {
       booking.finalAmount = finalAmount;
     }
 
-    // Update payment info
+    // Update payment info and mark both parties confirmed (online payment is automatic)
     booking.paymentMethod = method;
     booking.paymentId = transactionId || `PAYMENT_${Date.now()}`;
     booking.paymentStatus = 'paid';
     booking.paymentConfirmedAt = new Date();
-
+    booking.userConfirmedPayment = true;
+    booking.workerConfirmedPayment = true;
     await booking.save();
 
     // Deduct reward points if used
@@ -1037,21 +1136,72 @@ router.patch('/:id/payment', async (req: Request, res: Response) => {
       }
     }
 
-    // Emit real-time events
+    // Award user reward points (10 points per Rs. 100 paid)
+    const amountPaidForUser = booking.finalAmount ?? booking.price;
+    if (amountPaidForUser > 0) {
+      const pointsEarned = Math.floor(amountPaidForUser / 100) * 10;
+      if (pointsEarned > 0) {
+        const user = await User.findById(booking.userId);
+        if (user) {
+          const currentPoints = user.rewardPoints || 0;
+          const newPoints = currentPoints + pointsEarned;
+          await User.findByIdAndUpdate(booking.userId, { rewardPoints: newPoints });
+          const io = req.app.get('io');
+          if (io) {
+            io.to(String(booking.userId)).emit('reward:points_updated', {
+              userId: booking.userId,
+              pointsEarned,
+              totalPoints: newPoints,
+              bookingId: id,
+            });
+          }
+        }
+      }
+    }
+
+    // Credit worker wallet: service charge / cost of service (totalEarnings + reward points)
+    const amountPaid = booking.finalAmount ?? booking.price;
+    if (booking.workerId && amountPaid > 0) {
+      const worker = await WorkerUser.findById(booking.workerId);
+      if (worker) {
+        const currentEarnings = worker.totalEarnings || 0;
+        const newEarnings = currentEarnings + amountPaid;
+        let workerPoints = 10;
+        workerPoints += Math.floor(amountPaid / 100);
+        const currentWorkerPoints = worker.rewardPoints || 0;
+        const newWorkerPoints = currentWorkerPoints + workerPoints;
+        await WorkerUser.findByIdAndUpdate(booking.workerId, {
+          totalEarnings: newEarnings,
+          rewardPoints: newWorkerPoints,
+        });
+        console.log(`💰 Updated worker wallet: Rs. ${newEarnings} (earnings) for worker ${booking.workerId}`);
+        const io = req.app.get('io');
+        if (io) {
+          io.to(String(booking.workerId)).emit('worker:reward_points_updated', {
+            workerId: booking.workerId,
+            pointsEarned: workerPoints,
+            totalPoints: newWorkerPoints,
+            earningsUpdated: newEarnings,
+            bookingId: id,
+          });
+        }
+      }
+    }
+
+    // Emit real-time events (include workerId so worker app can refresh wallet/earnings)
     const io = req.app.get('io');
     if (io) {
-      io.to(String(booking.userId)).emit('payment:status_updated', {
+      const payload = {
         bookingId: id,
         paymentStatus: booking.paymentStatus,
+        userConfirmed: true,
+        workerConfirmed: true,
+        workerId: booking.workerId ? String(booking.workerId) : undefined,
         booking: booking.toObject(),
-      });
-      
+      };
+      io.to(String(booking.userId)).emit('payment:status_updated', payload);
       if (booking.workerId) {
-        io.to(String(booking.workerId)).emit('payment:status_updated', {
-          bookingId: id,
-          paymentStatus: booking.paymentStatus,
-          booking: booking.toObject(),
-        });
+        io.to(String(booking.workerId)).emit('payment:status_updated', payload);
       }
     }
 
@@ -1095,14 +1245,26 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
     console.log('✅ User ID for notification:', userId);
     console.log('✅ User ID type:', typeof userId);
 
-    // Update booking
+    // Update booking - save ALL booking data
     booking.workerId = workerId;
     booking.status = 'accepted';
+    // Ensure all booking fields are preserved (location, price, serviceName, etc.)
     await booking.save();
-    console.log('✅ Booking updated:', {
+    
+    // Reload booking to ensure all populated fields are included
+    const savedBooking = await Booking.findById(id)
+      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('workerId', 'name phone email currentLocation.coordinates')
+      .lean();
+    
+    console.log('✅ Booking updated and saved:', {
       id: booking._id,
       status: booking.status,
       workerId: booking.workerId,
+      serviceName: booking.serviceName,
+      location: booking.location,
+      price: booking.price,
+      hasAllData: !!savedBooking,
     });
 
     // Set worker status to 'busy' so they can't accept other bookings
@@ -1116,9 +1278,8 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
       console.error('⚠️ Error updating worker status:', workerStatusError);
     }
 
-    // Populate for response
-    await booking.populate('userId', 'firstName lastName profilePhoto');
-    await booking.populate('workerId', 'name phone email currentLocation.coordinates');
+    // Use saved booking with all populated fields for response
+    const populatedBooking = savedBooking;
 
     // Create notifications for both USER (customer) and WORKER
     const io = req.app.get('io');
@@ -1184,9 +1345,11 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
 
     // Emit socket events - ONLY to user app for notifications
     if (io) {
+      // Use populated booking data (with all fields) for socket events
+      const fullBookingData = populatedBooking || booking.toObject();
       const bookingData = {
         bookingId: booking._id,
-        booking: booking.toObject(),
+        booking: fullBookingData, // Include full populated booking data
         workerId: booking.workerId,
         serviceName: booking.serviceName,
       };
@@ -1251,6 +1414,7 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
       // Send to user for their tracking screen
       io.to(userId).emit('booking:accepted', {
         ...bookingData,
+        booking: populatedBooking || booking.toObject(), // Include full booking data
         status: 'accepted',
         message: 'Worker accepted your request. Waiting for worker to start location tracking...',
         timestamp: new Date().toISOString(),
@@ -1261,6 +1425,7 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
       if (booking.workerId) {
         io.to(String(booking.workerId)).emit('booking:accepted', {
           ...bookingData,
+          booking: populatedBooking || booking.toObject(), // Include full booking data
           status: 'accepted',
           message: 'You have accepted this booking. It will appear in your tracking page.',
           timestamp: new Date().toISOString(),
@@ -1269,16 +1434,17 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
       }
       
       // Emit booking:updated to worker room so other workers know this booking is taken
-      // But this is just an update event, NOT a notification
-      io.to('worker').emit('booking:updated', booking.toObject());
-      console.log('✅ booking:updated event emitted to worker room');
+      // Include full booking data so workers see all request details
+      io.to('worker').emit('booking:updated', populatedBooking || booking.toObject());
+      console.log('✅ booking:updated event emitted to worker room with full data');
 
       console.log('✅ All socket events emitted correctly - user notification sent');
     } else {
       console.warn('⚠️ Socket.IO not available - cannot send real-time notifications');
     }
 
-    res.json(booking);
+    // Return full booking data with all fields populated
+    res.json(populatedBooking || booking);
   } catch (error) {
     console.error('❌ Accept booking error:', error);
     res.status(500).json({ message: 'Failed to accept booking', error: String(error) });
@@ -1297,21 +1463,32 @@ router.patch('/:id/reject', async (req: Request, res: Response) => {
     }
 
     // Only update status if it's still pending
+    // Keep status as 'pending' so other workers can accept
     if (booking.status === 'pending') {
-      booking.status = 'pending'; // Keep pending so other workers can accept
       await booking.save();
     }
+    
+    // Reload booking to ensure all fields are included in response
+    const savedBooking = await Booking.findById(id)
+      .populate('userId', 'firstName lastName profilePhoto')
+      .lean();
 
-    // Emit socket event
+    // Emit socket event with full booking data
     const io = req.app.get('io');
     if (io) {
       io.to(String(booking.userId)).emit('booking:rejected', {
         bookingId: booking._id,
         workerId,
+        booking: savedBooking || booking.toObject(), // Include full booking data
       });
+      
+      // Also emit booking:updated to worker room so other workers see the rejection
+      io.to('worker').emit('booking:updated', savedBooking || booking.toObject());
+      console.log('✅ booking:rejected and booking:updated events emitted with full data');
     }
 
-    res.json({ message: 'Booking rejected', booking });
+    // Return full booking data
+    res.json({ message: 'Booking rejected', booking: savedBooking || booking });
   } catch (error) {
     console.error('Reject booking error:', error);
     res.status(500).json({ message: 'Failed to reject booking', error: String(error) });
@@ -1462,6 +1639,54 @@ router.get('/nearby-workers', async (req: Request, res: Response) => {
   }
 });
 
+// Update booking location (e.g. for test location - 12–13 km from worker)
+// PATCH /:id/location - Body: { location: { address?, coordinates: { latitude, longitude } } }
+router.patch('/:id/location', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { location } = req.body;
+
+    if (!location?.coordinates?.latitude || !location?.coordinates?.longitude) {
+      return res.status(400).json({
+        message: 'Invalid location. coordinates.latitude and coordinates.longitude are required.',
+      });
+    }
+
+    const booking = await Booking.findById(id);
+    if (!booking) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+
+    const address =
+      location.address && String(location.address).trim() !== ''
+        ? String(location.address).trim()
+        : `Location at ${location.coordinates.latitude}, ${location.coordinates.longitude}`;
+
+    booking.location = {
+      address,
+      coordinates: {
+        latitude: Number(location.coordinates.latitude),
+        longitude: Number(location.coordinates.longitude),
+      },
+    };
+    await booking.save();
+
+    const io = req.app.get('io');
+    if (io && booking.userId) {
+      io.to(String(booking.userId)).emit('booking:updated', booking.toObject());
+    }
+    if (io && booking.workerId) {
+      const workerId = typeof booking.workerId === 'object' ? (booking.workerId as any)._id : booking.workerId;
+      if (workerId) io.to(String(workerId)).emit('booking:updated', booking.toObject());
+    }
+
+    return res.json({ booking, message: 'Booking location updated.' });
+  } catch (error) {
+    console.error('Update booking location error:', error);
+    res.status(500).json({ message: 'Failed to update booking location' });
+  }
+});
+
 // Get booking details with live worker location for tracking
 router.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -1533,6 +1758,19 @@ router.get('/:id', async (req: Request, res: Response) => {
       console.log('ℹ️ No worker assigned to booking yet');
     }
 
+    // Include customer (user) name for worker app JobNavigationScreen
+    let userName: string | undefined;
+    if (booking.userId) {
+      try {
+        const userDoc = await User.findById(booking.userId).lean();
+        if (userDoc) {
+          const u = userDoc as { firstName?: string; lastName?: string; name?: string };
+          const fullName = [u.firstName, u.lastName].filter(Boolean).join(' ').trim();
+          userName = (u.name ?? fullName) || undefined;
+        }
+      } catch (_) {}
+    }
+
     const response = {
       _id: booking._id,
       serviceName: booking.serviceName,
@@ -1543,6 +1781,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       workerId: booking.workerId,
       workerLocation,
       worker,
+      userName,
       startTime: booking.status === 'in_progress' ? booking.updatedAt : booking.createdAt,
       estimatedDuration: booking.estimatedDuration,
       remainingTime: booking.estimatedDuration,
