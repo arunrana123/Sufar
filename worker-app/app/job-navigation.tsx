@@ -71,6 +71,9 @@ export default function JobNavigationScreen() {
   const [eta, setEta] = useState<number>(0);
   const [workStartTime, setWorkStartTime] = useState<Date | null>(null);
   const [workDuration, setWorkDuration] = useState<number>(0);
+  const [navigationStartTime, setNavigationStartTime] = useState<Date | null>(null);
+  const [navigationDuration, setNavigationDuration] = useState<number>(0);
+  const navigationStartTimeRef = useRef<Date | null>(null); // Use ref for immediate access
   const locationSubscription = useRef<any>(null);
   const [routeData, setRouteData] = useState<any>(null);
   const [routeError, setRouteError] = useState<string | null>(null);
@@ -130,10 +133,9 @@ export default function JobNavigationScreen() {
         console.log(' Booking updated in job-navigation:', updatedBooking);
         setBooking(updatedBooking);
         
-        // Update nav status based on booking status
-        if (updatedBooking.status === 'accepted') {
-          setNavStatus('idle');
-        } else if (updatedBooking.status === 'in_progress') {
+        // Update nav status based on booking status - do NOT set 'idle' on 'accepted'
+        // so that when worker clicks Start Navigation we don't overwrite 'navigating' with 'idle'
+        if (updatedBooking.status === 'in_progress') {
           setNavStatus('working');
           if (updatedBooking.workStartTime) {
             setWorkStartTime(new Date(updatedBooking.workStartTime));
@@ -141,6 +143,7 @@ export default function JobNavigationScreen() {
         } else if (updatedBooking.status === 'completed') {
           setNavStatus('completed');
         }
+        // When status === 'accepted': leave navStatus unchanged (keeps 'navigating' if worker just started)
       }
     });
 
@@ -172,7 +175,33 @@ export default function JobNavigationScreen() {
     };
   }, [bookingId]);
 
-  // Update work duration timer
+  // Update navigation duration timer (starts when navigation begins)
+  useEffect(() => {
+    if (navStatus === 'navigating' && navigationStartTimeRef.current) {
+      console.log('⏰ Starting navigation timer useEffect, start time:', navigationStartTimeRef.current.toISOString());
+      const interval = setInterval(() => {
+        if (navigationStartTimeRef.current) {
+          const now = new Date();
+          const diff = Math.floor((now.getTime() - navigationStartTimeRef.current.getTime()) / 1000);
+          setNavigationDuration(diff);
+          if (diff % 10 === 0) { // Log every 10 seconds for debugging
+            console.log('⏰ Navigation timer:', diff, 'seconds');
+          }
+        }
+      }, 1000);
+      
+      return () => {
+        console.log('⏰ Clearing navigation timer interval');
+        clearInterval(interval);
+      };
+    } else if (navStatus !== 'navigating') {
+      // Reset navigation duration when not navigating
+      setNavigationDuration(0);
+      navigationStartTimeRef.current = null;
+    }
+  }, [navStatus]);
+
+  // Update work duration timer (starts when work begins)
   useEffect(() => {
     if (navStatus === 'working' && workStartTime) {
       const interval = setInterval(() => {
@@ -199,6 +228,36 @@ export default function JobNavigationScreen() {
             latitude: data.location.coordinates.latitude,
             longitude: data.location.coordinates.longitude,
           });
+        }
+        
+        // CRITICAL: Initialize navigation and work status from booking data
+        // This ensures the timer starts if work has already started
+        if (data.status === 'in_progress') {
+          setNavStatus('working');
+          if (data.workStartTime) {
+            const startTime = new Date(data.workStartTime);
+            setWorkStartTime(startTime);
+            console.log('⏰ Work start time loaded from booking:', startTime.toISOString());
+            // Calculate initial work duration
+            const now = new Date();
+            const diff = Math.floor((now.getTime() - startTime.getTime()) / 1000);
+            setWorkDuration(Math.max(0, diff));
+          }
+        } else if (data.status === 'accepted') {
+          // Only set to idle on initial load - don't overwrite if already 'navigating' (use functional update)
+          setNavStatus(prev => (prev === 'navigating' ? 'navigating' : 'idle'));
+        } else if (data.status === 'completed') {
+          setNavStatus('completed');
+          if (data.workStartTime) {
+            const startTime = new Date(data.workStartTime);
+            setWorkStartTime(startTime);
+            // Calculate final work duration
+            if (data.completedAt) {
+              const completedAt = new Date(data.completedAt);
+              const diff = Math.floor((completedAt.getTime() - startTime.getTime()) / 1000);
+              setWorkDuration(Math.max(0, diff));
+            }
+          }
         }
       }
     } catch (error) {
@@ -352,7 +411,68 @@ export default function JobNavigationScreen() {
     return R * c;
   };
 
+  // Helper to calculate distance in meters
+  const calculateDistanceMeters = (point1: any, point2: any): number => {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = (point2.latitude - point1.latitude) * Math.PI / 180;
+    const dLon = (point2.longitude - point1.longitude) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(point1.latitude * Math.PI / 180) * Math.cos(point2.latitude * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
   const fetchRoute = async (origin: any, destination: any) => {
+    // Calculate straight-line distance first
+    const straightLineDistance = calculateDistanceMeters(origin, destination);
+    
+    // CRITICAL: If users are very close (< 50 meters), skip route fetching and use straight-line
+    const MIN_ROUTE_DISTANCE = 50; // 50 meters minimum distance to fetch route
+    if (straightLineDistance < MIN_ROUTE_DISTANCE) {
+      console.log(`📍 [NEARBY] Users are very close (${straightLineDistance.toFixed(1)}m), skipping route fetch and using straight-line`);
+      
+      // Create a simple straight-line route for visualization
+      const simpleRoute = {
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [origin.longitude, origin.latitude],
+            [destination.longitude, destination.latitude]
+          ]
+        },
+        distance: straightLineDistance, // in meters
+        duration: Math.max(1, Math.ceil(straightLineDistance / 1.4)), // Walking speed ~1.4 m/s, minimum 1 second
+        steps: [] // No steps for very short routes
+      };
+      
+      setRouteData(simpleRoute);
+      const routeDistanceKm = straightLineDistance / 1000;
+      setTotalRouteDistance(routeDistanceKm);
+      setDistanceRemaining(routeDistanceKm);
+      setDistanceTraveled(0);
+      setDistance(routeDistanceKm);
+      setEta(Math.max(1, Math.ceil(straightLineDistance / 1.4 / 60))); // Convert to minutes, minimum 1
+      
+      // Emit route update to user app
+      socketService.emit('route:updated', {
+        bookingId,
+        route: simpleRoute.geometry,
+        distance: straightLineDistance,
+        duration: simpleRoute.duration,
+        timestamp: new Date().toISOString(),
+        distanceTraveled: 0,
+        distanceRemaining: routeDistanceKm,
+      });
+      
+      console.log('✅ [NEARBY] Straight-line route created for nearby locations:', {
+        distance: `${Math.round(straightLineDistance)} m`,
+        duration: `${simpleRoute.duration} sec`,
+      });
+      
+      return simpleRoute; // Return the simple route
+    }
+    
     if (!getDirections) {
       console.log('⚠️ Mapbox not available, skipping route fetch');
       setRouteError('Mapbox is not available. Please ensure Mapbox is properly configured.');
@@ -364,6 +484,7 @@ export default function JobNavigationScreen() {
       console.log('🗺️ [MAPBOX REQUEST] Fetching route from Mapbox...', {
         origin: `${origin.latitude.toFixed(6)}, ${origin.longitude.toFixed(6)}`,
         destination: `${destination.latitude.toFixed(6)}, ${destination.longitude.toFixed(6)}`,
+        straightLineDistance: `${(straightLineDistance / 1000).toFixed(2)} km`,
         timestamp: new Date().toISOString(),
       });
       const route = await getDirections(
@@ -513,6 +634,16 @@ export default function JobNavigationScreen() {
       return;
     }
     
+    // Calculate straight-line distance first
+    const straightLineDistance = calculateDistanceMeters(currentLocation, destination);
+    
+    // CRITICAL: If users are very close (< 50 meters), skip route recalculation
+    const MIN_ROUTE_DISTANCE = 50; // 50 meters minimum distance to fetch route
+    if (straightLineDistance < MIN_ROUTE_DISTANCE) {
+      console.log(`📍 [NEARBY] Users are very close (${straightLineDistance.toFixed(1)}m), skipping route recalculation`);
+      return;
+    }
+    
     // Prevent concurrent recalculations
     if ((mapRef.current as any)?._recalculating) {
       return;
@@ -565,20 +696,53 @@ export default function JobNavigationScreen() {
   };
 
   const handleStartNavigation = async () => {
-    try {
-      setNavStatus('navigating');
+    // Use fallbacks so navigation can start even if state is slightly stale (e.g. GPS just updated in ref)
+    const effectiveWorkerLocation = workerLocation ?? liveLocationRef.current ?? null;
+    const effectiveUserLocation = userLocation ?? (booking?.location?.coordinates
+      ? { latitude: booking.location.coordinates.latitude, longitude: booking.location.coordinates.longitude }
+      : null);
 
-      // Ensure we have location data
-      if (!workerLocation || !userLocation) {
-        Alert.alert('Error', 'Location data not available. Please wait for GPS to initialize.');
-        setNavStatus('idle');
+    try {
+      // Ensure we have location data before starting
+      if (!effectiveWorkerLocation?.latitude || !effectiveWorkerLocation?.longitude) {
+        Alert.alert('Error', 'Your location is not available yet. Please wait for GPS to initialize and try again.');
+        return;
+      }
+      if (!effectiveUserLocation?.latitude || !effectiveUserLocation?.longitude) {
+        Alert.alert('Error', 'Customer address is not available. Please ensure the booking has a location.');
         return;
       }
 
+      // Start navigation timer FIRST using ref (immediate access)
+      const navStartTime = new Date();
+      navigationStartTimeRef.current = navStartTime;
+      setNavigationStartTime(navStartTime);
+      setNavigationDuration(0);
+      console.log('⏰ Navigation timer started at:', navStartTime.toISOString());
+
+      // Set navigation status so UI and timer effect update immediately
+      setNavStatus('navigating');
+
+      // Sync state if we used ref/booking fallbacks (so rest of app has latest)
+      if (!workerLocation && effectiveWorkerLocation) setWorkerLocation(effectiveWorkerLocation);
+      if (!userLocation && effectiveUserLocation) setUserLocation(effectiveUserLocation);
+
       // Fetch initial route and get route data
-      const routeResponse = await fetchRoute(workerLocation, userLocation);
+      console.log('🗺️ [NAVIGATION START] Fetching route...', {
+        workerLocation: `${effectiveWorkerLocation.latitude.toFixed(6)}, ${effectiveWorkerLocation.longitude.toFixed(6)}`,
+        userLocation: `${effectiveUserLocation.latitude.toFixed(6)}, ${effectiveUserLocation.longitude.toFixed(6)}`,
+      });
+
+      const routeResponse = await fetchRoute(effectiveWorkerLocation, effectiveUserLocation);
+      console.log('🗺️ [NAVIGATION START] Route response:', {
+        hasRoute: !!routeResponse,
+        hasGeometry: !!routeResponse?.geometry,
+        distance: routeResponse?.distance,
+        routeType: routeResponse?.distance && routeResponse.distance < 50 ? 'simpleRoute (nearby)' : 'mapboxRoute',
+      });
       
-      if (routeResponse && routeResponse.geometry) {
+      // Check if route was successfully created (either Mapbox route or simple route for nearby)
+      if (routeResponse && routeResponse.geometry && routeResponse.distance !== undefined) {
         // Use route-based distance, not straight-line
         const totalDistance = routeResponse.distance / 1000; // Convert to km
         
@@ -586,12 +750,16 @@ export default function JobNavigationScreen() {
         setDistanceRemaining(totalDistance); // Use route distance
         setDistance(totalDistance);
         setDistanceTraveled(0);
-        previousLocationRef.current = workerLocation;
+        previousLocationRef.current = effectiveWorkerLocation;
 
-        // Start periodic route recalculation
+        // Start periodic route recalculation (use ref for latest worker loc inside interval)
         routeRecalculationInterval.current = setInterval(() => {
-          if (workerLocation && userLocation && navStatus === 'navigating') {
-            recalculateRoute(workerLocation, userLocation);
+          const currentWorker = workerLocation ?? liveLocationRef.current;
+          const currentUser = userLocation ?? (booking?.location?.coordinates
+            ? { latitude: booking.location.coordinates.latitude, longitude: booking.location.coordinates.longitude }
+            : null);
+          if (currentWorker && currentUser) {
+            recalculateRoute(currentWorker, currentUser);
           }
         }, 30000);
 
@@ -629,37 +797,127 @@ export default function JobNavigationScreen() {
           'success'
         );
       } else {
-        // Show more specific error message
-        const errorMsg = routeError || 'Could not calculate route. Please check your internet connection and Mapbox configuration.';
-        Alert.alert(
-          'Route Error', 
-          errorMsg,
-          [
-            { text: 'OK', style: 'default' },
-            { 
-              text: 'Retry', 
-              onPress: () => handleStartNavigation(),
-              style: 'default'
-            }
-          ]
-        );
-        setNavStatus('idle');
+        // Check if it's a nearby case (route was created but might have different structure)
+        const straightLineDistance = calculateDistanceMeters(effectiveWorkerLocation, effectiveUserLocation);
+        if (straightLineDistance < 50) {
+          // Very close - navigation should still work with simple route
+          console.log('📍 [NEARBY] Users are very close, continuing navigation with simple route');
+          // Navigation can continue even without Mapbox route for very close locations
+          // The route was already created in fetchRoute for nearby case
+          // Just ensure we have the route data
+          if (!routeData) {
+            // Create simple route if not already created
+            const simpleRoute = {
+              geometry: {
+                type: 'LineString',
+                coordinates: [
+                  [effectiveWorkerLocation.longitude, effectiveWorkerLocation.latitude],
+                  [effectiveUserLocation.longitude, effectiveUserLocation.latitude]
+                ]
+              },
+              distance: straightLineDistance,
+              duration: Math.max(1, Math.ceil(straightLineDistance / 1.4)),
+              steps: []
+            };
+            setRouteData(simpleRoute);
+            setTotalRouteDistance(straightLineDistance / 1000);
+            setDistanceRemaining(straightLineDistance / 1000);
+            setDistance(straightLineDistance / 1000);
+            setDistanceTraveled(0);
+            setEta(Math.max(1, Math.ceil(straightLineDistance / 1.4 / 60)));
+            previousLocationRef.current = effectiveWorkerLocation;
+
+            // Emit navigation started even for nearby case
+            socketService.emit('navigation:started', { 
+              bookingId, 
+              workerId: worker?.id,
+              route: simpleRoute.geometry,
+              distance: straightLineDistance,
+              duration: simpleRoute.duration,
+              timestamp: new Date().toISOString(),
+            });
+            
+            showToast(
+              'Navigation started! You are very close to the customer.',
+              'Navigation Started',
+              'success'
+            );
+          }
+        } else {
+          // Show more specific error message for actual route failures
+          // CRITICAL: Don't reset navStatus to 'idle' - keep navigation started and allow retry
+          const errorMsg = routeError || 'Could not calculate route. Please check your internet connection and Mapbox configuration.';
+          console.error('❌ [NAVIGATION START] Route fetch failed:', errorMsg);
+          Alert.alert(
+            'Route Error', 
+            errorMsg + '\n\nNavigation is still active. You can retry fetching the route.',
+            [
+              { text: 'OK', style: 'default' },
+              { 
+                text: 'Retry Route', 
+                onPress: async () => {
+                  // Retry route fetch without resetting navigation
+                  try {
+                    const retryRoute = await fetchRoute(effectiveWorkerLocation, effectiveUserLocation);
+                    if (retryRoute && retryRoute.geometry && retryRoute.distance !== undefined) {
+                      const totalDistance = retryRoute.distance / 1000;
+                      setTotalRouteDistance(totalDistance);
+                      setDistanceRemaining(totalDistance);
+                      setDistance(totalDistance);
+                      setDistanceTraveled(0);
+                      setRouteData(retryRoute);
+                      previousLocationRef.current = effectiveWorkerLocation;
+                      showToast('Route recalculated successfully!', 'Route Updated', 'success');
+                    }
+                  } catch (retryError) {
+                    console.error('Route retry failed:', retryError);
+                  }
+                },
+                style: 'default'
+              }
+            ]
+          );
+          // Keep navigation status as 'navigating' - don't reset to 'idle'
+          // Navigation can continue even without route (worker can still move and we'll track distance)
+        }
       }
     } catch (error) {
       console.error('Error starting navigation:', error);
-      Alert.alert('Navigation Error', 'Failed to start navigation. Please check your connection and try again.');
-      setNavStatus('idle');
+      // Only reset if it's a critical error (e.g. no locations), otherwise keep navigation started
+      const hadLocations = (workerLocation ?? liveLocationRef.current) && (userLocation ?? (booking?.location?.coordinates ? { latitude: booking.location.coordinates.latitude, longitude: booking.location.coordinates.longitude } : null));
+      if (!hadLocations) {
+        // Critical: no locations available
+        Alert.alert('Navigation Error', 'Failed to start navigation. Location data is missing.');
+        setNavStatus('idle');
+        navigationStartTimeRef.current = null;
+        setNavigationStartTime(null);
+        setNavigationDuration(0);
+      } else {
+        // Non-critical error (e.g. network issue) - navigation is already started, just show error
+        Alert.alert(
+          'Navigation Started',
+          'Navigation has started, but there was an issue fetching the route. You can continue and retry the route later.',
+          [{ text: 'OK' }]
+        );
+        // Keep navStatus as 'navigating' - navigation is active
+      }
     }
   };
 
   const handleArrived = async () => {
+    const finalNavDuration = navigationDuration; // Capture before reset
     setNavStatus('arrived');
+    // Stop navigation timer
+    navigationStartTimeRef.current = null;
+    setNavigationStartTime(null);
+    console.log('⏰ Navigation timer stopped. Total duration:', formatDuration(finalNavDuration));
     
     // Emit navigation arrived event to user
     socketService.emit('navigation:arrived', { 
       bookingId, 
       workerId: worker?.id,
       timestamp: new Date().toISOString(),
+      navigationDuration: finalNavDuration,
     });
     
     // Update booking status (keep as accepted, arrival is just a navigation event)
@@ -688,13 +946,19 @@ export default function JobNavigationScreen() {
   };
 
   const handleEndNavigation = async () => {
+    const finalNavDuration = navigationDuration; // Capture before reset
     setNavStatus('idle');
+    // Stop navigation timer
+    navigationStartTimeRef.current = null;
+    setNavigationStartTime(null);
+    console.log('⏰ Navigation timer stopped. Total duration:', formatDuration(finalNavDuration));
     
     // Emit navigation ended event to user
     socketService.emit('navigation:ended', { 
       bookingId, 
       workerId: worker?.id,
       timestamp: new Date().toISOString(),
+      navigationDuration: finalNavDuration,
     });
     
     // Update booking status
@@ -949,17 +1213,35 @@ export default function JobNavigationScreen() {
 
   useEffect(() => {
     if (workerLocation && userLocation) {
+      // Calculate distance to determine appropriate zoom level
+      const dist = calculateDistanceMeters(workerLocation, userLocation);
+      
+      // For very close locations (< 50m), use a fixed reasonable zoom level
+      // Otherwise, calculate based on actual distance
+      let latDelta: number;
+      let lonDelta: number;
+      
+      if (dist < 50) {
+        // Very close - use a fixed zoom level (about 500m view)
+        latDelta = 0.005;
+        lonDelta = 0.005;
+      } else {
+        // Normal distance - calculate based on actual locations
+        latDelta = Math.max(
+          Math.abs(workerLocation.latitude - userLocation.latitude) * 2.5 + 0.01,
+          0.01
+        );
+        lonDelta = Math.max(
+          Math.abs(workerLocation.longitude - userLocation.longitude) * 2.5 + 0.01,
+          0.01
+        );
+      }
+      
       const newRegion = {
         latitude: (workerLocation.latitude + userLocation.latitude) / 2,
         longitude: (workerLocation.longitude + userLocation.longitude) / 2,
-        latitudeDelta: Math.max(
-          Math.abs(workerLocation.latitude - userLocation.latitude) * 2.5 + 0.01,
-          0.01
-        ),
-        longitudeDelta: Math.max(
-          Math.abs(workerLocation.longitude - userLocation.longitude) * 2.5 + 0.01,
-          0.01
-        ),
+        latitudeDelta: latDelta,
+        longitudeDelta: lonDelta,
       };
       setMapRegionState(newRegion);
     } else if (workerLocation) {
@@ -1007,17 +1289,32 @@ export default function JobNavigationScreen() {
     if (mapRef.current && workerLocation && userLocation && Platform.OS !== 'web' && navStatus !== 'navigating') {
       try {
         if (mapsAvailable && mapRef.current.fitToCoordinates) {
-          // react-native-maps fitToCoordinates
-          mapRef.current.fitToCoordinates(
-            [
-              { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
-              { latitude: userLocation.latitude, longitude: userLocation.longitude },
-            ],
-            {
-              edgePadding: { top: 80, right: 40, bottom: 320, left: 40 },
-              animated: true,
-            }
-          );
+          // Check distance - if very close, use fixed zoom instead
+          const dist = calculateDistanceMeters(workerLocation, userLocation);
+          
+          if (dist >= 50) {
+            // Normal distance - use fitToCoordinates
+            mapRef.current.fitToCoordinates(
+              [
+                { latitude: workerLocation.latitude, longitude: workerLocation.longitude },
+                { latitude: userLocation.latitude, longitude: userLocation.longitude },
+              ],
+              {
+                edgePadding: { top: 80, right: 40, bottom: 320, left: 40 },
+                animated: true,
+              }
+            );
+          } else {
+            // Very close - use fixed zoom level to avoid zoom issues
+            const centerLat = (workerLocation.latitude + userLocation.latitude) / 2;
+            const centerLon = (workerLocation.longitude + userLocation.longitude) / 2;
+            mapRef.current.animateToRegion({
+              latitude: centerLat,
+              longitude: centerLon,
+              latitudeDelta: 0.005, // ~500m view
+              longitudeDelta: 0.005,
+            }, 500);
+          }
         }
       } catch (error) {
         console.log('Map fit error:', error);
@@ -1027,132 +1324,164 @@ export default function JobNavigationScreen() {
 
   // No need for Mapbox features - using react-native-maps markers directly
 
-  // Early return check - must be after all hooks
-  if (!booking || !workerLocation || !userLocation) {
-    return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading navigation...</Text>
-      </View>
-    );
-  }
+  // Format distance for display (show meters if < 1km, otherwise km)
+  const formatDistance = (distKm: number): string => {
+    if (distKm < 0.001) {
+      // Less than 1 meter
+      return `${Math.round(distKm * 1000)} m`;
+    } else if (distKm < 1) {
+      // Less than 1 km, show in meters
+      return `${Math.round(distKm * 1000)} m`;
+    } else {
+      // 1 km or more, show in km
+      return `${distKm.toFixed(2)} km`;
+    }
+  };
+  
+  // Format distance remaining for display
+  const formatDistanceRemaining = (distKm: number): string => {
+    if (distKm <= 0) {
+      return '0 m';
+    } else if (distKm < 0.001) {
+      return `${Math.round(distKm * 1000)} m`;
+    } else if (distKm < 1) {
+      return `${Math.round(distKm * 1000)} m`;
+    } else {
+      return `${distKm.toFixed(2)} km`;
+    }
+  };
+
+  // Never return early - keep same component structure to avoid "Rendered fewer hooks than expected"
+  // Use fallbacks so map always has valid coordinates when loading
+  const isLoading = !booking || !workerLocation || !userLocation;
+  const safeWorkerLocation = workerLocation || { latitude: 27.7172, longitude: 85.3240 };
+  const safeUserLocation = userLocation || { latitude: 27.7172, longitude: 85.3240 };
 
   return (
     <View style={styles.container} collapsable={false}>
+      {/* Loading overlay when data not ready - does not change hook order */}
+      {isLoading && (
+        <View style={[styles.loadingContainer, StyleSheet.absoluteFill, { zIndex: 10, backgroundColor: '#F8F9FA' }]}>
+          <Text style={styles.loadingText}>Loading navigation...</Text>
+        </View>
+      )}
       <SafeAreaView style={styles.safe} collapsable={false}>
         {/* Map - Using react-native-maps only, Mapbox Directions API for routes */}
         {mapsAvailable && RNMapView ? (
-          <RNMapView
-            key="map-component-stable-never-unmount"
-            ref={mapRef}
-            style={styles.map}
-            removeClippedSubviews={false}
-            collapsable={false}
-            onMapReady={() => {
-              console.log('✅ Map ready in job-navigation');
-              setMapReady(true);
-              
-              // CRITICAL FIX: Longer delay for lower-end Android devices (Samsung A70, Realme 14C)
-              if (Platform.OS === 'android') {
-                if (mapReadyTimeoutRef.current) {
-                  clearTimeout(mapReadyTimeoutRef.current);
-                }
+          <>
+            <RNMapView
+              key="map-component-stable-never-unmount"
+              ref={mapRef}
+              style={styles.map}
+              removeClippedSubviews={false}
+              collapsable={false}
+              onMapReady={() => {
+                console.log('✅ Map ready in job-navigation');
+                setMapReady(true);
                 
-                // Universal delay: Works on ALL Android devices (low-end to high-end)
-                // Use 2 frames + 500ms delay - balanced for all devices
-                requestAnimationFrame(() => {
+                // CRITICAL FIX: Longer delay for lower-end Android devices (Samsung A70, Realme 14C)
+                if (Platform.OS === 'android') {
+                  if (mapReadyTimeoutRef.current) {
+                    clearTimeout(mapReadyTimeoutRef.current);
+                  }
+                  
+                  // Universal delay: Works on ALL Android devices (low-end to high-end)
+                  // Use 2 frames + 500ms delay - balanced for all devices
                   requestAnimationFrame(() => {
-                    mapReadyTimeoutRef.current = setTimeout(() => {
-                      console.log('✅ Map children can now render safely (universal delay)');
-                      setCanRenderChildren(true);
-                    }, 500);
+                    requestAnimationFrame(() => {
+                      mapReadyTimeoutRef.current = setTimeout(() => {
+                        console.log('✅ Map children can now render safely (universal delay)');
+                        setCanRenderChildren(true);
+                      }, 500);
+                    });
                   });
-                });
-              } else {
-                setCanRenderChildren(true);
-              }
-            }}
-            onRegionChangeComplete={(region: any) => {
-              // Prevent unnecessary updates
-              if (navStatus !== 'navigating') {
-                setMapRegionState(region);
-              }
-            }}
-            showsUserLocation={false}
-            showsMyLocationButton={false}
-            provider={Platform.OS === 'android' ? 'google' : undefined}
-            mapType="standard"
-            followsUserLocation={false}
-            initialRegion={mapRegion || {
-              latitude: workerLocation?.latitude || 27.7172,
-              longitude: workerLocation?.longitude || 85.3240,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
-            }}
-          >
-            {/* UNIVERSAL FIX: Use native markers (pinColor) for maximum compatibility across all devices/OS */}
-            {/* Render markers only when map is ready - works on ALL devices (Android/iOS, any model) */}
-            {mapReady && canRenderChildren && (
-              <>
-                {/* Worker marker - Use native pinColor for universal compatibility */}
-                {workerLocation && workerLocation.latitude !== 0 && workerLocation.longitude !== 0 && (
-                  <RNMarker
-                    key="worker-marker-universal"
-                    identifier="worker-marker"
-                    coordinate={{
-                      latitude: workerLocation.latitude,
-                      longitude: workerLocation.longitude,
-                    }}
-                    title="Your Location"
-                    description={navStatus === 'navigating' ? 'Navigating...' : 'Worker Location'}
-                    pinColor={navStatus === 'navigating' ? '#2563EB' : '#10B981'}
-                    anchor={{ x: 0.5, y: 1 }}
-                    flat={false}
-                    tracksViewChanges={false}
-                  />
-                )}
+                } else {
+                  setCanRenderChildren(true);
+                }
+              }}
+              onRegionChangeComplete={(region: any) => {
+                // Prevent unnecessary updates
+                if (navStatus !== 'navigating') {
+                  setMapRegionState(region);
+                }
+              }}
+              showsUserLocation={false}
+              showsMyLocationButton={false}
+              provider={Platform.OS === 'android' ? 'google' : undefined}
+              mapType="standard"
+              followsUserLocation={false}
+              initialRegion={mapRegion || {
+                latitude: safeWorkerLocation?.latitude || 27.7172,
+                longitude: safeWorkerLocation?.longitude || 85.3240,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
+              }}
+            >
+              {/* UNIVERSAL FIX: Use native markers (pinColor) for maximum compatibility across all devices/OS */}
+              {/* Render markers only when map is ready - works on ALL devices (Android/iOS, any model) */}
+              {mapReady && canRenderChildren && (
+                <>
+                  {/* Worker marker - Use native pinColor for universal compatibility */}
+                  {safeWorkerLocation && safeWorkerLocation.latitude !== 0 && safeWorkerLocation.longitude !== 0 && (
+                    <RNMarker
+                      key="worker-marker-universal"
+                      identifier="worker-marker"
+                      coordinate={{
+                        latitude: safeWorkerLocation.latitude,
+                        longitude: safeWorkerLocation.longitude,
+                      }}
+                      title="Your Location"
+                      description={navStatus === 'navigating' ? 'Navigating...' : 'Worker Location'}
+                      pinColor={navStatus === 'navigating' ? '#2563EB' : '#10B981'}
+                      anchor={{ x: 0.5, y: 1 }}
+                      flat={false}
+                      tracksViewChanges={false}
+                    />
+                  )}
 
-                {/* Customer marker - Use native pinColor for universal compatibility */}
-                {userLocation && userLocation.latitude !== 0 && userLocation.longitude !== 0 && (
-                  <RNMarker
-                    key="customer-marker-universal"
-                    identifier="customer-marker"
-                    coordinate={{
-                      latitude: userLocation.latitude,
-                      longitude: userLocation.longitude,
-                    }}
-                    title="Customer Location"
-                    description={booking.location?.address || 'Destination'}
-                    pinColor="#DC2626"
-                    anchor={{ x: 0.5, y: 1 }}
-                    tracksViewChanges={false}
-                  />
-                )}
+                  {/* Customer marker - Use native pinColor for universal compatibility */}
+                  {safeUserLocation && safeUserLocation.latitude !== 0 && safeUserLocation.longitude !== 0 && (
+                    <RNMarker
+                      key="customer-marker-universal"
+                      identifier="customer-marker"
+                      coordinate={{
+                        latitude: safeUserLocation.latitude,
+                        longitude: safeUserLocation.longitude,
+                      }}
+                      title="Customer Location"
+                      description={booking.location?.address || 'Destination'}
+                      pinColor="#DC2626"
+                      anchor={{ x: 0.5, y: 1 }}
+                      tracksViewChanges={false}
+                    />
+                  )}
 
-                {/* Route Line - Mapbox route visualization on road - ALWAYS render when route exists */}
-                {memoizedRouteCoordinates.length > 0 && (
-                  <RNPolyline
-                    key={`route-polyline-${memoizedRouteCoordinates.length}`}
-                    identifier="route-polyline"
-                    coordinates={memoizedRouteCoordinates}
-                    strokeColor={navStatus === 'navigating' ? '#2563EB' : '#9CA3AF'}
-                    strokeWidth={Platform.OS === 'ios' ? 6 : (navStatus === 'navigating' ? 8 : 6)}
-                    lineCap="round"
-                    lineJoin="round"
-                    geodesic={false}
-                    tappable={false}
-                    zIndex={1}
-                  />
-                )}
-              </>
-            )}
+                  {/* Route Line - Mapbox route visualization on road - ALWAYS render when route exists */}
+                  {memoizedRouteCoordinates.length > 0 && (
+                    <RNPolyline
+                      key={`route-polyline-${memoizedRouteCoordinates.length}`}
+                      identifier="route-polyline"
+                      coordinates={memoizedRouteCoordinates}
+                      strokeColor={navStatus === 'navigating' ? '#2563EB' : '#9CA3AF'}
+                      strokeWidth={Platform.OS === 'ios' ? 6 : (navStatus === 'navigating' ? 8 : 6)}
+                      lineCap="round"
+                      lineJoin="round"
+                      geodesic={false}
+                      tappable={false}
+                      zIndex={1}
+                    />
+                  )}
+                </>
+              )}
+            </RNMapView>
             
-            {/* Show loading indicator only when route is being calculated */}
+            {/* Show loading indicator - Moved outside RNMapView to prevent UIFrameGuarded error */}
             {workerLocation && userLocation && !routeData && navStatus === 'navigating' && (
               <View style={styles.routeLoadingIndicator}>
                 <Text style={styles.routeLoadingText}>Calculating route...</Text>
               </View>
             )}
-          </RNMapView>
+          </>
         ) : (
           <View style={styles.mapPlaceholder}>
             <Ionicons name="map-outline" size={64} color="#ccc" />
@@ -1196,7 +1525,7 @@ export default function JobNavigationScreen() {
             </View>
           )}
 
-          {navStatus === 'arrived' ? (
+          {(navStatus === 'arrived' || navStatus === 'navigating') ? (
             <ScrollView 
               style={styles.scrollableContent}
               showsVerticalScrollIndicator={true}
@@ -1205,40 +1534,10 @@ export default function JobNavigationScreen() {
               <View style={styles.infoRow}>
                 <View style={styles.infoItem}>
                   <Ionicons name="locate" size={20} color="#FF7A2C" />
-                  <Text style={styles.infoText}>{distance.toFixed(2)} km</Text>
-                </View>
-                <View style={styles.infoItem}>
-                  <Ionicons name="time" size={20} color="#FF7A2C" />
-                  <Text style={styles.infoText}>{eta} min</Text>
-                </View>
-                <View style={styles.infoItem}>
-                  <Ionicons name="briefcase" size={20} color="#FF7A2C" />
-                  <Text style={styles.infoText}>{booking.serviceName}</Text>
-                </View>
-              </View>
-
-              {/* Customer Info */}
-              <View style={styles.customerInfo}>
-                <Text style={styles.customerLabel}>Customer:</Text>
-                <Text style={styles.customerName}>{booking.userName || 'Customer'}</Text>
-                <Text style={styles.customerAddress}>{booking.location?.address}</Text>
-              </View>
-
-              {/* Arrived Badge */}
-              <View style={styles.arrivedBadge}>
-                <Ionicons name="location" size={20} color="#4CAF50" />
-                <Text style={styles.arrivedText}>You've arrived at the destination!</Text>
-              </View>
-            </ScrollView>
-          ) : (
-            <>
-              <View style={styles.infoRow}>
-                <View style={styles.infoItem}>
-                  <Ionicons name="locate" size={20} color="#FF7A2C" />
                   <Text style={styles.infoText}>
                     {navStatus === 'navigating' && distanceRemaining > 0 
-                      ? distanceRemaining.toFixed(2) 
-                      : distance.toFixed(2)} km
+                      ? formatDistanceRemaining(distanceRemaining)
+                      : formatDistance(distance)}
                   </Text>
                   <Text style={styles.infoSubtext}>
                     {navStatus === 'navigating' ? 'Remaining' : 'Distance'}
@@ -1252,8 +1551,14 @@ export default function JobNavigationScreen() {
                 {navStatus === 'navigating' && distanceTraveled > 0 && (
                   <View style={styles.infoItem}>
                     <Ionicons name="navigate" size={20} color="#4CAF50" />
-                    <Text style={styles.infoText}>{distanceTraveled.toFixed(2)} km</Text>
+                    <Text style={styles.infoText}>{formatDistance(distanceTraveled)}</Text>
                     <Text style={styles.infoSubtext}>Traveled</Text>
+                  </View>
+                )}
+                {navStatus === 'arrived' && (
+                  <View style={styles.infoItem}>
+                    <Ionicons name="briefcase" size={20} color="#FF7A2C" />
+                    <Text style={styles.infoText}>{booking?.serviceName}</Text>
                   </View>
                 )}
               </View>
@@ -1261,8 +1566,98 @@ export default function JobNavigationScreen() {
               {/* Customer Info */}
               <View style={styles.customerInfo}>
                 <Text style={styles.customerLabel}>Customer:</Text>
-                <Text style={styles.customerName}>{booking.userName || 'Customer'}</Text>
-                <Text style={styles.customerAddress}>{booking.location?.address}</Text>
+                <Text style={styles.customerName}>{booking?.userName ?? 'Customer'}</Text>
+                <Text style={styles.customerAddress}>{booking?.location?.address}</Text>
+              </View>
+
+              {/* Arrived Badge - only show when arrived */}
+              {navStatus === 'arrived' && (
+                <View style={styles.arrivedBadge}>
+                  <Ionicons name="location" size={20} color="#4CAF50" />
+                  <Text style={styles.arrivedText}>You've arrived at the destination!</Text>
+                </View>
+              )}
+
+              {/* When navigating: include guidance and actions inside ScrollView so whole card scrolls */}
+              {navStatus === 'navigating' && (
+                <>
+                  {navigationInstructions && (
+                    <View style={styles.navigationGuidance}>
+                      <View style={styles.guidanceHeader}>
+                        <Ionicons name="navigate" size={24} color="#2563EB" />
+                        <Text style={styles.guidanceTitle}>Navigation Active</Text>
+                      </View>
+                      <View style={styles.instructionCard}>
+                        <Text style={styles.instructionText}>{navigationInstructions}</Text>
+                        {distanceToNextTurn > 0 && (
+                          <Text style={styles.distanceToTurn}>
+                            {formatDistanceRemaining(distanceToNextTurn)} to next turn
+                          </Text>
+                        )}
+                      </View>
+                      {nextStep && (
+                        <View style={styles.nextStepPreview}>
+                          <Text style={styles.nextStepLabel}>Then:</Text>
+                          <Text style={styles.nextStepText}>
+                            {nextStep.banner_instructions?.[0]?.primary?.text ||
+                              nextStep.maneuver?.instruction ||
+                              'Continue on route'}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                  <View style={styles.navigatingBadge}>
+                    <View style={styles.pulseDot} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.navigatingText}>Moving to destination...</Text>
+                      {navigationStartTime && (
+                        <Text style={styles.navigationTimerText}>
+                          Navigation time: {formatDuration(navigationDuration)}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                  <TouchableOpacity style={styles.arrivedButton} onPress={handleArrived}>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                    <Text style={styles.arrivedButtonText}>Mark as Arrived</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {/* When arrived: include action buttons inside ScrollView */}
+              {navStatus === 'arrived' && (
+                <>
+                  <TouchableOpacity style={styles.endNavButton} onPress={handleEndNavigation}>
+                    <Text style={styles.endNavButtonText}>End Navigation</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.startWorkButton} onPress={handleStartWork}>
+                    <Ionicons name="hammer" size={20} color="#fff" />
+                    <Text style={styles.startWorkButtonText}>Start Work</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </ScrollView>
+          ) : (
+            <>
+              <View style={styles.infoRow}>
+                <View style={styles.infoItem}>
+                  <Ionicons name="locate" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{formatDistance(distance)}</Text>
+                  <Text style={styles.infoSubtext}>Distance</Text>
+                </View>
+                <View style={styles.infoItem}>
+                  <Ionicons name="time" size={20} color="#FF7A2C" />
+                  <Text style={styles.infoText}>{eta} min</Text>
+                  <Text style={styles.infoSubtext}>ETA</Text>
+                </View>
+              </View>
+
+              {/* Customer Info */}
+              <View style={styles.customerInfo}>
+                <Text style={styles.customerLabel}>Customer:</Text>
+                <Text style={styles.customerName}>{booking?.userName ?? 'Customer'}</Text>
+                <Text style={styles.customerAddress}>{booking?.location?.address}</Text>
               </View>
 
               {/* Work Duration (when working) */}
@@ -1282,61 +1677,6 @@ export default function JobNavigationScreen() {
                 <Ionicons name="navigate" size={20} color="#fff" />
                 <Text style={styles.startButtonText}>Start Navigation</Text>
               </TouchableOpacity>
-            )}
-
-            {navStatus === 'navigating' && (
-              <>
-                {/* Navigation Guidance Card - Google Maps style */}
-                {navigationInstructions && (
-                  <View style={styles.navigationGuidance}>
-                    <View style={styles.guidanceHeader}>
-                      <Ionicons name="navigate" size={24} color="#2563EB" />
-                      <Text style={styles.guidanceTitle}>Navigation Active</Text>
-                    </View>
-                    <View style={styles.instructionCard}>
-                      <Text style={styles.instructionText}>{navigationInstructions}</Text>
-                      {distanceToNextTurn > 0 && (
-                        <Text style={styles.distanceToTurn}>
-                          {distanceToNextTurn < 0.1 
-                            ? `${Math.round(distanceToNextTurn * 1000)}m` 
-                            : `${distanceToNextTurn.toFixed(2)}km`} to next turn
-                        </Text>
-                      )}
-                    </View>
-                    {nextStep && (
-                      <View style={styles.nextStepPreview}>
-                        <Text style={styles.nextStepLabel}>Then:</Text>
-                        <Text style={styles.nextStepText}>
-                          {nextStep.banner_instructions?.[0]?.primary?.text || 
-                           nextStep.maneuver?.instruction || 
-                           'Continue on route'}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-                
-                <View style={styles.navigatingBadge}>
-                  <View style={styles.pulseDot} />
-                  <Text style={styles.navigatingText}>Moving to destination...</Text>
-                </View>
-                <TouchableOpacity style={styles.arrivedButton} onPress={handleArrived}>
-                  <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                  <Text style={styles.arrivedButtonText}>Mark as Arrived</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {navStatus === 'arrived' && (
-              <>
-                <TouchableOpacity style={styles.endNavButton} onPress={handleEndNavigation}>
-                  <Text style={styles.endNavButtonText}>End Navigation</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.startWorkButton} onPress={handleStartWork}>
-                  <Ionicons name="hammer" size={20} color="#fff" />
-                  <Text style={styles.startWorkButtonText}>Start Work</Text>
-                </TouchableOpacity>
-              </>
             )}
 
             {navStatus === 'working' && (
@@ -1467,7 +1807,7 @@ const styles = StyleSheet.create({
     maxHeight: height * 0.65, // Limit height to ensure buttons are visible
   },
   scrollableContent: {
-    maxHeight: 200, // Limit scrollable area height
+    flex: 1, // Use flex instead of maxHeight to allow full scrolling
     marginBottom: 12,
   },
   scrollContentContainer: {
@@ -1598,6 +1938,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#2196F3',
     fontWeight: '600',
+  },
+  navigationTimerText: {
+    fontSize: 12,
+    color: '#2196F3',
+    marginTop: 4,
+    opacity: 0.8,
   },
   arrivedButton: {
     flexDirection: 'row',
