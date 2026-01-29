@@ -4,13 +4,13 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   Alert,
   Dimensions,
   Platform,
   ScrollView,
   Linking,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Location from 'expo-location';
@@ -1366,7 +1366,7 @@ export default function JobNavigationScreen() {
           <Text style={styles.loadingText}>Loading navigation...</Text>
         </View>
       )}
-      <SafeAreaView style={styles.safe} collapsable={false}>
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']} collapsable={false}>
         {/* Map - Using react-native-maps only, Mapbox Directions API for routes */}
         {mapsAvailable && RNMapView ? (
           <>
