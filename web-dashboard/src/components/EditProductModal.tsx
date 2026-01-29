@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 
+const DEFAULT_CATEGORIES = ['Clothes', 'Furnitures', 'Wholesale', 'Hardware', 'Farm', 'Electronics'];
+
 interface Product {
   _id: string;
   name: string;
@@ -32,6 +34,7 @@ interface EditProductModalProps {
 }
 
 export default function EditProductModal({ isOpen, onClose, onSubmit, product, categories }: EditProductModalProps) {
+  const categoryOptions = categories.length > 0 ? categories : DEFAULT_CATEGORIES;
   const [formData, setFormData] = useState({
     name: product.name,
     label: product.label || '',
@@ -249,12 +252,13 @@ export default function EditProductModal({ isOpen, onClose, onSubmit, product, c
               <select
                 value={formData.category}
                 onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 ${
+                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 bg-white ${
                   errors.category ? 'border-red-500' : 'border-gray-300'
                 }`}
+                aria-label="Select product category"
               >
                 <option value="">Select Category</option>
-                {categories.map((cat) => (
+                {categoryOptions.map((cat) => (
                   <option key={cat} value={cat}>{cat}</option>
                 ))}
               </select>
