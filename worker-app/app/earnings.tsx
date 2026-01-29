@@ -23,6 +23,7 @@ const { width } = Dimensions.get('window');
 interface Booking {
   _id: string;
   price: number;
+  finalAmount?: number;
   paymentStatus: 'pending' | 'paid' | 'refunded';
   status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'cancelled';
   completedAt?: string | Date;
@@ -111,8 +112,8 @@ export default function EarningsScreen() {
         setDeliveryOrders(paidOrders);
       }
       
-      // Calculate service earnings
-      const calculatedServiceEarnings = paidBookings.reduce((sum: number, b: Booking) => sum + (b.price || 0), 0);
+      // Calculate service earnings (use finalAmount if set, else price - matches backend credit)
+      const calculatedServiceEarnings = paidBookings.reduce((sum: number, b: Booking) => sum + (b.finalAmount ?? b.price ?? 0), 0);
       setServiceEarnings(calculatedServiceEarnings);
       
       // Calculate delivery earnings (deliveryCharge or 10% of total)
@@ -142,7 +143,7 @@ export default function EarningsScreen() {
         return deliveredDate.getTime() === today.getTime();
       });
       
-      const todayServiceTotal = todayBookings.reduce((sum: number, b: Booking) => sum + (b.price || 0), 0);
+      const todayServiceTotal = todayBookings.reduce((sum: number, b: Booking) => sum + (b.finalAmount ?? b.price ?? 0), 0);
       const todayDeliveryTotal = todayOrders.reduce((sum: number, o: DeliveryOrder) => {
         const earning = o.deliveryCharge || (o.total * 0.1);
         return sum + earning;
@@ -207,7 +208,7 @@ export default function EarningsScreen() {
         };
       }
       
-      grouped[dateKey].amount += booking.price || 0;
+      grouped[dateKey].amount += booking.finalAmount ?? booking.price ?? 0;
       grouped[dateKey].count += 1;
       grouped[dateKey].bookings.push(booking);
     });
@@ -267,11 +268,12 @@ export default function EarningsScreen() {
       // Listen for payment status updates
       const handlePaymentStatusUpdated = (data: any) => {
         console.log('💳 Payment status updated in earnings:', data);
-        if (data.paymentStatus === 'paid' && data.workerId === worker.id) {
-          // Refresh earnings when payment is confirmed
+        const isForThisWorker = data.workerId === worker.id || data.booking?.workerId === worker.id || data.booking?.workerId?._id === worker.id;
+        if (data.paymentStatus === 'paid' && isForThisWorker) {
+          // Refresh earnings when payment is confirmed (live update wallet)
           setTimeout(() => {
             fetchEarnings();
-          }, 1000);
+          }, 500);
         }
       };
       
@@ -294,21 +296,30 @@ export default function EarningsScreen() {
           }, 1000);
         }
       };
-      
+
+      // Listen for reward points claimed (cash added to earnings) - live update wallet
+      const handleRewardPointsClaimed = (data: any) => {
+        if (data.workerId === worker.id) {
+          setTimeout(() => fetchEarnings(), 500);
+        }
+      };
+
       socketService.on('payment:status_updated', handlePaymentStatusUpdated);
       socketService.on('work:completed', handleWorkCompleted);
       socketService.on('booking:updated', handleBookingUpdated);
-      
+      socketService.on('worker:reward_points_updated', handleRewardPointsClaimed);
+
       // Auto-refresh every 30 seconds for live updates
       const intervalId = setInterval(() => {
         fetchEarnings();
       }, 30000);
-      
+
       return () => {
         clearInterval(intervalId);
         socketService.off('payment:status_updated', handlePaymentStatusUpdated);
         socketService.off('work:completed', handleWorkCompleted);
         socketService.off('booking:updated', handleBookingUpdated);
+        socketService.off('worker:reward_points_updated', handleRewardPointsClaimed);
       };
     }
   }, [worker?.id]);
@@ -475,7 +486,7 @@ export default function EarningsScreen() {
                           })}
                         </Text>
                       </View>
-                      <Text style={styles.transactionAmount}>+Rs. {booking.price.toLocaleString()}</Text>
+                      <Text style={styles.transactionAmount}>+Rs. {(booking.finalAmount ?? booking.price ?? 0).toLocaleString()}</Text>
                     </View>
                   );
                 })}
