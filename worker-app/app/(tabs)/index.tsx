@@ -371,9 +371,12 @@ export default function HomeScreen() {
       setUnreadCount(0);
       return;
     }
-    
+    const apiUrl = getApiUrl();
+    if (!apiUrl || typeof apiUrl !== 'string' || apiUrl.trim() === '') {
+      setUnreadCount(0);
+      return;
+    }
     try {
-      const apiUrl = getApiUrl();
       const response = await fetch(`${apiUrl}/api/notifications/user/${worker.id}/unread-count`, {
         method: 'GET',
         headers: {
@@ -387,11 +390,10 @@ export default function HomeScreen() {
         setUnreadCount(count);
         console.log('📊 Unread notification count:', count);
       } else {
-        console.warn('Failed to fetch unread count, using 0');
         setUnreadCount(0);
       }
     } catch (error) {
-      console.error('Error fetching unread count:', error);
+      // Network/backend unreachable: use 0 and avoid surfacing as error
       setUnreadCount(0);
     }
   }, [worker?.id]);
