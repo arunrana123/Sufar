@@ -1,3 +1,13 @@
+import { getApiUrl } from '@/lib/config';
+
+// Slug (user app route) to backend category name for API
+export const slugToBackendCategory: Record<string, string> = {
+  plumber: 'Plumber', electrician: 'Electrician', carpenter: 'Carpenter', cleaner: 'Cleaner',
+  mechanic: 'Mechanic', 'ac-repair': 'AC Repair', painter: 'Painter', mason: 'Mason', cook: 'Cook',
+  driver: 'Driver', security: 'Security', beautician: 'Beautician', technician: 'Technician',
+  delivery: 'Delivery', gardener: 'Gardener', workers: 'Workers',
+};
+
 // Service data structure for all categories
 export interface Service {
   id: string;
@@ -893,3 +903,33 @@ export const getServicesByCategory = (categoryId: string): Service[] => {
 export const getCategoryInfo = (categoryId: string): ServiceCategory | undefined => {
   return serviceCategories.find(cat => cat.id === categoryId);
 };
+
+/** Fetch services for a category from backend (active sub-services only). Falls back to empty on error. */
+export async function getServicesByCategoryFromAPI(categorySlug: string): Promise<Service[]> {
+  const slug = categorySlug.toLowerCase().replace(/\s+/g, '-');
+  try {
+    const apiUrl = getApiUrl();
+    if (!apiUrl) return [];
+    const url = `${apiUrl}/api/services/category/${encodeURIComponent(slug)}?includeSubServices=true`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data
+      .filter((s: { isMainCategory?: boolean }) => !s.isMainCategory)
+      .map((s: { _id: string; title: string; description?: string; price: number; priceType: string; rating?: number; reviewCount?: number; imageUrl?: string; subCategory?: string }) => ({
+        id: s._id,
+        title: s.title,
+        description: s.description ?? '',
+        price: String(s.price),
+        priceType: (s.priceType || 'fixed') as Service['priceType'],
+        rating: s.rating ?? 5,
+        reviewCount: s.reviewCount ?? 0,
+        image: s.imageUrl || `${(s.subCategory || s.title).toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}.jpg`,
+        verified: true,
+        category: slug,
+      }));
+  } catch {
+    return [];
+  }
+}
