@@ -331,10 +331,12 @@ router.patch('/profile-photo', uploadProfilePhoto.single('profilePhoto'), async 
         const urlParts = oldPhotoUrl.split('/uploads/');
         if (urlParts.length > 1) {
           const oldFilename = urlParts[1];
-          const oldPhotoFullPath = path.join(uploadsDir, oldFilename);
-          if (fs.existsSync(oldPhotoFullPath)) {
-            fs.unlinkSync(oldPhotoFullPath);
-            console.log(`Deleted old profile photo: ${oldFilename}`);
+          if (oldFilename) {
+            const oldPhotoFullPath = path.join(uploadsDir, oldFilename);
+            if (fs.existsSync(oldPhotoFullPath)) {
+              fs.unlinkSync(oldPhotoFullPath);
+              console.log(`Deleted old profile photo: ${oldFilename}`);
+            }
           }
         }
       } catch (err) {
@@ -713,7 +715,7 @@ router.post('/admin/google-login', async (req: Request, res: Response) => {
   }
 });
 
-// Get all users (admin only)
+// Get all users (admin only) - must be before /:id so /all is not matched as id
 router.get('/all', async (req: Request, res: Response) => {
   try {
     const users = await User.find({}, '-password -resetToken -otpCode').sort({ createdAt: -1 });
@@ -721,6 +723,79 @@ router.get('/all', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Fetch users error:', err);
     return res.status(500).json({ message: 'Failed to fetch users' });
+  }
+});
+
+// Get user by ID (for profile, reward points, wallet balance)
+router.get('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = await User.findById(id).select('-password -resetToken -otpCode -otpExpires');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    return res.json({
+      _id: user._id,
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      address: user.address,
+      profilePhoto: user.profilePhoto,
+      role: user.role,
+      rewardPoints: user.rewardPoints ?? 0,
+      walletBalance: user.walletBalance ?? 0,
+      createdAt: user.createdAt,
+    });
+  } catch (err: any) {
+    if (err.name === 'CastError') return res.status(400).json({ message: 'Invalid user ID' });
+    console.error('Get user error:', err);
+    return res.status(500).json({ message: 'Failed to get user' });
+  }
+});
+
+// Claim reward points to cash (100 points = Rs. 1)
+router.post('/:id/claim-rewards', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { pointsToClaim } = req.body as { pointsToClaim?: number };
+    const minPoints = 1000;
+    const pointsPerRupee = 100;
+    if (pointsToClaim == null || pointsToClaim < minPoints) {
+      return res.status(400).json({ message: `Minimum ${minPoints} points required to claim. Rate: ${pointsPerRupee} points = Rs. 1` });
+    }
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    const current = user.rewardPoints ?? 0;
+    if (current < pointsToClaim) {
+      return res.status(400).json({ message: `Insufficient points. You have ${current} points.` });
+    }
+    const cashAmount = Math.floor(pointsToClaim / pointsPerRupee);
+    const newPoints = current - pointsToClaim;
+    const walletBalance = (user.walletBalance ?? 0) + cashAmount;
+    await User.findByIdAndUpdate(id, {
+      rewardPoints: Math.max(0, newPoints),
+      walletBalance,
+    });
+    const io = req.app.get('io');
+    if (io) {
+      io.to(String(id)).emit('reward:points_updated', {
+        userId: id,
+        totalPoints: Math.max(0, newPoints),
+        pointsUsed: pointsToClaim,
+        walletBalance,
+        cashClaimed: cashAmount,
+      });
+    }
+    return res.json({
+      message: 'Points claimed successfully',
+      pointsDeducted: pointsToClaim,
+      cashAdded: cashAmount,
+      walletBalance,
+      rewardPoints: Math.max(0, newPoints),
+    });
+  } catch (err: any) {
+    console.error('Claim rewards error:', err);
+    return res.status(500).json({ message: 'Failed to claim rewards' });
   }
 });
 
