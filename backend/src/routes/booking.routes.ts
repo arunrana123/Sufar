@@ -868,6 +868,35 @@ router.patch('/:id/review', async (req: Request, res: Response) => {
           data: { bookingId: id, rating, comment },
           createdAt: new Date(),
         });
+        // Emit thank-you event so worker app can show thank you message for rating and comment
+        io.to(String(workerId)).emit('review:submitted', {
+          workerId: String(workerId),
+          bookingId: id,
+          rating,
+          comment,
+          thankYouMessage: 'Thank you for your rating and comment!',
+        });
+      }
+    }
+
+    // Award reward points to user for submitting review (instant update in user app)
+    const REVIEW_POINTS = 5;
+    const User = (await import('../models/User.model')).default;
+    const user = await User.findById(booking.userId);
+    if (user) {
+      const currentPoints = user.rewardPoints || 0;
+      const newPoints = currentPoints + REVIEW_POINTS;
+      await User.findByIdAndUpdate(booking.userId, { rewardPoints: newPoints });
+      console.log(`🎁 Awarded ${REVIEW_POINTS} reward points to user for review (Total: ${newPoints})`);
+      const io = req.app.get('io');
+      if (io) {
+        io.to(String(booking.userId)).emit('reward:points_updated', {
+          userId: String(booking.userId),
+          pointsEarned: REVIEW_POINTS,
+          totalPoints: newPoints,
+          bookingId: id,
+          source: 'review',
+        });
       }
     }
 
