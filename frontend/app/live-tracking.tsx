@@ -1,6 +1,6 @@
 // LIVE TRACKING SCREEN - Real-time worker location tracking with map, route visualization, and ETA
 // Features: Socket.IO real-time updates, Google Maps integration, worker info, status updates, call/message worker
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -122,24 +122,162 @@ export default function LiveTrackingScreen() {
   const markerKeyRef = useRef<string>('');
   const routeFetchInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const mapReadyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFetchedRouteRef = useRef<{ origin: string; destination: string } | null>(null);
+  const lastRouteFetchTimeRef = useRef<number>(0);
+  const isFetchingRouteRef = useRef<boolean>(false);
+  const workerLocationRef = useRef<any>(null); // Store worker location in ref to prevent re-renders
+  const lastWorkerMarkerUpdateRef = useRef<number>(0); // Track last marker update time
+  const stableWorkerLocationRef = useRef<any>(null); // Stable location for marker (only updates on significant change)
+  const staticUserLocationRef = useRef<{ latitude: number; longitude: number } | null>(null); // Static test user location (12-13 km from worker) - calculated once and never changes
+  const [staticUserLocation, setStaticUserLocation] = useState<{ latitude: number; longitude: number } | null>(null); // State for static location (triggers re-render when set)
+  const bookingRef = useRef<BookingDetails | null>(null);
+
+  useEffect(() => {
+    bookingRef.current = booking;
+  }, [booking]);
+
+  // Helper function to calculate distance in meters
+  const calculateDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Helper function to calculate a point at a specific distance and bearing from a given location
+  const calculateDestinationPoint = (
+    lat: number,
+    lon: number,
+    distanceKm: number,
+    bearingDegrees: number
+  ): { latitude: number; longitude: number } => {
+    const R = 6371; // Earth's radius in km
+    const bearing = bearingDegrees * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lon1 = lon * Math.PI / 180;
+    
+    const lat2 = Math.asin(
+      Math.sin(lat1) * Math.cos(distanceKm / R) +
+      Math.cos(lat1) * Math.sin(distanceKm / R) * Math.cos(bearing)
+    );
+    
+    const lon2 = lon1 + Math.atan2(
+      Math.sin(bearing) * Math.sin(distanceKm / R) * Math.cos(lat1),
+      Math.cos(distanceKm / R) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    
+    return {
+      latitude: lat2 * 180 / Math.PI,
+      longitude: lon2 * 180 / Math.PI,
+    };
+  };
 
   // Fetch route using Mapbox Directions API - CRITICAL: This makes the actual API request
-  const fetchMapboxDirections = async (
+  // Memoized to prevent unnecessary re-renders
+  const fetchMapboxDirections = useCallback(async (
     origin: { latitude: number; longitude: number },
     destination: { latitude: number; longitude: number },
     force: boolean = false // Allow forcing even if already fetching
   ) => {
+    // Calculate straight-line distance first
+    const straightLineDistance = calculateDistanceMeters(
+      origin.latitude,
+      origin.longitude,
+      destination.latitude,
+      destination.longitude
+    );
+    
+    // CRITICAL: If users are very close (< 50 meters), skip route fetching and use straight-line
+    const MIN_ROUTE_DISTANCE = 50; // 50 meters minimum distance to fetch route
+    if (straightLineDistance < MIN_ROUTE_DISTANCE) {
+      console.log(`📍 [NEARBY] Users are very close (${straightLineDistance.toFixed(1)}m), skipping route fetch and using straight-line`);
+      
+      // Create a simple straight-line route for visualization
+      const simpleRoute = {
+        coordinates: [
+          { latitude: origin.latitude, longitude: origin.longitude },
+          { latitude: destination.latitude, longitude: destination.longitude }
+        ],
+        distance: straightLineDistance, // in meters
+        duration: Math.max(1, Math.ceil(straightLineDistance / 1.4)), // Walking speed ~1.4 m/s, minimum 1 second
+        distanceText: straightLineDistance < 1 ? `${Math.round(straightLineDistance * 100)} cm` : `${Math.round(straightLineDistance)} m`,
+        durationText: `${Math.max(1, Math.ceil(straightLineDistance / 1.4))} sec`,
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [origin.longitude, origin.latitude],
+            [destination.longitude, destination.latitude]
+          ]
+        }
+      };
+      
+      // Store the route key
+      const originKey = `${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)}`;
+      const destKey = `${destination.latitude.toFixed(4)},${destination.longitude.toFixed(4)}`;
+      lastFetchedRouteRef.current = { origin: originKey, destination: destKey };
+      
+      // Update route data
+      setMapboxRouteData(simpleRoute as any);
+      setRouteData({
+        coordinates: simpleRoute.coordinates,
+        geometry: simpleRoute.geometry,
+        distance: simpleRoute.distance,
+        duration: simpleRoute.duration,
+      });
+      
+      // Update distance and ETA (convert to km for display, but show meters if < 1km)
+      setDistance(straightLineDistance / 1000); // Convert meters to km
+      setDistanceRemaining(straightLineDistance / 1000);
+      setEta(Math.max(1, Math.ceil(straightLineDistance / 1.4 / 60))); // Convert to minutes, minimum 1
+      
+      // Update route key for re-render
+      routeKeyRef.current = `straight-line-route-${Date.now()}`;
+      
+      console.log('✅ [NEARBY] Straight-line route created for nearby locations:', {
+        distance: simpleRoute.distanceText,
+        duration: simpleRoute.durationText,
+      });
+      
+      return; // Skip Mapbox API call
+    }
+    
+    // Create a key to check if we're fetching the same route
+    const originKey = `${origin.latitude.toFixed(4)},${origin.longitude.toFixed(4)}`;
+    const destKey = `${destination.latitude.toFixed(4)},${destination.longitude.toFixed(4)}`;
+    const routeKey = `${originKey}|${destKey}`;
+    
+    // Prevent duplicate fetches for the same route (unless forced)
+    if (!force && lastFetchedRouteRef.current?.origin === originKey && lastFetchedRouteRef.current?.destination === destKey) {
+      console.log('⏸️ Route already fetched for these coordinates, skipping...');
+      return;
+    }
+    
+    // Throttle: Don't fetch more than once every 10 seconds (unless forced)
+    const now = Date.now();
+    if (!force && now - lastRouteFetchTimeRef.current < 10000) {
+      console.log(`⏸️ Route fetch throttled (${Math.round((10000 - (now - lastRouteFetchTimeRef.current)) / 1000)}s remaining)`);
+      return;
+    }
+    
     // Only prevent concurrent requests if not forced (allows retries)
-    if (isFetchingRoute && !force) {
+    if (isFetchingRouteRef.current && !force) {
       console.log('⏸️ Route fetch already in progress, skipping...');
       return;
     }
     
     setIsFetchingRoute(true);
+    isFetchingRouteRef.current = true;
+    lastRouteFetchTimeRef.current = now;
+    
     try {
       console.log('🗺️ [MAPBOX REQUEST] Fetching route:', {
         origin: `${origin.latitude.toFixed(6)}, ${origin.longitude.toFixed(6)}`,
         destination: `${destination.latitude.toFixed(6)}, ${destination.longitude.toFixed(6)}`,
+        straightLineDistance: `${(straightLineDistance / 1000).toFixed(2)} km`,
         timestamp: new Date().toISOString(),
       });
       
@@ -152,6 +290,9 @@ export default function LiveTrackingScreen() {
           points: route.coordinates.length,
           requestTime: new Date().toISOString(),
         });
+        
+        // Store the fetched route key
+        lastFetchedRouteRef.current = { origin: originKey, destination: destKey };
         
         setMapboxRouteData(route);
         
@@ -183,8 +324,9 @@ export default function LiveTrackingScreen() {
       console.error('❌ [MAPBOX ERROR] Error fetching Mapbox Directions:', error);
     } finally {
       setIsFetchingRoute(false);
+      isFetchingRouteRef.current = false;
     }
-  };
+  }, []); // Empty deps - function is stable and uses refs for state
 
   const fetchBookingDetails = async () => {
     try {
@@ -274,27 +416,41 @@ export default function LiveTrackingScreen() {
           console.log(' Worker data already in booking response:', data.worker);
         }
 
-        // CRITICAL: Fetch Mapbox Directions route immediately when booking loads
-        if (data.workerLocation && data.location?.coordinates) {
+        // CRITICAL: Fetch Mapbox Directions route immediately when booking loads (only once)
+        // This will be the initial route fetch, subsequent updates happen via location changes
+        // Note: We check if route already exists to prevent duplicate fetches
+        const shouldFetchRoute = data.workerLocation && data.location?.coordinates;
+        if (shouldFetchRoute) {
           // Ensure workerLocation has latitude/longitude
           const workerLat = data.workerLocation.latitude || (data.workerLocation as any)?.location?.latitude;
           const workerLon = data.workerLocation.longitude || (data.workerLocation as any)?.location?.longitude;
           
           if (workerLat && workerLon) {
-            console.log('🗺️ [BOOKING LOAD] Fetching route on initial booking load...', {
+            console.log('🗺️ [BOOKING LOAD] Fetching initial route on booking load...', {
               worker: `${workerLat}, ${workerLon}`,
               user: `${data.location.coordinates.latitude}, ${data.location.coordinates.longitude}`,
             });
-            fetchMapboxDirections(
-              {
-                latitude: workerLat,
-                longitude: workerLon,
-              },
-              {
-                latitude: data.location.coordinates.latitude,
-                longitude: data.location.coordinates.longitude,
-              }
-            );
+            // Only fetch if we don't already have a route (check via ref to avoid stale closure)
+            const routeKey = `${workerLat.toFixed(4)},${workerLon.toFixed(4)}|${data.location.coordinates.latitude.toFixed(4)},${data.location.coordinates.longitude.toFixed(4)}`;
+            const lastRoute = lastFetchedRouteRef.current;
+            if (!lastRoute || (lastRoute.origin !== `${workerLat.toFixed(4)},${workerLon.toFixed(4)}` || lastRoute.destination !== `${data.location.coordinates.latitude.toFixed(4)},${data.location.coordinates.longitude.toFixed(4)}`)) {
+              console.log('🗺️ [BOOKING LOAD] Fetching initial route on booking load...', {
+                worker: `${workerLat}, ${workerLon}`,
+                user: `${data.location.coordinates.latitude}, ${data.location.coordinates.longitude}`,
+              });
+              fetchMapboxDirections(
+                {
+                  latitude: workerLat,
+                  longitude: workerLon,
+                },
+                {
+                  latitude: data.location.coordinates.latitude,
+                  longitude: data.location.coordinates.longitude,
+                }
+              );
+            } else {
+              console.log('✅ [BOOKING LOAD] Route already fetched for these coordinates, skipping');
+            }
           } else {
             console.warn('⚠️ [BOOKING LOAD] Worker location missing coordinates:', data.workerLocation);
           }
@@ -384,71 +540,55 @@ export default function LiveTrackingScreen() {
 
     // Listen for booking accepted
     const handleBookingAccepted = (data: any) => {
-      if (data.bookingId === bookingId || data.booking?._id === bookingId || data.booking?.id === bookingId) {
-        console.log(' Booking accepted:', data);
-        setNavStatus('accepted');
-        // Update booking state immediately
-        if (booking) {
-          setBooking({
-            ...booking,
-            status: 'accepted',
-            workerId: data.booking?.workerId || data.workerId || booking.workerId,
-          });
-        }
-        // Refresh booking details
-        setTimeout(() => {
-          fetchBookingDetails();
-        }, 500);
+      if (!data || (data.bookingId !== bookingId && data.booking?._id !== bookingId && data.booking?.id !== bookingId)) return;
+      console.log(' Booking accepted:', data);
+      setNavStatus('accepted');
+      const currentBooking = bookingRef.current;
+      if (currentBooking) {
+        setBooking({
+          ...currentBooking,
+          status: 'accepted',
+          workerId: data.booking?.workerId || data.workerId || currentBooking.workerId,
+        });
       }
+      setTimeout(() => fetchBookingDetails(), 500);
     };
 
     // Listen for location tracking started
     const handleLocationTrackingStarted = (data: any) => {
-      if (data.bookingId === bookingId) {
-        console.log('📍 Location tracking started:', data);
-        setLocationTrackingStarted(true);
-        setNavStatus('tracking');
-        // Refresh booking details to get latest status
-        setTimeout(() => {
-          fetchBookingDetails();
-        }, 300);
-      }
+      if (!data || data.bookingId !== bookingId) return;
+      console.log('📍 Location tracking started:', data);
+      setLocationTrackingStarted(true);
+      setNavStatus('tracking');
+      // Refresh booking details to get latest status
+      setTimeout(() => {
+        fetchBookingDetails();
+      }, 300);
     };
 
     // Listen for enhanced route updates with live tracking data
     const handleRouteUpdated = (data: any) => {
-      if (data.bookingId === bookingId) {
-        console.log(' Enhanced route updated:', {
-          distance: data.distance,
-          duration: data.duration,
-          distanceTraveled: data.distanceTraveled,
-          distanceRemaining: data.distanceRemaining,
-          hasRoute: !!data.route
+      if (!data || data.bookingId !== bookingId) return;
+      console.log(' Enhanced route updated:', {
+        distance: data.distance,
+        duration: data.duration,
+        distanceTraveled: data.distanceTraveled,
+        distanceRemaining: data.distanceRemaining,
+        hasRoute: !!data.route
+      });
+      if (data.route && data.route.geometry) {
+        routeKeyRef.current = `route-${Date.now()}-${data.route.geometry.coordinates?.length || 0}`;
+        setRouteData({
+          coordinates: data.route.geometry.coordinates || [],
+          geometry: data.route
         });
-        
-        // Update route geometry for real road-based path display
-        if (data.route && data.route.geometry) {
-          routeKeyRef.current = `route-${Date.now()}-${data.route.geometry.coordinates?.length || 0}`;
-          setRouteData({ 
-            coordinates: data.route.geometry.coordinates || [],
-            geometry: data.route 
-          });
-        }
-        
-        // Update live distance tracking
-        if (data.distanceTraveled !== undefined) {
-          setDistanceTraveled(data.distanceTraveled);
-        }
-        if (data.distanceRemaining !== undefined) {
-          setDistanceRemaining(data.distanceRemaining);
-          setDistance(data.distanceRemaining); // Already in km from backend
-        }
-        
-        // Update ETA based on actual route duration
-        if (data.duration) {
-          setEta(Math.ceil(data.duration / 60)); // Convert seconds to minutes
-        }
       }
+      if (data.distanceTraveled !== undefined) setDistanceTraveled(data.distanceTraveled);
+      if (data.distanceRemaining !== undefined) {
+        setDistanceRemaining(data.distanceRemaining);
+        setDistance(data.distanceRemaining);
+      }
+      if (data.duration) setEta(Math.ceil(data.duration / 60));
     };
 
     // MapService route update callback - receives throttled route updates (every 3-5 seconds)
@@ -477,21 +617,17 @@ export default function LiveTrackingScreen() {
 
     // Listen for enhanced worker location updates with distance tracking
     const handleWorkerLocation = (data: any) => {
-      if (data.bookingId === bookingId || data.workerId === booking?.workerId || 
-          (typeof booking?.workerId === 'object' && data.workerId === (booking.workerId as any)?._id)) {
+      if (!data) return;
+      const currentBooking = bookingRef.current;
+      const workerMatch = data.bookingId === bookingId || data.workerId === currentBooking?.workerId ||
+          (typeof currentBooking?.workerId === 'object' && data.workerId === (currentBooking.workerId as any)?._id);
+      if (!workerMatch) return;
         console.log('📍 Enhanced worker location update:', {
           location: `${data.latitude}, ${data.longitude}`,
           accuracy: data.accuracy,
           distanceTraveled: data.distanceTraveled,
           distanceRemaining: data.distanceRemaining
         });
-        
-        const newLocation: Location = {
-          latitude: data.latitude,
-          longitude: data.longitude,
-          accuracy: data.accuracy,
-          timestamp: Date.now(),
-        };
         
         // Generate stable key for marker (only update if location changed significantly)
         const locationKey = `${data.latitude.toFixed(4)}-${data.longitude.toFixed(4)}`;
@@ -500,71 +636,128 @@ export default function LiveTrackingScreen() {
         }
         
         // Update worker location - ensure it's in the correct format
-        setWorkerLocation({
+        // CRITICAL: Use ref to prevent excessive re-renders, only update state when significant change
+        const newLocation = {
           latitude: data.latitude,
           longitude: data.longitude,
-        });
+        };
+        
+        // Location object for MapService (includes accuracy and timestamp)
+        const newLocationForMapService: Location = {
+          latitude: data.latitude,
+          longitude: data.longitude,
+          accuracy: data.accuracy,
+          timestamp: Date.now(),
+        };
+        
+        // Only update state if location changed significantly (> 8 meters) or 4 seconds passed - reduces re-renders/jitter
+        const lastLocation = workerLocationRef.current;
+        const now = Date.now();
+        const lastUpdate = lastWorkerMarkerUpdateRef.current || 0;
+        
+        if (lastLocation) {
+          const dist = calculateDistanceMeters(
+            lastLocation.latitude,
+            lastLocation.longitude,
+            newLocation.latitude,
+            newLocation.longitude
+          );
+          
+          // Update state only if moved > 8 meters or 4 seconds passed
+          if (dist > 8 || (now - lastUpdate > 4000)) {
+            setWorkerLocation(newLocation);
+            lastWorkerMarkerUpdateRef.current = now;
+          } else {
+            // Still update ref for internal calculations, but don't trigger re-render
+            workerLocationRef.current = newLocation;
+          }
+        } else {
+          // First location - always update
+          setWorkerLocation(newLocation);
+          lastWorkerMarkerUpdateRef.current = now;
+        }
         
         // Update MapService with new worker location (throttled internally to 3-5 seconds)
-        if (booking?.location?.coordinates) {
-          mapService.updateOrigin(newLocation);
+        if (userLocationCoords) {
+          mapService.updateOrigin(newLocationForMapService);
           
           // Update Mapbox Directions route with new worker location
-          // IMPORTANT: Fetch route on every significant location change (reduced throttle to 5 seconds for active navigation)
-          const now = Date.now();
+          // IMPORTANT: Fetch route only on significant location changes (increased throttle to reduce API calls)
+          const routeUpdateTime = Date.now();
           const lastRouteUpdate = (mapRef.current as any)?._lastRouteUpdate || 0;
-          const throttleTime = navStatus === 'navigating' ? 5000 : 10000; // More frequent during active navigation
+          const throttleTime = navStatus === 'navigating' ? 15000 : 30000; // 15s during navigation, 30s otherwise
           
-          if (now - lastRouteUpdate > throttleTime) {
-            (mapRef.current as any)._lastRouteUpdate = now;
-            console.log('🔄 [ROUTE UPDATE] Worker location changed, fetching new route...');
+          // Also check if location changed significantly (at least 100 meters)
+          const lastOrigin = lastFetchedRouteRef.current?.origin;
+          const currentOrigin = `${newLocation.latitude.toFixed(4)},${newLocation.longitude.toFixed(4)}`;
+          const locationChanged = lastOrigin !== currentOrigin;
+          
+          if (locationChanged && routeUpdateTime - lastRouteUpdate > throttleTime) {
+            (mapRef.current as any)._lastRouteUpdate = routeUpdateTime;
+            console.log('🔄 [ROUTE UPDATE] Worker location changed significantly, fetching new route...');
             fetchMapboxDirections(
               newLocation,
-              {
-                latitude: booking.location.coordinates.latitude,
-                longitude: booking.location.coordinates.longitude,
-              }
+              userLocationCoords // Use fixed test location
             );
+          } else if (!locationChanged) {
+            console.log('⏸️ [ROUTE UPDATE] Location unchanged, skipping route fetch');
           } else {
-            console.log(`⏸️ [ROUTE THROTTLE] Skipping route update (${Math.round((throttleTime - (now - lastRouteUpdate)) / 1000)}s remaining)`);
+            console.log(`⏸️ [ROUTE THROTTLE] Skipping route update (${Math.round((throttleTime - (routeUpdateTime - lastRouteUpdate)) / 1000)}s remaining)`);
           }
         }
         
-        // ARCHITECTURE: Camera updates ONLY every 3-5 seconds (Google Maps style)
+        // ARCHITECTURE: Camera updates ONLY every 8-10 seconds for smooth performance (reduced frequency to prevent jitter)
         if (mapRef.current && (navStatus === 'tracking' || navStatus === 'navigating')) {
-          const now = Date.now();
+          const cameraUpdateTime = Date.now();
           const lastCameraUpdate = (mapRef.current as any)._lastCameraUpdate || 0;
+          const isAnimating = (mapRef.current as any)._isAnimating || false;
           
-          // ARCHITECTURE RULE: Camera updates every 3-5 seconds for smooth performance
-          if (now - lastCameraUpdate < 4000) { // 4 seconds
+          // ARCHITECTURE RULE: Camera updates every 8-10 seconds for smooth performance
+          // Also prevent overlapping animations
+          if (cameraUpdateTime - lastCameraUpdate < 8000 || isAnimating) { // 8 seconds, and no overlapping animations
             return;
           }
           
           try {
-            (mapRef.current as any)._lastCameraUpdate = now;
+            (mapRef.current as any)._lastCameraUpdate = cameraUpdateTime;
+            (mapRef.current as any)._isAnimating = true;
             
-            // ARCHITECTURE: Use smooth animations with duration ≥ 1500ms (Google Maps style)
-            if (mapRef.current.animateToCoordinate) {
-              mapRef.current.animateToCoordinate(
-                {
-                  latitude: newLocation.latitude,
-                  longitude: newLocation.longitude,
-                },
-                1500 // Smooth 1.5s animation (Google Maps style)
-              );
-            } else if (mapRef.current.animateToRegion) {
-              mapRef.current.animateToRegion(
-                {
-                  latitude: newLocation.latitude,
-                  longitude: newLocation.longitude,
-                  latitudeDelta: 0.01,
-                  longitudeDelta: 0.01,
-                },
-                1500
-              );
-            }
+              // ARCHITECTURE: Use smooth animations with duration ≥ 2000ms for smoother transitions
+              if (mapRef.current.animateToCoordinate) {
+                mapRef.current.animateToCoordinate(
+                  {
+                    latitude: newLocation.latitude,
+                    longitude: newLocation.longitude,
+                  },
+                  2000 // Smooth 2s animation (Google Maps style)
+                );
+              } else if (mapRef.current.animateToRegion) {
+                mapRef.current.animateToRegion(
+                  {
+                    latitude: newLocation.latitude,
+                    longitude: newLocation.longitude,
+                    latitudeDelta: 0.01,
+                    longitudeDelta: 0.01,
+                  },
+                  2000
+                );
+              }
+              
+              // CRITICAL: Do NOT update stableWorkerLocation here - it causes jitter!
+              // The marker position is updated separately via the throttled useEffect (15m or 4s)
+              // Camera animation should only move the view, not update marker position
+            
+            // Reset animation flag after animation completes
+            setTimeout(() => {
+              if (mapRef.current) {
+                (mapRef.current as any)._isAnimating = false;
+              }
+            }, 2100); // Slightly longer than animation duration
           } catch (error) {
             console.log('Map follow error:', error);
+            if (mapRef.current) {
+              (mapRef.current as any)._isAnimating = false;
+            }
           }
         }
         
@@ -576,31 +769,31 @@ export default function LiveTrackingScreen() {
           setDistanceRemaining(data.distanceRemaining);
           setDistance(data.distanceRemaining); // Already in km from backend
           setEta(Math.max(1, Math.ceil(data.distanceRemaining * 2))); // 2 min per km estimate
-        } else if (booking?.location?.coordinates) {
+        } else if (userLocationCoords) {
           // Fallback to straight-line calculation if enhanced data not available
+          // Use fixed test location
           const dist = calculateDistance(
             data.latitude,
             data.longitude,
-            booking.location.coordinates.latitude,
-            booking.location.coordinates.longitude
+            userLocationCoords.latitude,
+            userLocationCoords.longitude
           );
           setDistance(dist);
           setDistanceRemaining(dist);
           setEta(Math.ceil(dist * 2));
         }
-      }
     };
 
     // Listen for enhanced navigation started with initial route data
     const handleNavigationStarted = (data: any) => {
-      if (data.bookingId === bookingId) {
-        console.log(' Enhanced navigation started:', {
-          distance: data.distance,
-          duration: data.duration,
-          hasRoute: !!data.route
-        });
-        
-        setNavStatus('navigating');
+      if (!data || data.bookingId !== bookingId) return;
+      console.log(' Enhanced navigation started:', {
+        distance: data.distance,
+        duration: data.duration,
+        hasRoute: !!data.route
+      });
+      setLocationTrackingStarted(true);
+      setNavStatus('navigating');
         
         // Set initial route display from navigation start
         if (data.route && data.route.geometry) {
@@ -611,50 +804,39 @@ export default function LiveTrackingScreen() {
           });
         }
         
-        // Fetch Mapbox Directions route
-        if (workerLocation && booking?.location?.coordinates) {
+        // Fetch Mapbox Directions route only if we don't already have one
+        // Use a ref check to avoid stale closure issues
+        const hasRoute = mapboxRouteData || routeData;
+        const workerLoc = workerLocationRef.current || workerLocation;
+        if (workerLoc && userLocationCoords && !hasRoute) {
+          console.log('🗺️ [NAVIGATION STARTED] Fetching initial route...');
           fetchMapboxDirections(
             {
-              latitude: workerLocation.latitude,
-              longitude: workerLocation.longitude,
+              latitude: workerLoc.latitude,
+              longitude: workerLoc.longitude,
             },
-            {
-              latitude: booking.location.coordinates.latitude,
-              longitude: booking.location.coordinates.longitude,
-            }
+            userLocationCoords // Use fixed test location
           );
-          
-          // Start periodic route updates (every 8 seconds during active navigation for real-time updates)
-          if (routeFetchInterval.current) {
-            clearInterval(routeFetchInterval.current);
-          }
-          console.log('🔄 [ROUTE INTERVAL] Starting periodic route updates every 8 seconds');
-          routeFetchInterval.current = setInterval(() => {
-            if (workerLocation && booking?.location?.coordinates) {
-              console.log('🔄 [ROUTE INTERVAL] Periodic route update triggered');
-              fetchMapboxDirections(
-                {
-                  latitude: workerLocation.latitude,
-                  longitude: workerLocation.longitude,
-                },
-                {
-                  latitude: booking.location.coordinates.latitude,
-                  longitude: booking.location.coordinates.longitude,
-                }
-              );
-            }
-          }, 8000); // Update every 8 seconds for active navigation (reduced from 15s)
-          
-          // Start MapService for smooth, throttled route updates (every 3-5 seconds)
+        } else if (hasRoute) {
+          console.log('✅ [NAVIGATION STARTED] Route already exists, skipping fetch');
+        }
+        
+        // REMOVED: Periodic route updates - routes are now updated only on significant location changes
+        // This reduces API calls and prevents excessive re-renders
+        if (routeFetchInterval.current) {
+          clearInterval(routeFetchInterval.current);
+          routeFetchInterval.current = null;
+        }
+        console.log('✅ [ROUTE INTERVAL] Periodic route updates disabled - using location-based updates only');
+        
+        // Start MapService for smooth, throttled route updates (every 3-5 seconds)
+        if (workerLoc && userLocationCoords) {
           mapService.startMapUpdates({
             origin: {
-              latitude: workerLocation.latitude,
-              longitude: workerLocation.longitude,
+              latitude: workerLoc.latitude,
+              longitude: workerLoc.longitude,
             },
-            destination: {
-              latitude: booking.location.coordinates.latitude,
-              longitude: booking.location.coordinates.longitude,
-            },
+            destination: userLocationCoords, // Use fixed test location
             updateInterval: 4000, // 4 seconds (between 3-5 seconds)
             enableRoute: true,
             onRouteUpdate: handleMapServiceRouteUpdate,
@@ -673,7 +855,6 @@ export default function LiveTrackingScreen() {
         if (data.duration) {
           setEta(Math.ceil(data.duration / 60)); // Convert seconds to minutes
         }
-      }
     };
 
     const handleNavigationArrived = (data: any) => {
@@ -749,24 +930,39 @@ export default function LiveTrackingScreen() {
         const totalAmount = booking?.price || data.price || 0;
         const paymentMethod = data.paymentMethod;
         
+        const workerIdStr = typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || data.workerId;
         // Show payment confirmation dialog
         if (paymentMethod === 'cash') {
-          // Cash payment - confirm and go to review
+          // Cash payment - user confirms payment then go to review (backend credits worker when both confirm)
           Alert.alert(
-            ' Service Completed!',
+            '✅ Service Completed!',
             `${workerName} has completed your ${serviceName}!\n\n💵 Total Amount: Rs. ${totalAmount}\n\nPlease pay cash to the worker.`,
             [
               {
                 text: 'Payment Done',
-                onPress: () => {
+                onPress: async () => {
+                  try {
+                    const apiUrl = getApiUrl();
+                    const response = await fetch(`${apiUrl}/api/bookings/${bookingId}/confirm-payment`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ confirmedBy: 'user', userId: user?.id }),
+                    });
+                    if (response.ok) {
+                      const resData = await response.json();
+                      if (resData.booking) {
+                        setBooking((prev) => prev ? { ...prev, ...resData.booking, paymentStatus: resData.booking.paymentStatus, userConfirmedPayment: true, workerConfirmedPayment: resData.booking.workerConfirmedPayment } : null);
+                      }
+                    }
+                  } catch (_) {}
                   router.push({
                     pathname: '/review',
                     params: {
                       bookingId: bookingId,
                       serviceTitle: serviceName,
                       workerName: workerName,
-                      workerId: typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || data.workerId,
-                      amount: totalAmount,
+                      workerId: workerIdStr,
+                      amount: String(totalAmount),
                     },
                   });
                 },
@@ -774,36 +970,25 @@ export default function LiveTrackingScreen() {
             ]
           );
         } else if (paymentMethod === 'online') {
-          // Online payment - show payment options
+          // Online payment - navigate to payment screen to complete (backend credits worker on success)
           Alert.alert(
-            ' Service Completed!',
+            '✅ Service Completed!',
             `${workerName} has completed your ${serviceName}!\n\n💳 Total Amount: Rs. ${totalAmount}\n\nPlease complete online payment.`,
             [
               {
                 text: 'Pay Now',
                 onPress: () => {
-                  // For now, simulate online payment success
-                  Alert.alert(
-                    'Online Payment',
-                    'Payment options:\n\n• eSewa\n• Khalti\n• Bank Transfer',
-                    [
-                      {
-                        text: 'Payment Completed',
-                        onPress: () => {
-                          router.push({
-                            pathname: '/review',
-                            params: {
-                              bookingId: bookingId,
-                              serviceTitle: serviceName,
-                              workerName: workerName,
-                              workerId: typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || data.workerId,
-                              amount: totalAmount,
-                            },
-                          });
-                        },
-                      },
-                    ]
-                  );
+                  router.push({
+                    pathname: '/payment',
+                    params: {
+                      bookingId: bookingId,
+                      amount: String(totalAmount),
+                      serviceTitle: serviceName,
+                      workerName: workerName,
+                      workerId: workerIdStr || '',
+                      orderType: 'service',
+                    },
+                  });
                 },
               },
             ]
@@ -975,30 +1160,6 @@ export default function LiveTrackingScreen() {
       }
     };
 
-    // Start MapService if we have both locations (from initial booking load or updates)
-    const initializeMapService = () => {
-      if (booking?.workerLocation && booking?.location?.coordinates) {
-        mapService.startMapUpdates({
-          origin: {
-            latitude: booking.workerLocation.latitude,
-            longitude: booking.workerLocation.longitude,
-          },
-          destination: {
-            latitude: booking.location.coordinates.latitude,
-            longitude: booking.location.coordinates.longitude,
-          },
-          updateInterval: 4000, // 4 seconds (between 3-5 seconds)
-          enableRoute: true,
-          onRouteUpdate: handleMapServiceRouteUpdate,
-        });
-      }
-    };
-
-    // Initialize MapService when booking is loaded
-    if (booking) {
-      initializeMapService();
-    }
-
     // Register all socket listeners
     socketService.on('booking:accepted', handleBookingAccepted);
     socketService.on('booking:cancelled', handleBookingCancelled);
@@ -1051,10 +1212,7 @@ export default function LiveTrackingScreen() {
       socketService.off('booking:updated', handleBookingUpdated);
       socketService.off('payment:status_updated', handlePaymentStatusUpdated);
     };
-  }, [bookingId, booking, user?.id]);
-
-  // ARCHITECTURE: User app does NOT fetch routes - only receives via socket
-  // Removed auto-fetch useEffect
+  }, [bookingId, user?.id]); // Do NOT include booking - causes max depth (effect re-runs when booking changes)
 
   // Update work duration timer
   useEffect(() => {
@@ -1238,56 +1396,131 @@ export default function LiveTrackingScreen() {
     }
   }, [booking, workerName, workerPhone, workerProfileImage, workerData]);
 
-  // Calculate current worker location (used in routeCoordinates and rendering)
-  // Handle both object format {latitude, longitude} and nested format {location: {latitude, longitude}}
-  const currentWorkerLocation = useMemo(() => {
-    if (workerLocation) {
-      // If workerLocation has latitude/longitude directly
-      if (workerLocation.latitude && workerLocation.longitude) {
-        return {
+  // Stable worker location state - only updates when location changes significantly (> 10m or 2s)
+  // This prevents excessive map re-renders
+  const [stableWorkerLocation, setStableWorkerLocation] = useState<any>(null);
+
+  // Store worker location in ref and update stable state only on significant changes
+  useEffect(() => {
+    if (workerLocation && workerLocation.latitude && workerLocation.longitude) {
+      workerLocationRef.current = {
+        latitude: workerLocation.latitude,
+        longitude: workerLocation.longitude,
+      };
+      
+      // Only update stable location state if worker moved significantly (> 15 meters) or 4 seconds passed - reduces map jitter
+      if (stableWorkerLocation) {
+        const dist = calculateDistanceMeters(
+          stableWorkerLocation.latitude,
+          stableWorkerLocation.longitude,
+          workerLocation.latitude,
+          workerLocation.longitude
+        );
+        
+        const now = Date.now();
+        if (dist > 15 || (now - lastWorkerMarkerUpdateRef.current > 4000)) {
+          setStableWorkerLocation({
+            latitude: workerLocation.latitude,
+            longitude: workerLocation.longitude,
+          });
+          stableWorkerLocationRef.current = {
+            latitude: workerLocation.latitude,
+            longitude: workerLocation.longitude,
+          };
+          lastWorkerMarkerUpdateRef.current = now;
+        }
+      } else {
+        // First time - set initial location
+        setStableWorkerLocation({
+          latitude: workerLocation.latitude,
+          longitude: workerLocation.longitude,
+        });
+        stableWorkerLocationRef.current = {
           latitude: workerLocation.latitude,
           longitude: workerLocation.longitude,
         };
+        lastWorkerMarkerUpdateRef.current = Date.now();
       }
-    }
-    if (booking?.workerLocation) {
+    } else if (booking?.workerLocation) {
+      // Fallback to booking worker location
       if (booking.workerLocation.latitude && booking.workerLocation.longitude) {
-        return {
+        const loc = {
           latitude: booking.workerLocation.latitude,
           longitude: booking.workerLocation.longitude,
         };
+        workerLocationRef.current = loc;
+        if (!stableWorkerLocation) {
+          setStableWorkerLocation(loc);
+          stableWorkerLocationRef.current = loc;
+        }
       }
     }
-    return null;
-  }, [workerLocation, booking?.workerLocation]);
-  
-  // CRITICAL: Auto-fetch route when both locations become available
+  }, [workerLocation, booking?.workerLocation, stableWorkerLocation]);
+
+  // Calculate current worker location - use stable location state
+  const currentWorkerLocation = useMemo(() => {
+    return stableWorkerLocation || workerLocationRef.current || null;
+  }, [stableWorkerLocation]); // Only depends on stable location state
+
+  // TESTING: Calculate static user location ONCE when worker location is first available
+  // This location stays fixed at 12-13 km from the initial worker location and never changes
   useEffect(() => {
-    if (currentWorkerLocation && booking?.location?.coordinates && !mapboxRouteData && !isFetchingRoute) {
-      console.log('🔄 [AUTO-FETCH] Both locations available, fetching route automatically...', {
-        worker: `${currentWorkerLocation.latitude.toFixed(6)}, ${currentWorkerLocation.longitude.toFixed(6)}`,
-        user: `${booking.location.coordinates.latitude.toFixed(6)}, ${booking.location.coordinates.longitude.toFixed(6)}`,
-      });
-      fetchMapboxDirections(
-        {
-          latitude: currentWorkerLocation.latitude,
-          longitude: currentWorkerLocation.longitude,
-        },
-        {
-          latitude: booking.location.coordinates.latitude,
-          longitude: booking.location.coordinates.longitude,
-        }
-      );
+    // Only calculate once if we don't already have a static location
+    if (staticUserLocationRef.current || staticUserLocation) {
+      return;
     }
-  }, [currentWorkerLocation, booking?.location?.coordinates, mapboxRouteData, isFetchingRoute]);
+    
+    // Calculate static location when worker location becomes available
+    const workerLoc = workerLocationRef.current || stableWorkerLocation || booking?.workerLocation || currentWorkerLocation;
+    if (workerLoc && workerLoc.latitude && workerLoc.longitude) {
+      const testDistanceKm = 12.5; // 12.5 km (between 12-13 km)
+      const bearing = 90; // 90 degrees = East
+      
+      const staticLocation = calculateDestinationPoint(
+        workerLoc.latitude,
+        workerLoc.longitude,
+        testDistanceKm,
+        bearing
+      );
+      
+      // Store in both ref and state (ref for stable access, state for re-render)
+      staticUserLocationRef.current = staticLocation;
+      setStaticUserLocation(staticLocation);
+      
+      console.log('🧪 [TEST MODE] Static user location calculated ONCE (12.5 km from worker):', {
+        workerLocation: { lat: workerLoc.latitude, lon: workerLoc.longitude },
+        userLocation: staticLocation,
+        distance: `${testDistanceKm} km`,
+        bearing: `${bearing}° (East)`,
+        note: 'This location will remain STATIC and never update when worker moves',
+      });
+    }
+  }, [stableWorkerLocation, booking?.workerLocation, currentWorkerLocation, staticUserLocation]);
+
+  // TESTING: Use static user location - never changes once calculated
+  const userLocationCoords = useMemo(() => {
+    // Use static location if available (calculated once from initial worker location)
+    if (staticUserLocation) {
+      return staticUserLocation;
+    }
+    
+    // Fallback if static location not calculated yet
+    return { latitude: 27.7172, longitude: 85.3240 };
+  }, [staticUserLocation]); // Only depends on static location state
+  
+  // REMOVED: Auto-fetch useEffect - routes are now fetched only when:
+  // 1. Booking initially loads (in fetchBookingDetails)
+  // 2. Map becomes ready (onMapReady)
+  // 3. Worker location changes significantly (in handleWorkerLocation with throttle)
+  // 4. Navigation starts (in handleNavigationStarted)
+  // This prevents duplicate fetches and excessive re-renders
   
   // ARCHITECTURE: Memoize polyline geometry - Prioritize Mapbox route data, fallback to routeData
-  // Dependency ensures it only updates when route changes, not on GPS updates
+  // CRITICAL: Only depend on route data, not location updates to prevent excessive re-renders
   const routeCoordinates = useMemo(() => {
     try {
       // PRIORITY 1: Use Mapbox route data (most accurate, road-based)
       if (mapboxRouteData && mapboxRouteData.coordinates && mapboxRouteData.coordinates.length > 0) {
-        console.log('✅ Using Mapbox route coordinates:', mapboxRouteData.coordinates.length, 'points');
         return mapboxRouteData.coordinates;
       }
       
@@ -1311,22 +1544,18 @@ export default function LiveTrackingScreen() {
           return null;
         }).filter((coord: any) => coord !== null);
         
-        console.log('✅ Route coordinates converted from routeData:', coords.length, 'points');
         return coords;
       }
       
-      // FALLBACK: Create a simple straight-line route if we have both locations
-      if (currentWorkerLocation && booking?.location?.coordinates) {
-        console.log('⚠️ No route data, creating fallback straight-line route');
+      // FALLBACK: Create a simple straight-line route if we have both locations (only when navigating)
+      const workerLoc = workerLocationRef.current || currentWorkerLocation;
+      if (navStatus === 'navigating' && workerLoc && userLocationCoords) {
         return [
           {
-            latitude: currentWorkerLocation.latitude,
-            longitude: currentWorkerLocation.longitude,
+            latitude: workerLoc.latitude,
+            longitude: workerLoc.longitude,
           },
-          {
-            latitude: booking.location.coordinates.latitude,
-            longitude: booking.location.coordinates.longitude,
-          },
+          userLocationCoords, // Use fixed test location
         ];
       }
       
@@ -1335,7 +1564,70 @@ export default function LiveTrackingScreen() {
       console.error('❌ Error processing route coordinates:', error);
       return [];
     }
-  }, [mapboxRouteData?.coordinates, routeData?.coordinates, currentWorkerLocation, booking?.location?.coordinates]);
+  }, [mapboxRouteData?.coordinates, routeData?.coordinates, navStatus]); // Removed location dependencies to prevent re-renders
+
+  // TESTING: Auto-fetch route when both worker and user locations are available (after userLocationCoords is defined)
+  // CRITICAL: Don't include fetchMapboxDirections in deps to prevent infinite loop - it's stable via useCallback
+  useEffect(() => {
+    const workerLoc = workerLocationRef.current || stableWorkerLocation || booking?.workerLocation || currentWorkerLocation;
+    if (!workerLoc?.latitude || !workerLoc?.longitude || !userLocationCoords?.latitude || !userLocationCoords?.longitude ||
+        mapboxRouteData || routeData) return;
+    const originKey = `${workerLoc.latitude.toFixed(4)},${workerLoc.longitude.toFixed(4)}`;
+    const destKey = `${userLocationCoords.latitude.toFixed(4)},${userLocationCoords.longitude.toFixed(4)}`;
+    const lastRoute = lastFetchedRouteRef.current;
+    if (lastRoute && lastRoute.origin === originKey && lastRoute.destination === destKey) return;
+    fetchMapboxDirections(
+      { latitude: workerLoc.latitude, longitude: workerLoc.longitude },
+      userLocationCoords,
+      true
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stableWorkerLocation, booking?.workerLocation, currentWorkerLocation, userLocationCoords, mapboxRouteData, routeData]);
+
+  // TESTING: Persist static test location to DB ONCE when static location is calculated
+  // MUST be before any early returns to avoid "rendered more hooks than during previous render"
+  const testLocationSyncedRef = useRef(false);
+  useEffect(() => {
+    if (
+      !bookingId ||
+      !booking ||
+      testLocationSyncedRef.current ||
+      !staticUserLocation ||
+      !staticUserLocation.latitude ||
+      !staticUserLocation.longitude
+    ) {
+      return;
+    }
+    const syncTestLocation = async () => {
+      try {
+        const apiUrl = getApiUrl();
+        const res = await fetch(`${apiUrl}/api/bookings/${bookingId}/location`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: {
+              address: booking.location?.address || `Test location (12.5 km from worker) ${staticUserLocation.latitude.toFixed(6)}, ${staticUserLocation.longitude.toFixed(6)}`,
+              coordinates: {
+                latitude: staticUserLocation.latitude,
+                longitude: staticUserLocation.longitude,
+              },
+            },
+          }),
+        });
+        if (res.ok) {
+          testLocationSyncedRef.current = true;
+          const data = await res.json();
+          if (data.booking?.location) {
+            setBooking((prev: any) => (prev ? { ...prev, location: data.booking.location } : null));
+          }
+          console.log('🧪 [TEST MODE] Static test location saved to DB (will remain static):', staticUserLocation);
+        }
+      } catch (e) {
+        console.warn('Failed to sync static test location to DB:', e);
+      }
+    };
+    syncTestLocation();
+  }, [bookingId, booking, staticUserLocation]);
 
   if (error) {
     return (
@@ -1364,18 +1656,7 @@ export default function LiveTrackingScreen() {
     );
   }
 
-  const userLocationCoords = booking.location?.coordinates || {
-    latitude: 27.7172,
-    longitude: 85.324,
-  };
-  
-  console.log('📍 Tracking locations:', {
-    userLocation: userLocationCoords,
-    workerLocation: currentWorkerLocation,
-    hasWorker: !!booking.worker,
-    workerName: booking.worker?.name,
-  });
-  
+  // Calculate distance with proper handling for very close locations
   const calculatedDistance =
     currentWorkerLocation && userLocationCoords
       ? calculateDistance(
@@ -1385,6 +1666,33 @@ export default function LiveTrackingScreen() {
           userLocationCoords.longitude
         )
       : distance;
+  
+  // Format distance for display (show meters if < 1km, otherwise km)
+  const formatDistance = (distKm: number): string => {
+    if (distKm < 0.001) {
+      // Less than 1 meter
+      return `${Math.round(distKm * 1000)} m`;
+    } else if (distKm < 1) {
+      // Less than 1 km, show in meters
+      return `${Math.round(distKm * 1000)} m`;
+    } else {
+      // 1 km or more, show in km
+      return `${distKm.toFixed(2)} km`;
+    }
+  };
+  
+  // Format distance remaining for display
+  const formatDistanceRemaining = (distKm: number): string => {
+    if (distKm <= 0) {
+      return '0 m';
+    } else if (distKm < 0.001) {
+      return `${Math.round(distKm * 1000)} m`;
+    } else if (distKm < 1) {
+      return `${Math.round(distKm * 1000)} m`;
+    } else {
+      return `${distKm.toFixed(2)} km`;
+    }
+  };
   
   // Handle phone call
   const handleCall = () => {
@@ -1460,8 +1768,8 @@ export default function LiveTrackingScreen() {
             style={[styles.map, mapError && { opacity: 0.3 }]}
             mapType="standard"
             initialRegion={{
-              latitude: userLocationCoords.latitude,
-              longitude: userLocationCoords.longitude,
+              latitude: userLocationCoords?.latitude || 27.7172,
+              longitude: userLocationCoords?.longitude || 85.3240,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
@@ -1473,22 +1781,29 @@ export default function LiveTrackingScreen() {
               setMapError(null);
               
               // CRITICAL: Fetch route immediately when map is ready if we have both locations
-              if (currentWorkerLocation && booking?.location?.coordinates) {
-                console.log('🗺️ [MAP READY] Fetching initial route on map load...');
-                fetchMapboxDirections(
-                  {
-                    latitude: currentWorkerLocation.latitude,
-                    longitude: currentWorkerLocation.longitude,
-                  },
-                  {
-                    latitude: booking.location.coordinates.latitude,
-                    longitude: booking.location.coordinates.longitude,
-                  }
-                );
+              // Check via ref to avoid duplicate fetches
+              const workerLoc = workerLocationRef.current || currentWorkerLocation;
+              if (workerLoc && userLocationCoords) {
+                const originKey = `${workerLoc.latitude.toFixed(4)},${workerLoc.longitude.toFixed(4)}`;
+                const destKey = `${userLocationCoords.latitude.toFixed(4)},${userLocationCoords.longitude.toFixed(4)}`;
+                const lastRoute = lastFetchedRouteRef.current;
+                
+                if (!lastRoute || lastRoute.origin !== originKey || lastRoute.destination !== destKey) {
+                  console.log('🗺️ [MAP READY] Fetching initial route on map load...');
+                  fetchMapboxDirections(
+                    {
+                      latitude: workerLoc.latitude,
+                      longitude: workerLoc.longitude,
+                    },
+                    userLocationCoords // Use fixed test location
+                  );
+                } else {
+                  console.log('✅ [MAP READY] Route already fetched for these coordinates, skipping');
+                }
               } else {
                 console.warn('⚠️ [MAP READY] Cannot fetch route - missing locations:', {
-                  hasWorkerLocation: !!currentWorkerLocation,
-                  hasUserLocation: !!booking?.location?.coordinates,
+                  hasWorkerLocation: !!workerLoc,
+                  hasUserLocation: !!userLocationCoords,
                 });
               }
               
@@ -1516,12 +1831,14 @@ export default function LiveTrackingScreen() {
               }
                 
                 // Fit map to show both locations if available
+                // Skip if locations are very close (< 50m) to avoid zoom issues
                 if (Platform.OS === 'android' && mapRef.current?.fitToCoordinates) {
+                  const workerLoc = workerLocationRef.current || currentWorkerLocation;
                   const locations: Array<{ latitude: number; longitude: number }> = [];
-                  if (currentWorkerLocation && currentWorkerLocation.latitude && currentWorkerLocation.longitude) {
+                  if (workerLoc && workerLoc.latitude && workerLoc.longitude) {
                     locations.push({
-                      latitude: currentWorkerLocation.latitude,
-                      longitude: currentWorkerLocation.longitude,
+                      latitude: workerLoc.latitude,
+                      longitude: workerLoc.longitude,
                     });
                   }
                   if (userLocationCoords && userLocationCoords.latitude && userLocationCoords.longitude) {
@@ -1532,16 +1849,43 @@ export default function LiveTrackingScreen() {
                   }
                   
                   if (locations.length > 1) {
-                    setTimeout(() => {
-                      try {
-                        mapRef.current?.fitToCoordinates(locations, {
-                          edgePadding: { top: 80, right: 40, bottom: 200, left: 40 },
-                          animated: true,
-                        });
-                      } catch (e) {
-                        console.warn('Map fit error:', e);
-                      }
-                    }, 500);
+                    // Check distance - if very close, use a fixed zoom level instead
+                    const dist = calculateDistanceMeters(
+                      locations[0].latitude,
+                      locations[0].longitude,
+                      locations[1].latitude,
+                      locations[1].longitude
+                    );
+                    
+                    if (dist >= 50) {
+                      // Normal distance - use fitToCoordinates
+                      setTimeout(() => {
+                        try {
+                          mapRef.current?.fitToCoordinates(locations, {
+                            edgePadding: { top: 80, right: 40, bottom: 200, left: 40 },
+                            animated: true,
+                          });
+                        } catch (e) {
+                          console.warn('Map fit error:', e);
+                        }
+                      }, 500);
+                    } else {
+                      // Very close - use a fixed reasonable zoom level
+                      setTimeout(() => {
+                        try {
+                          const centerLat = (locations[0].latitude + locations[1].latitude) / 2;
+                          const centerLon = (locations[0].longitude + locations[1].longitude) / 2;
+                          mapRef.current?.animateToRegion({
+                            latitude: centerLat,
+                            longitude: centerLon,
+                            latitudeDelta: 0.005, // ~500m view
+                            longitudeDelta: 0.005,
+                          }, 500);
+                        } catch (e) {
+                          console.warn('Map region animate error:', e);
+                        }
+                      }, 500);
+                    }
                   }
                 }
               }}
@@ -1551,7 +1895,12 @@ export default function LiveTrackingScreen() {
               }}
               // Remove region prop to prevent blinking - use animateToCoordinate instead
               onRegionChangeComplete={(region: any) => {
-                // Prevent unnecessary updates
+                // CRITICAL: Prevent re-renders by not updating state
+                // Map region is controlled via animateToCoordinate only
+                // This callback fires frequently and causes excessive re-renders
+              }}
+              onRegionChange={() => {
+                // Prevent any region change callbacks from triggering updates
               }}
               showsUserLocation={false}
               showsMyLocationButton={false}
@@ -1589,14 +1938,13 @@ export default function LiveTrackingScreen() {
                 )}
 
                 {/* Worker marker - Use native pinColor for universal compatibility */}
-                {currentWorkerLocation && currentWorkerLocation.latitude && currentWorkerLocation.longitude && (
+                {/* CRITICAL: Use stable location state - only updates when location changes significantly */}
+                {/* Use stable key that doesn't change on every coordinate update to prevent remounts */}
+                {stableWorkerLocation && stableWorkerLocation.latitude && stableWorkerLocation.longitude && (
                   <MarkerComponent
-                    key="worker-marker-universal"
+                    key={`worker-marker-${navStatus}`}
                     identifier="worker-location-marker"
-                    coordinate={{
-                      latitude: currentWorkerLocation.latitude,
-                      longitude: currentWorkerLocation.longitude,
-                    }}
+                    coordinate={stableWorkerLocation}
                     title={workerName || 'Worker'}
                     description={navStatus === 'navigating' ? 'Navigating to you...' : 'Worker Location'}
                     pinColor={navStatus === 'navigating' ? '#2563EB' : '#10B981'}
@@ -1607,9 +1955,10 @@ export default function LiveTrackingScreen() {
                 )}
 
                 {/* Route Line - Mapbox route visualization on road - ALWAYS render when route exists */}
+                {/* Use stable key to prevent remounts - only change when route actually changes */}
                 {PolylineComponent && routeCoordinates.length > 0 && (
                   <PolylineComponent
-                    key={`route-polyline-${routeCoordinates.length}`}
+                    key="route-polyline-stable"
                     identifier="route-polyline"
                     coordinates={routeCoordinates}
                     strokeColor="#2563EB"
@@ -1623,17 +1972,17 @@ export default function LiveTrackingScreen() {
                 )}
               </>
             )}
-            
-            {/* Loading indicator - Show when fetching route */}
-            {(isFetchingRoute || (!mapboxRouteData && !routeData && locationTrackingStarted)) && (
-              <View style={styles.routeLoadingContainer}>
-                <ActivityIndicator size="small" color="#2563EB" />
-                <Text style={styles.routeLoadingText}>
-                  {isFetchingRoute ? 'Fetching route from Mapbox...' : 'Calculating route...'}
-                </Text>
-              </View>
-            )}
           </MapComponent>
+          
+          {/* Loading indicator - Moved outside MapComponent to prevent UIFrameGuarded error */}
+          {(isFetchingRoute || (!mapboxRouteData && !routeData && locationTrackingStarted)) && (
+            <View style={styles.routeLoadingContainer}>
+              <ActivityIndicator size="small" color="#2563EB" />
+              <Text style={styles.routeLoadingText}>
+                {isFetchingRoute ? 'Fetching route from Mapbox...' : 'Calculating route...'}
+              </Text>
+            </View>
+          )}
 
           {/* Back Button */}
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -1803,11 +2152,11 @@ export default function LiveTrackingScreen() {
             <View style={styles.movingBadge}>
               <View style={styles.pulseDot} />
               <Text style={styles.movingText}>
-                {workerName} is on the way • {distanceRemaining > 0 ? `${distanceRemaining.toFixed(2)} km remaining` : `${calculatedDistance.toFixed(2)} km`} • ETA: {eta} min
+                {workerName} is on the way • {distanceRemaining > 0 ? `${formatDistanceRemaining(distanceRemaining)} remaining` : formatDistance(calculatedDistance)} • {calculatedDistance < 0.001 ? 'Arriving now' : `ETA: ${eta} min`}
               </Text>
               {distanceTraveled > 0 && (
                 <Text style={styles.distanceTraveledText}>
-                  Traveled: {distanceTraveled.toFixed(2)} km
+                  Traveled: {formatDistance(distanceTraveled)}
                 </Text>
               )}
             </View>
@@ -1928,7 +2277,7 @@ export default function LiveTrackingScreen() {
               <View style={styles.detailRow}>
                 <Ionicons name="navigate-outline" size={16} color="#666" />
                 <Text style={styles.detailLabel}>Distance:</Text>
-                <Text style={styles.detailValue}>{distance.toFixed(2)} km</Text>
+                <Text style={styles.detailValue}>{formatDistance(distance)}</Text>
               </View>
             )}
             {booking.remainingTime !== undefined && (
