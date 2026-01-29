@@ -91,10 +91,16 @@ export default function SecurityScreen() {
     }
 
     if (value) {
-      let result: { success: boolean; error?: string };
-      if (typeof BiometricAuth.registerFaceID === 'function') {
-        result = await BiometricAuth.registerFaceID();
-      } else {
+      try {
+        const hasHardware = await LocalAuthentication.hasHardwareAsync();
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+        if (!hasHardware || !isEnrolled) {
+          Alert.alert(
+            'Face ID / Biometric Not Set Up',
+            'Please set up Face ID (or fingerprint) in your device Settings first, then try again.',
+          );
+          return;
+        }
         const type = await BiometricAuth.getBiometricType();
         const promptMessage = type === 'Face ID'
           ? 'Register Face ID - Look at your device to enable Face ID unlock'
@@ -103,20 +109,26 @@ export default function SecurityScreen() {
           promptMessage,
           fallbackLabel: 'Use PIN',
           disableDeviceFallback: false,
+          cancelLabel: 'Cancel',
         });
-        result = { success: authResult.success, error: authResult.success ? undefined : 'Registration cancelled or failed.' };
-      }
-      if (result.success) {
-        try {
+        if (authResult.success) {
           await AsyncStorage.setItem('worker_biometricEnabled', 'true');
           setBiometricEnabled(true);
-          Alert.alert('Success', biometricType === 'Face ID' ? 'Face ID registered. You can now unlock the app with Face ID.' : 'Biometric registered. You can now unlock the app.');
-        } catch (error) {
-          console.error('Error saving biometric setting:', error);
-          Alert.alert('Error', 'Failed to save setting');
+          Alert.alert('Success', type === 'Face ID' ? 'Face ID registered. You can now unlock the app with Face ID.' : 'Biometric registered. You can now unlock the app.');
+        } else {
+          const err = (authResult as { error?: string }).error;
+          if (err === 'user_cancel' || err === 'user_fallback' || err === 'app_cancel' || err === 'system_cancel') {
+            Alert.alert('Cancelled', 'Registration was cancelled. Turn the switch on again to enable Face ID / biometric unlock.');
+          } else if (err === 'not_enrolled' || err === 'passcode_not_set') {
+            Alert.alert('Set Up Required', 'Please set up Face ID (or fingerprint) and device passcode in Settings > Face ID & Passcode (or Touch ID & Passcode), then try again.');
+          } else {
+            Alert.alert('Registration Failed', err || 'Face ID / biometric authentication failed. Please try again.');
+          }
         }
-      } else {
-        Alert.alert('Registration Failed', result.error || 'Face ID / biometric authentication was cancelled or failed.');
+      } catch (error: unknown) {
+        console.error('Biometric registration error:', error);
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        Alert.alert('Error', `Failed to register Face ID / biometric. ${message} Please try again.`);
       }
       return;
     }
