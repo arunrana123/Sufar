@@ -5,11 +5,13 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   RefreshControl,
   Alert,
   ActivityIndicator,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
@@ -788,8 +790,8 @@ export default function NotificationsScreen() {
 
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safe}>
-        {/* Header */}
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
+        {/* Header - full-bleed on Android */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => {
             // Use replace instead of back to avoid GO_BACK error
@@ -951,7 +953,7 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: '#FF7A2C',
     paddingHorizontal: 16,
-    paddingTop: 60,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 60,
     paddingBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
