@@ -1,4 +1,4 @@
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Alert, Switch, Modal, TouchableOpacity } from 'react-native';
+import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Alert, Switch, Modal, TouchableOpacity, TextInput, Linking, ActivityIndicator, Text } from 'react-native';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LocalAuthentication from 'expo-local-authentication';
 import UserOnboarding from '@/components/UserOnboarding';
 import { BiometricAuth } from '@/lib/BiometricAuth';
+import { getApiUrl } from '@/lib/config';
 import { useState, useEffect } from 'react';
 
 export default function SettingsScreen() {
@@ -19,6 +20,14 @@ export default function SettingsScreen() {
   const [biometricType, setBiometricType] = useState<string>('');
   const [themeModalVisible, setThemeModalVisible] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [changePasswordModalVisible, setChangePasswordModalVisible] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
     checkBiometricAvailability();
@@ -155,6 +164,93 @@ export default function SettingsScreen() {
     setShowOnboarding(false);
   };
 
+  const openChangePasswordModal = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setChangePasswordModalVisible(true);
+  };
+
+  const closeChangePasswordModal = () => {
+    setChangePasswordModalVisible(false);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setChangePasswordLoading(false);
+  };
+
+  const handleChangePasswordSubmit = async () => {
+    if (!user?.id) {
+      Alert.alert('Error', 'You must be logged in to change your password.');
+      return;
+    }
+    if (!currentPassword.trim()) {
+      Alert.alert('Missing field', 'Please enter your current password.');
+      return;
+    }
+    if (!newPassword.trim()) {
+      Alert.alert('Missing field', 'Please enter your new password.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      Alert.alert('Weak password', 'New password must be at least 6 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Password mismatch', 'New password and confirm password do not match.');
+      return;
+    }
+    setChangePasswordLoading(true);
+    try {
+      const apiUrl = getApiUrl();
+      const response = await fetch(`${apiUrl}/api/users/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          currentPassword: currentPassword.trim(),
+          newPassword: newPassword.trim(),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        Alert.alert('Success', 'Your password has been changed successfully.');
+        closeChangePasswordModal();
+      } else {
+        Alert.alert('Failed', data.message || 'Could not change password. Please try again.');
+      }
+    } catch (error) {
+      console.error('Change password error:', error);
+      Alert.alert('Error', 'Network error. Please check your connection and try again.');
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  };
+
+  const handleHelpSupport = () => {
+    Alert.alert(
+      'Help & Support',
+      'For assistance, email us or visit the help center.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Email support', onPress: () => Linking.openURL('mailto:support@example.com') },
+        { text: 'OK' },
+      ]
+    );
+  };
+
+  const handleTermsPrivacy = () => {
+    Alert.alert(
+      'Terms & Privacy',
+      'View our Terms of Service and Privacy Policy in your browser.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open in browser', onPress: () => Linking.openURL('https://example.com/terms') },
+        { text: 'OK' },
+      ]
+    );
+  };
+
   const settingsSections = [
     {
       title: 'Security',
@@ -196,10 +292,7 @@ export default function SettingsScreen() {
           icon: 'key-outline',
           title: 'Change Password',
           subtitle: 'Update your password',
-          onPress: () => {
-            // TODO: Navigate to change password
-            console.log('Change password');
-          },
+          onPress: openChangePasswordModal,
         },
       ],
     },
@@ -210,10 +303,7 @@ export default function SettingsScreen() {
           icon: 'notifications-outline',
           title: 'Notifications',
           subtitle: 'Manage your notification preferences',
-          onPress: () => {
-            // TODO: Navigate to notification settings
-            console.log('Notification settings');
-          },
+          onPress: () => router.push('/notifications'),
         },
         {
           icon: 'moon-outline',
@@ -240,19 +330,13 @@ export default function SettingsScreen() {
           icon: 'help-circle-outline',
           title: 'Help & Support',
           subtitle: 'Get help and contact support',
-          onPress: () => {
-            // TODO: Navigate to help
-            console.log('Help & Support');
-          },
+          onPress: handleHelpSupport,
         },
         {
           icon: 'document-text-outline',
           title: 'Terms & Privacy',
           subtitle: 'Read our terms and privacy policy',
-          onPress: () => {
-            // TODO: Navigate to terms
-            console.log('Terms & Privacy');
-          },
+          onPress: handleTermsPrivacy,
         },
       ],
     },
@@ -270,12 +354,6 @@ export default function SettingsScreen() {
     },
   ];
 
-  // Show onboarding if requested
-  if (showOnboarding) {
-    return <UserOnboarding onComplete={handleOnboardingComplete} />;
-  }
-
-  // Show onboarding if requested
   if (showOnboarding) {
     return <UserOnboarding onComplete={handleOnboardingComplete} />;
   }
@@ -412,6 +490,95 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Change Password Modal */}
+      <Modal
+        visible={changePasswordModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeChangePasswordModal}
+      >
+        <View style={[styles.modalOverlay, styles.modalOverlayCenter]}>
+          <View style={[styles.modalContent, styles.changePasswordModal, { backgroundColor: theme.background }]}>
+            <View style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Change Password</ThemedText>
+              <Pressable onPress={closeChangePasswordModal} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color={theme.text} />
+              </Pressable>
+            </View>
+            <View style={styles.changePasswordForm}>
+              <ThemedText style={styles.changePasswordLabel}>Current password</ThemedText>
+              <View style={[styles.passwordInputWrap, { borderColor: theme.icon + '30' }]}>
+                <TextInput
+                  value={currentPassword}
+                  onChangeText={setCurrentPassword}
+                  placeholder="Enter current password"
+                  placeholderTextColor="#999"
+                  secureTextEntry={!showCurrentPassword}
+                  style={[styles.passwordInput, { color: theme.text }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Pressable onPress={() => setShowCurrentPassword((v) => !v)} style={styles.eyeBtn}>
+                  <Ionicons name={showCurrentPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={theme.icon} />
+                </Pressable>
+              </View>
+              <ThemedText style={styles.changePasswordLabel}>New password</ThemedText>
+              <View style={[styles.passwordInputWrap, { borderColor: theme.icon + '30' }]}>
+                <TextInput
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                  placeholder="Enter new password (min 6 characters)"
+                  placeholderTextColor="#999"
+                  secureTextEntry={!showNewPassword}
+                  style={[styles.passwordInput, { color: theme.text }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Pressable onPress={() => setShowNewPassword((v) => !v)} style={styles.eyeBtn}>
+                  <Ionicons name={showNewPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={theme.icon} />
+                </Pressable>
+              </View>
+              <ThemedText style={styles.changePasswordLabel}>Confirm new password</ThemedText>
+              <View style={[styles.passwordInputWrap, { borderColor: theme.icon + '30' }]}>
+                <TextInput
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="Confirm new password"
+                  placeholderTextColor="#999"
+                  secureTextEntry={!showConfirmPassword}
+                  style={[styles.passwordInput, { color: theme.text }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Pressable onPress={() => setShowConfirmPassword((v) => !v)} style={styles.eyeBtn}>
+                  <Ionicons name={showConfirmPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={theme.icon} />
+                </Pressable>
+              </View>
+              <View style={styles.changePasswordActions}>
+                <Pressable
+                  style={[styles.changePasswordCancel, { borderColor: theme.icon + '40' }]}
+                  onPress={closeChangePasswordModal}
+                  disabled={changePasswordLoading}
+                >
+                  <ThemedText style={styles.changePasswordCancelText}>Cancel</ThemedText>
+                </Pressable>
+                <Pressable
+                  style={[styles.changePasswordSubmit, { backgroundColor: theme.tint, opacity: changePasswordLoading ? 0.7 : 1 }]}
+                  onPress={handleChangePasswordSubmit}
+                  disabled={changePasswordLoading}
+                >
+                  {changePasswordLoading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.changePasswordSubmitText}>Change password</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ThemedView>
   );
 }
@@ -510,6 +677,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'flex-end',
   },
+  modalOverlayCenter: {
+    justifyContent: 'center',
+  },
   modalContent: {
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -571,5 +741,63 @@ const styles = StyleSheet.create({
   themeOptionDescription: {
     fontSize: 14,
     opacity: 0.7,
+  },
+  changePasswordModal: {
+    marginHorizontal: 20,
+    borderRadius: 16,
+  },
+  changePasswordForm: {
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
+  changePasswordLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 6,
+    opacity: 0.9,
+  },
+  passwordInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    marginBottom: 16,
+    paddingHorizontal: 12,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 16,
+  },
+  eyeBtn: {
+    padding: 8,
+  },
+  changePasswordActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  changePasswordCancel: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  changePasswordCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  changePasswordSubmit: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  changePasswordSubmitText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
 });
