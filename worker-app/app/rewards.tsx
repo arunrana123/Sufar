@@ -62,40 +62,12 @@ const calculateRewardPoints = (bookings: Booking[]): number => {
   }, 0);
 };
 
-// Available bonuses
+// Available bonuses (100 points = Rs. 1 when claimed to cash)
 const availableBonuses: Bonus[] = [
-  {
-    id: 'bonus-1',
-    name: 'Small Bonus',
-    description: 'Claim Rs. 50 bonus',
-    pointsRequired: 100,
-    bonusAmount: 50,
-    icon: 'gift',
-  },
-  {
-    id: 'bonus-2',
-    name: 'Medium Bonus',
-    description: 'Claim Rs. 200 bonus',
-    pointsRequired: 500,
-    bonusAmount: 200,
-    icon: 'gift',
-  },
-  {
-    id: 'bonus-3',
-    name: 'Large Bonus',
-    description: 'Claim Rs. 500 bonus',
-    pointsRequired: 1000,
-    bonusAmount: 500,
-    icon: 'trophy',
-  },
-  {
-    id: 'bonus-4',
-    name: 'Mega Bonus',
-    description: 'Claim Rs. 1000 bonus',
-    pointsRequired: 2000,
-    bonusAmount: 1000,
-    icon: 'star',
-  },
+  { id: 'bonus-1', name: 'Small', description: 'Claim Rs. 1 cash', pointsRequired: 100, bonusAmount: 1, icon: 'gift' },
+  { id: 'bonus-2', name: 'Medium', description: 'Claim Rs. 5 cash', pointsRequired: 500, bonusAmount: 5, icon: 'gift' },
+  { id: 'bonus-3', name: 'Large', description: 'Claim Rs. 10 cash', pointsRequired: 1000, bonusAmount: 10, icon: 'trophy' },
+  { id: 'bonus-4', name: 'Mega', description: 'Claim Rs. 20 cash', pointsRequired: 2000, bonusAmount: 20, icon: 'star' },
 ];
 
 export default function RewardsScreen() {
@@ -260,11 +232,11 @@ export default function RewardsScreen() {
         }
       };
       
-      // Listen for worker reward points updates
+      // Listen for worker reward points updates (new paid job or claim to cash) - live update
       const handleWorkerRewardPointsUpdated = (data: any) => {
-        console.log('🎁 Worker reward points updated:', data);
         if (data.workerId === worker.id) {
-          setTotalPoints(data.totalPoints);
+          if (data.totalPoints !== undefined) setTotalPoints(data.totalPoints);
+          setTimeout(() => fetchRewardsData(), 500);
         }
       };
       
@@ -316,26 +288,24 @@ export default function RewardsScreen() {
 
     try {
       const apiUrl = getApiUrl();
-      
-      // Claim bonus (this would typically call a backend endpoint)
-      // For now, we'll simulate the claim
-      const newPoints = totalPoints - selectedBonus.pointsRequired;
-      setTotalPoints(newPoints);
-      setClaimedBonuses([...claimedBonuses, selectedBonus.id]);
-      
-      Alert.alert(
-        '🎉 Bonus Claimed!',
-        `You have successfully claimed ${selectedBonus.name}!\n\nBonus Amount: Rs. ${selectedBonus.bonusAmount}\nPoints Deducted: ${selectedBonus.pointsRequired}\nRemaining Points: ${newPoints}`,
-        [{ text: 'OK', onPress: () => setShowClaimModal(false) }]
-      );
-      
-      // In production, you would call a backend API here:
-      // await fetch(`${apiUrl}/api/workers/${worker.id}/claim-bonus`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ bonusId: selectedBonus.id }),
-      // });
-      
+      const response = await fetch(`${apiUrl}/api/workers/${worker.id}/claim-rewards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pointsToClaim: selectedBonus.pointsRequired }),
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        setTotalPoints(data.rewardPoints ?? totalPoints - selectedBonus.pointsRequired);
+        setClaimedBonuses([...claimedBonuses, selectedBonus.id]);
+        Alert.alert(
+          '🎉 Bonus Claimed!',
+          `You have successfully claimed ${selectedBonus.name}!\n\nCash Added: Rs. ${data.cashAdded ?? selectedBonus.bonusAmount}\nPoints Deducted: ${selectedBonus.pointsRequired}\nRemaining Points: ${data.rewardPoints ?? totalPoints - selectedBonus.pointsRequired}\n\nAmount added to your earnings.`,
+          [{ text: 'OK', onPress: () => { setShowClaimModal(false); fetchRewardsData(true); } }]
+        );
+      } else {
+        Alert.alert('Error', data.message || 'Failed to claim bonus. Please try again.');
+      }
     } catch (error) {
       console.error('Error claiming bonus:', error);
       Alert.alert('Error', 'Failed to claim bonus. Please try again.');
@@ -398,6 +368,10 @@ export default function RewardsScreen() {
               <View style={styles.pointsInfoItem}>
                 <Ionicons name="checkmark-circle" size={16} color="#4CAF50" />
                 <Text style={styles.pointsInfoText}>+1 point per Rs. 100 earned</Text>
+              </View>
+              <View style={styles.pointsInfoItem}>
+                <Ionicons name="cash-outline" size={16} color="#4CAF50" />
+                <Text style={styles.pointsInfoText}>Claim to cash: 100 points = Rs. 1</Text>
               </View>
             </View>
           </View>
