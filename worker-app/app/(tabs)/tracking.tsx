@@ -89,6 +89,7 @@ export default function TrackingScreen() {
   const [loading, setLoading] = useState(true);
   const [completedJobsCount, setCompletedJobsCount] = useState<number>(0);
   const [completedOrdersCount, setCompletedOrdersCount] = useState<number>(0);
+  const [totalPackagesCount, setTotalPackagesCount] = useState<number>(0);
   const [showOrderTracking, setShowOrderTracking] = useState(false);
 
   const fetchMarketOrders = async () => {
@@ -125,19 +126,22 @@ export default function TrackingScreen() {
         setActiveOrders(active);
         setCompletedOrders(completed);
         setCompletedOrdersCount(completed.length);
-        
-        // Save completed orders to AsyncStorage
-        if (completed.length > 0 && worker?.id) {
+        const totalPackages = active.length + completed.length;
+        setTotalPackagesCount(totalPackages);
+
+        // Save completed orders and package count to AsyncStorage
+        if (worker?.id) {
           try {
             const storageKey = `completed_delivery_orders_${worker.id}`;
             await AsyncStorage.setItem(storageKey, JSON.stringify(completed));
-            console.log('✅ Completed delivery orders saved:', completed.length);
+            await AsyncStorage.setItem(`delivery_packages_count_${worker.id}`, String(totalPackages));
+            console.log('✅ Completed delivery orders saved:', completed.length, '| Total packages:', totalPackages);
           } catch (storageError) {
             console.error('Error saving completed orders:', storageError);
           }
         }
-        
-        console.log('📊 Active orders:', active.length, 'Completed:', completed.length);
+
+        console.log('📊 Active orders:', active.length, 'Completed:', completed.length, 'Packages:', totalPackages);
       } else {
         console.error('❌ Failed to fetch market orders:', response.status);
       }
@@ -280,9 +284,24 @@ export default function TrackingScreen() {
     }
   };
 
+  // Load saved package count from AsyncStorage
+  const loadPackageCount = async () => {
+    if (!worker?.id) return;
+    try {
+      const stored = await AsyncStorage.getItem(`delivery_packages_count_${worker.id}`);
+      if (stored) {
+        const count = parseInt(stored, 10);
+        setTotalPackagesCount(isNaN(count) ? 0 : count);
+      }
+    } catch (e) {
+      console.error('Error loading package count:', e);
+    }
+  };
+
   useEffect(() => {
     if (worker?.id) {
       loadCompletedJobsCount();
+      loadPackageCount();
       fetchJobs();
       fetchMarketOrders();
 
@@ -552,12 +571,12 @@ export default function TrackingScreen() {
           )}
         </View>
 
-        {/* Completed Jobs Count Bar */}
+        {/* Completed Jobs & Package Count Bar */}
         <View style={styles.completedJobsBar}>
           <View style={styles.completedJobsBarContent}>
             <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
             <Text style={styles.completedJobsBarText}>
-              Completed: {completedJobsCount} Jobs • {completedOrdersCount} Deliveries
+              Completed: {completedJobsCount} Jobs • {completedOrdersCount} Deliveries • {totalPackagesCount} Packages
             </Text>
           </View>
         </View>
@@ -680,111 +699,113 @@ export default function TrackingScreen() {
                 </View>
               )}
 
-              {/* Market Orders - Delivery Tracking */}
+              {/* Market Orders - Delivery Tracking (full detail cards) */}
               {activeOrders.length > 0 && (
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>
-                    Delivery Orders ({activeOrders.length})
+                    Delivery Orders ({activeOrders.length} packages)
                   </Text>
-                  {activeOrders.map((order) => (
-                    <TouchableOpacity
-                      key={order._id}
-                      style={styles.jobCard}
-                      onPress={() => {
-                        setSelectedOrder(order);
-                        setShowOrderTracking(true);
-                      }}
-                    >
-                      <View style={styles.jobHeader}>
-                        <View style={styles.clientInfo}>
+                  {activeOrders.map((order) => {
+                    const progress = calculateOrderProgress(order);
+                    const customerName = order.userInfo
+                      ? `${order.userInfo.firstName || ''} ${order.userInfo.lastName || ''}`.trim()
+                      : 'Customer';
+                    return (
+                      <View key={order._id} style={styles.deliveryCard}>
+                        <View style={styles.deliveryCardHeader}>
                           <View style={[styles.clientAvatar, { backgroundColor: '#E3F2FD' }]}>
                             <Ionicons name="cube" size={24} color="#2196F3" />
                           </View>
-                          <View>
+                          <View style={styles.deliveryCardHeaderText}>
                             <Text style={styles.clientName}>Order #{order.orderId}</Text>
                             <Text style={styles.jobTime}>{formatTimeAgo(order.createdAt)}</Text>
                           </View>
-                        </View>
-                        <View style={[
-                          styles.statusBadge,
-                          order.status === 'on_way' ? styles.inProgressBadge : styles.acceptedBadge
-                        ]}>
                           <View style={[
-                            styles.statusDot,
-                            order.status === 'on_way' ? styles.inProgressDot : styles.acceptedDot
-                          ]} />
-                          <Text style={[
-                            styles.statusText,
-                            order.status === 'on_way' ? styles.inProgressText : styles.acceptedText
+                            styles.statusBadge,
+                            order.status === 'on_way' ? styles.inProgressBadge : styles.acceptedBadge
                           ]}>
-                            {order.status === 'on_way' ? 'On Way' : order.status === 'picked' ? 'Picked' : 'Assigned'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {/* Progress Bar for Delivery Orders */}
-                      {(() => {
-                        const progress = calculateOrderProgress(order);
-                        return (
-                          <View style={styles.progressContainer}>
-                            <View style={styles.progressBar}>
-                              <View style={[styles.progressFill, { width: `${progress}%` }]} />
-                            </View>
-                            <Text style={styles.progressText}>{progress}% Complete</Text>
+                            <View style={[
+                              styles.statusDot,
+                              order.status === 'on_way' ? styles.inProgressDot : styles.acceptedDot
+                            ]} />
+                            <Text style={[
+                              styles.statusText,
+                              order.status === 'on_way' ? styles.inProgressText : styles.acceptedText
+                            ]}>
+                              {order.status === 'on_way' ? 'On Way' : order.status === 'picked' ? 'Picked' : 'Assigned'}
+                            </Text>
                           </View>
-                        );
-                      })()}
+                        </View>
 
-                      <View style={styles.jobDetails}>
-                        <View style={styles.detailRow}>
-                          <Ionicons name="cube-outline" size={16} color="#666" />
-                          <Text style={styles.detailText}>
-                            {order.items?.length || 0} {order.items?.length === 1 ? 'item' : 'items'}
-                            {order.items && order.items.length > 0 && (
-                              <Text style={[styles.detailText, { color: '#666', fontSize: 12 }]}>
-                                {' - '}
-                                {order.items.slice(0, 2).map((item: any) => item.label || item.name).join(', ')}
-                                {order.items.length > 2 && '...'}
-                              </Text>
-                            )}
-                          </Text>
+                        {/* To be delivered - full product list */}
+                        <View style={styles.deliverySection}>
+                          <Text style={styles.deliverySectionLabel}>To be delivered</Text>
+                          <View style={styles.productList}>
+                            {(order.items || []).map((item: any, idx: number) => (
+                              <View key={idx} style={styles.productRow}>
+                                <Ionicons name="cube-outline" size={14} color="#666" />
+                                <Text style={styles.productText}>
+                                  {item.label || item.name} × {item.quantity} — Rs. {((item.price || 0) * (item.quantity || 1)).toLocaleString()}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
                         </View>
-                        <View style={styles.detailRow}>
-                          <Ionicons name="location-outline" size={16} color="#666" />
-                          <Text style={styles.detailText} numberOfLines={2}>
-                            {order.deliveryAddress || 'Address not specified'}
-                          </Text>
+
+                        {/* Where - delivery address */}
+                        <View style={styles.deliverySection}>
+                          <Text style={styles.deliverySectionLabel}>Where</Text>
+                          <View style={styles.detailRow}>
+                            <Ionicons name="location-outline" size={16} color="#666" />
+                            <Text style={styles.detailText} numberOfLines={3}>
+                              {order.deliveryAddress || 'Address not specified'}
+                            </Text>
+                          </View>
                         </View>
+
+                        {/* Whose product - customer */}
+                        <View style={styles.deliverySection}>
+                          <Text style={styles.deliverySectionLabel}>Customer</Text>
+                          <View style={styles.detailRow}>
+                            <Ionicons name="person-outline" size={16} color="#666" />
+                            <Text style={styles.detailText}>{customerName}</Text>
+                            {order.userInfo?.phone ? (
+                              <Text style={[styles.detailText, { marginLeft: 8, fontSize: 12 }]}>{order.userInfo.phone}</Text>
+                            ) : null}
+                          </View>
+                        </View>
+
                         <View style={styles.detailRow}>
                           <Ionicons name="cash-outline" size={16} color="#666" />
                           <Text style={styles.detailText}>
                             Rs. {order.total?.toLocaleString() || '0'} ({order.paymentMethod === 'cod' ? 'COD' : 'Paid'})
                           </Text>
                         </View>
-                        {order.userInfo && (
-                          <View style={styles.detailRow}>
-                            <Ionicons name="person-outline" size={16} color="#666" />
-                            <Text style={styles.detailText}>
-                              {order.userInfo.firstName} {order.userInfo.lastName}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
 
-                      <TouchableOpacity
-                        style={styles.viewDetailsButton}
-                        onPress={() => {
-                          router.push({
-                            pathname: '/order-delivery-tracking' as any,
-                            params: { orderId: order.orderId || order._id },
-                          });
-                        }}
-                      >
-                        <Text style={styles.viewDetailsText}>Track Delivery</Text>
-                        <Ionicons name="navigate" size={16} color="#FF7A2C" />
-                      </TouchableOpacity>
-                    </TouchableOpacity>
-                  ))}
+                        <View style={styles.progressContainer}>
+                          <View style={styles.progressBar}>
+                            <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                          </View>
+                          <Text style={styles.progressText}>{progress}% Complete</Text>
+                        </View>
+
+                        <TouchableOpacity
+                          style={styles.acceptDeliveryButton}
+                          onPress={() => {
+                            router.push({
+                              pathname: '/order-delivery-tracking' as any,
+                              params: { orderId: order.orderId || order._id },
+                            });
+                          }}
+                        >
+                          <Text style={styles.acceptDeliveryButtonText}>
+                            {order.status === 'assigned' ? 'Accept & Start Delivery' : 'Track Delivery'}
+                          </Text>
+                          <Ionicons name="navigate" size={18} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
                 </View>
               )}
 
@@ -899,11 +920,11 @@ export default function TrackingScreen() {
               )}
 
               {/* Empty State */}
-              {activeJobs.length === 0 && completedJobs.length === 0 && !loading && (
+              {activeJobs.length === 0 && completedJobs.length === 0 && activeOrders.length === 0 && completedOrders.length === 0 && !loading && (
                 <View style={styles.emptyState}>
                   <Ionicons name="location-outline" size={64} color="#ccc" />
-                  <Text style={styles.emptyTitle}>No jobs to track</Text>
-                  <Text style={styles.emptySubtitle}>Your active and completed jobs will appear here</Text>
+                  <Text style={styles.emptyTitle}>No jobs or deliveries to track</Text>
+                  <Text style={styles.emptySubtitle}>Your active and completed jobs and delivery packages will appear here</Text>
                 </View>
               )}
             </>
@@ -1153,5 +1174,68 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#2E7D32',
+  },
+  deliveryCard: {
+    backgroundColor: '#fff',
+    marginHorizontal: 20,
+    marginBottom: 16,
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2196F3',
+  },
+  deliveryCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  deliveryCardHeaderText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  deliverySection: {
+    marginBottom: 12,
+  },
+  deliverySectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#666',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  productList: {
+    gap: 6,
+  },
+  productRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  productText: {
+    fontSize: 14,
+    color: '#333',
+    flex: 1,
+  },
+  acceptDeliveryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2196F3',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  acceptDeliveryButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
