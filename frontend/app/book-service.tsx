@@ -326,6 +326,19 @@ export default function BookServiceScreen() {
       return;
     }
 
+    const userPhone = (user as any)?.phone?.trim?.();
+    if (!userPhone) {
+      Alert.alert(
+        'Phone number required',
+        'Add your phone number in Profile so the worker can call you for location or updates. Go to Profile and add your phone number.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Go to Profile', onPress: () => router.push('/profile') },
+        ]
+      );
+      return;
+    }
+
     setLoading(true);
 
     try {
