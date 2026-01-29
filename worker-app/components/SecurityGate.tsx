@@ -93,8 +93,18 @@ export default function SecurityGate({ onSuccess }: SecurityGateProps) {
       }
     } catch (error) {
       console.error('Error checking security:', error);
-      // On error, proceed (fail open)
-      onSuccess();
+      // On error: if PIN is enabled show PIN screen; otherwise fail open
+      try {
+        const pinStatus = await AsyncStorage.getItem('worker_pin_enabled');
+        if (pinStatus === 'true') {
+          setPinEnabled(true);
+          setShowPIN(true);
+        } else {
+          onSuccess();
+        }
+      } catch (e2) {
+        onSuccess();
+      }
     } finally {
       setChecking(false);
     }
