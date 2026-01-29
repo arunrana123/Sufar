@@ -3,10 +3,11 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
 import { CartProvider } from '../contexts/CartContext';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import GlobalNotificationHandler from '../components/GlobalNotificationHandler';
@@ -75,9 +76,11 @@ function RootLayoutNav() {
   }
 
   return (
-    <NavigationThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="index" options={{ headerShown: false }} />
+    <SafeAreaProvider>
+      <NavigationThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <SafeAreaView style={{ flex: 1 }} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
+          <Stack>
+          <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="signin" options={{ headerShown: false }} />
         <Stack.Screen name="signup" options={{ headerShown: false }} />
@@ -133,11 +136,13 @@ function RootLayoutNav() {
         <Stack.Screen name="order-tracking" options={{ headerShown: false }} />
         <Stack.Screen name="order-review" options={{ headerShown: false }} />
         <Stack.Screen name="+not-found" />
-      </Stack>
-      {/* Global notification handler - shows floating toasts on all screens */}
-      <GlobalNotificationHandler />
-      <StatusBar style="auto" />
-    </NavigationThemeProvider>
+          </Stack>
+          {/* Global notification handler - shows floating toasts on all screens */}
+          <GlobalNotificationHandler />
+          <StatusBar style="auto" />
+        </SafeAreaView>
+      </NavigationThemeProvider>
+    </SafeAreaProvider>
   );
 }
 
