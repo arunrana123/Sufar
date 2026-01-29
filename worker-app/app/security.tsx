@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as LocalAuthentication from 'expo-local-authentication';
 import PINSetup from '@/components/PINSetup';
 import PINVerification from '@/components/PINVerification';
 import { BiometricAuth } from '@/lib/BiometricAuth';
@@ -83,16 +84,47 @@ export default function SecurityScreen() {
   const handleBiometricToggle = async (value: boolean) => {
     if (value && !biometricAvailable) {
       Alert.alert(
-        'Biometric Not Available',
-        'Biometric authentication is not available on this device. Please enable it in your device settings.',
+        'Face ID / Biometric Not Set Up',
+        'Please set up Face ID (or fingerprint) in your device Settings first, then try again.',
       );
       return;
     }
 
+    if (value) {
+      let result: { success: boolean; error?: string };
+      if (typeof BiometricAuth.registerFaceID === 'function') {
+        result = await BiometricAuth.registerFaceID();
+      } else {
+        const type = await BiometricAuth.getBiometricType();
+        const promptMessage = type === 'Face ID'
+          ? 'Register Face ID - Look at your device to enable Face ID unlock'
+          : 'Register Biometric - Use your fingerprint to enable unlock';
+        const authResult = await LocalAuthentication.authenticateAsync({
+          promptMessage,
+          fallbackLabel: 'Use PIN',
+          disableDeviceFallback: false,
+        });
+        result = { success: authResult.success, error: authResult.success ? undefined : 'Registration cancelled or failed.' };
+      }
+      if (result.success) {
+        try {
+          await AsyncStorage.setItem('worker_biometricEnabled', 'true');
+          setBiometricEnabled(true);
+          Alert.alert('Success', biometricType === 'Face ID' ? 'Face ID registered. You can now unlock the app with Face ID.' : 'Biometric registered. You can now unlock the app.');
+        } catch (error) {
+          console.error('Error saving biometric setting:', error);
+          Alert.alert('Error', 'Failed to save setting');
+        }
+      } else {
+        Alert.alert('Registration Failed', result.error || 'Face ID / biometric authentication was cancelled or failed.');
+      }
+      return;
+    }
+
     try {
-      await AsyncStorage.setItem('worker_biometricEnabled', value ? 'true' : 'false');
-      setBiometricEnabled(value);
-      Alert.alert('Success', value ? 'Biometric authentication enabled' : 'Biometric authentication disabled');
+      await AsyncStorage.setItem('worker_biometricEnabled', 'false');
+      setBiometricEnabled(false);
+      Alert.alert('Success', 'Face ID / biometric authentication disabled');
     } catch (error) {
       console.error('Error toggling biometric:', error);
       Alert.alert('Error', 'Failed to update biometric setting');
@@ -299,9 +331,9 @@ export default function SecurityScreen() {
                   <Text style={styles.statusSubtitle}>
                     {biometricAvailable
                       ? biometricEnabled
-                        ? `Use ${biometricType} to unlock your app`
-                        : `Enable ${biometricType} for quick access`
-                      : 'Biometric authentication is not available on this device'
+                        ? (biometricType === 'Face ID' ? 'Face ID registered - Unlock with Face ID' : `Use ${biometricType} to unlock your app`)
+                        : (biometricType === 'Face ID' ? 'Register Face ID to unlock the app' : `Enable ${biometricType} for quick access`)
+                      : 'Set up Face ID / fingerprint in device Settings first'
                     }
                   </Text>
                 </View>
