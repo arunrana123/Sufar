@@ -137,26 +137,18 @@ export default function ServicesPage() {
   const fetchServices = async () => {
     try {
       setLoading(true);
-      // Fetch hierarchical services to match frontend
       const res = await fetch('/api/services/hierarchy/all');
-      
       if (res.ok) {
         const hierarchicalData = await res.json();
         setHierarchicalServices(hierarchicalData);
-        
-        // Also flatten services for compatibility
         const flatServices: Service[] = [];
         hierarchicalData.forEach((hierarchy: HierarchicalService) => {
-          if (hierarchy.mainService) {
-            flatServices.push(hierarchy.mainService);
-          }
+          if (hierarchy.mainService) flatServices.push(hierarchy.mainService);
           flatServices.push(...hierarchy.subServices);
         });
         setServices(flatServices);
         console.log('✅ Hierarchical services fetched from backend:', hierarchicalData.length, 'categories');
-        console.log('✅ Total services:', flatServices.length);
       } else {
-        console.warn('⚠️ Backend sync failed, using fallback');
         setHierarchicalServices([]);
         setServices([]);
       }
@@ -164,6 +156,26 @@ export default function ServicesPage() {
       console.error('❌ Error fetching services:', error);
       setHierarchicalServices([]);
       setServices([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSeedServices = async () => {
+    if (!confirm('Seed default 16 categories and sub-services? This only runs when the database has no services.')) return;
+    try {
+      setLoading(true);
+      const res = await fetch('/api/proxy/api/services/seed', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.message) {
+        alert(data.message + (data.count ? ` (${data.count} services)` : ''));
+        fetchServices();
+      } else {
+        alert(data.message || data.error || 'Seed failed.');
+      }
+    } catch (error) {
+      console.error('Seed error:', error);
+      alert('Failed to seed services.');
     } finally {
       setLoading(false);
     }
@@ -751,16 +763,25 @@ export default function ServicesPage() {
                 <div className="text-center py-12">
                   <div className="text-6xl text-gray-300 mb-4">🔧</div>
                   <h3 className="text-lg font-medium text-gray-900 mb-2">No services found</h3>
-                  <p className="text-gray-500 mb-4">Get started by adding your first service</p>
-                  <button
-                    onClick={handleAddService}
-                    className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                  >
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                    Add Service
-                  </button>
+                  <p className="text-gray-500 mb-4">Seed default 16 categories (Plumber, Electrician, etc.) or add your first service</p>
+                  <div className="flex flex-wrap justify-center gap-3">
+                    <button
+                      onClick={handleSeedServices}
+                      disabled={loading}
+                      className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+                    >
+                      Seed Default Services
+                    </button>
+                    <button
+                      onClick={handleAddService}
+                      className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      </svg>
+                      Add Service
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -783,39 +804,61 @@ export default function ServicesPage() {
                     {selectedCategory ? `No ${selectedCategory} services found` : 'No services found'}
                   </h3>
                   <p className="text-gray-500 mb-4">
-                    {selectedCategory ? `No services available in ${selectedCategory} category` : 'Get started by adding your first service'}
+                    {selectedCategory ? `Add a sub-service to ${selectedCategory} or go back to categories` : 'Get started by adding your first service'}
                   </p>
-                  <button
-                    onClick={handleAddService}
-                    className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-                  >
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                    Add Service
-                  </button>
+                  <div className="flex flex-wrap justify-center gap-3">
+                    {selectedCategory && (
+                      <button
+                        onClick={() => handleAddSubService(selectedCategory)}
+                        className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                      >
+                        <span className="mr-2">+</span> Add Sub-Service
+                      </button>
+                    )}
+                    <button
+                      onClick={handleAddService}
+                      className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      </svg>
+                      Add Service
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                  {getFilteredServices().map((service) => (
-                    selectedCategory ? (
-                      <CategoryServiceCard
-                        key={service._id}
-                        service={service}
-                        onEdit={handleEditService}
-                        onToggleStatus={handleToggleStatus}
-                        onDelete={handleDeleteService}
-                      />
-                    ) : (
-                      <ServiceCard
-                        key={service._id}
-                        service={service}
-                        onEdit={handleEditService}
-                        onToggleStatus={handleToggleStatus}
-                        onDelete={handleDeleteService}
-                      />
-                    )
-                  ))}
+                <div>
+                  {selectedCategory && (
+                    <div className="mb-4 flex justify-end">
+                      <button
+                        onClick={() => handleAddSubService(selectedCategory)}
+                        className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                      >
+                        <span className="mr-2">+</span> Add Sub-Service
+                      </button>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    {getFilteredServices().map((service) => (
+                      selectedCategory ? (
+                        <CategoryServiceCard
+                          key={service._id}
+                          service={service}
+                          onEdit={handleEditService}
+                          onToggleStatus={handleToggleStatus}
+                          onDelete={handleDeleteService}
+                        />
+                      ) : (
+                        <ServiceCard
+                          key={service._id}
+                          service={service}
+                          onEdit={handleEditService}
+                          onToggleStatus={handleToggleStatus}
+                          onDelete={handleDeleteService}
+                        />
+                      )
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
