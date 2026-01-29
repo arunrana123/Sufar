@@ -7,13 +7,15 @@ interface EditServiceModalProps {
   onClose: () => void;
   onSuccess: () => void;
   service: {
-    _id: string;
-    title: string;
-    description: string;
-    price: number;
-    priceType: 'hour' | 'per_foot' | 'fixed' | 'customize';
-    category: string;
+    _id?: string;
+    title?: string;
+    description?: string;
+    price?: number;
+    priceType?: 'hour' | 'per_foot' | 'fixed' | 'customize';
+    category?: string;
     imageUrl?: string;
+    parentCategory?: string;
+    isMainCategory?: boolean;
   } | null;
 }
 
@@ -29,7 +31,7 @@ interface ServiceFormData {
 const categories = [
   'Plumber', 'Electrician', 'Carpenter', 'Cleaner', 'Mechanic', 
   'AC Repair', 'Painter', 'Mason', 'Cook', 'Driver', 'Security', 
-  'Beautician', 'Technician', 'Delivery', 'Gardener'
+  'Beautician', 'Technician', 'Delivery', 'Gardener', 'Workers'
 ];
 
 const priceTypes = [
@@ -53,13 +55,12 @@ export default function EditServiceModal({ isOpen, onClose, onSuccess, service }
 
   useEffect(() => {
     if (isOpen && service) {
-      // Populate form with service data
       setFormData({
-        title: service.title,
-        description: service.description,
-        price: service.price,
-        priceType: service.priceType,
-        category: service.category,
+        title: service.title ?? '',
+        description: service.description ?? '',
+        price: service.price ?? 0,
+        priceType: service.priceType ?? 'fixed',
+        category: service.category ?? service.parentCategory ?? '',
         imageUrl: service.imageUrl || ''
       });
       setErrors({});
@@ -95,34 +96,44 @@ export default function EditServiceModal({ isOpen, onClose, onSuccess, service }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!service || !validateForm()) {
-      return;
-    }
+    if (!service || !validateForm()) return;
 
     setIsSubmitting(true);
+    const isAddMode = !service._id;
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-      const response = await fetch(`${apiUrl}/api/services/${service._id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(formData),
+      const body = {
+        title: formData.title,
+        description: formData.description,
+        price: formData.price,
+        priceType: formData.priceType,
+        category: formData.category,
+        imageUrl: formData.imageUrl || undefined,
+        ...(isAddMode && {
+          isMainCategory: false,
+          parentCategory: formData.category,
+          subCategory: formData.title,
+          rating: 5,
+          reviewCount: 0,
+        }),
+      };
+      const url = isAddMode ? '/api/proxy/api/services' : `/api/proxy/api/services/${service._id}`;
+      const response = await fetch(url, {
+        method: isAddMode ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       });
 
       if (response.ok) {
         onSuccess();
         onClose();
       } else {
-        const errorData = await response.json();
-        console.error('Error updating service:', errorData);
-        alert('Failed to update service. Please try again.');
+        const errorData = await response.json().catch(() => ({}));
+        alert(errorData.error || errorData.message || (isAddMode ? 'Failed to add service.' : 'Failed to update service.'));
       }
     } catch (error) {
-      console.error('Error updating service:', error);
-      alert('Failed to update service. Please check your connection and try again.');
+      console.error('Error saving service:', error);
+      alert('Failed to save service. Please check your connection and try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -142,7 +153,7 @@ export default function EditServiceModal({ isOpen, onClose, onSuccess, service }
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-900">Edit Service</h3>
+          <h3 className="text-lg font-semibold text-gray-900">{service._id ? 'Edit Service' : 'Add Sub-Service'}</h3>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
