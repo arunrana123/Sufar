@@ -294,15 +294,15 @@ router.post("/search", async (req: Request, res: Response) => {
     // Show all workers who are:
     // 1. Status = 'available'
     // 2. isActive = true
-    // 3. Have location data
-    // 4. Match the service category (case-insensitive)
+    // 3. Match the service category (case-insensitive)
     // Note: We show all matching workers here. Verification filtering happens when sending booking requests.
+    // Note: Don't require location or verificationStatus - let workers show up even without these
     const workers = await WorkerUser.find({
       serviceCategories: { $elemMatch: { $regex: new RegExp(String(serviceCategory), 'i') } },
       status: 'available',
       isActive: true,
-      verificationStatus: { $in: ['verified', 'pending'] },
-      'currentLocation.coordinates': { $exists: true }, // Must have location
+      // Removed verificationStatus requirement - workers show up even if pending
+      // Removed location requirement - workers show up even without location
     }).select('name phone email serviceCategories rating totalJobs completedJobs currentLocation profileImage status _id categoryVerificationStatus').lean();
 
     console.log(`✅ Found ${workers.length} available workers for "${serviceCategory}"`);
@@ -321,28 +321,31 @@ router.post("/search", async (req: Request, res: Response) => {
     if (workers.length === 0 && allWorkersDb.length > 0) {
       console.warn('⚠️ No available workers found. Checking each worker:');
       allWorkersDb.forEach(worker => {
-        const status = worker.verificationStatus;
-        const verificationStatusStr = typeof status === 'string' 
-          ? status 
-          : (status && typeof status === 'object' && 'overall' in status ? status.overall || '' : '');
-        
         const checks = {
           hasCorrectStatus: worker.status === 'available',
           isActive: worker.isActive === true,
-          hasCorrectVerification: ['verified', 'pending'].includes(verificationStatusStr),
           hasLocation: !!worker.currentLocation?.coordinates,
           matchesCategory: worker.serviceCategories?.some(cat => 
             new RegExp(String(serviceCategory), 'i').test(cat)
           ) || false,
+          categories: worker.serviceCategories,
         };
-        console.warn(`  Worker ${worker.name} (${worker._id}):`, checks);
+        const reasons = [];
+        if (!checks.hasCorrectStatus) reasons.push(`status=${worker.status} (needs 'available')`);
+        if (!checks.isActive) reasons.push('isActive=false');
+        if (!checks.matchesCategory) reasons.push(`no matching category for "${serviceCategory}"`);
+        
+        console.warn(`  Worker ${worker.name} (${worker._id}):`, {
+          ...checks,
+          reasons: reasons.length > 0 ? reasons : '✅ Should be included',
+        });
       });
     }
 
     // Calculate distance and filter by radius
     const workersWithDistance = workers
       .map(worker => {
-        if (worker.currentLocation?.coordinates) {
+        if (worker.currentLocation?.coordinates?.latitude && worker.currentLocation?.coordinates?.longitude) {
           const distance = calculateDistance(
             userLocation.latitude,
             userLocation.longitude,
@@ -358,19 +361,35 @@ router.post("/search", async (req: Request, res: Response) => {
             estimatedArrival: Math.round(distance * 2 + Math.random() * 10), // Rough ETA calculation
             isAvailable: true,
           };
+        } else {
+          // Worker without location - still include them but mark distance as unknown
+          console.log(`⚠️ Worker ${worker.name} (${worker._id}): no location data - including with unknown distance`);
+          return {
+            ...worker,
+            distance: Infinity, // Will be filtered by radius if specified
+            estimatedArrival: null,
+            isAvailable: true,
+          };
         }
-        console.log(`❌ Worker ${worker.name} (${worker._id}): no location data - SKIPPING`);
-        return null;
       })
-      .filter((worker): worker is NonNullable<typeof worker> => {
-        if (!worker) return false;
+      .filter((worker) => {
+        // If worker has no location (distance = Infinity), include them anyway
+        // Otherwise, filter by radius
+        if (worker.distance === Infinity) {
+          return true; // Include workers without location
+        }
         const withinRadius = worker.distance <= radius;
         if (!withinRadius) {
           console.log(`⚠️ Worker ${worker.name}: outside radius (${worker.distance}km > ${radius}km)`);
         }
         return withinRadius;
       })
-      .sort((a, b) => a.distance - b.distance); // Sort by distance
+      .sort((a, b) => {
+        // Sort: workers with known distance first, then by distance
+        if (a.distance === Infinity && b.distance !== Infinity) return 1;
+        if (a.distance !== Infinity && b.distance === Infinity) return -1;
+        return a.distance - b.distance;
+      });
 
     console.log(`✅ Returning ${workersWithDistance.length} available workers for "${serviceCategory}" within ${radius}km`);
     
@@ -557,8 +576,8 @@ router.get("/available", async (req: Request, res: Response) => {
     const query: any = {
       status: 'available',
       isActive: true,
-      verificationStatus: { $in: ['verified', 'pending'] },
-      'currentLocation.coordinates': { $exists: true }, // Must have location data
+      // Don't require verificationStatus - let workers show up even if pending
+      // Verification filtering happens when sending booking requests
     };
 
     if (serviceCategory) {
@@ -583,11 +602,31 @@ router.get("/available", async (req: Request, res: Response) => {
       hasLocation: !!w.currentLocation?.coordinates,
     })));
 
+    // Test the query step by step
+    console.log('🔍 Testing query step by step...');
+    
+    // Test 1: Just status and isActive
+    const test1 = await WorkerUser.find({ status: 'available', isActive: true }).countDocuments();
+    console.log(`  Test 1 (status='available', isActive=true): ${test1} workers`);
+    
+    // Test 2: Add category filter
+    if (serviceCategory) {
+      const test2Query: any = {
+        status: 'available',
+        isActive: true,
+        serviceCategories: { $elemMatch: { $regex: new RegExp(String(serviceCategory), 'i') } },
+      };
+      const test2 = await WorkerUser.find(test2Query).countDocuments();
+      console.log(`  Test 2 (with category filter for "${serviceCategory}"): ${test2} workers`);
+      console.log(`  Test 2 query:`, JSON.stringify(test2Query, null, 2));
+    }
+
     const workers = await WorkerUser.find(query)
       .select('name phone email serviceCategories rating totalJobs completedJobs currentLocation profileImage status availableAfter _id')
       .lean();
 
-    console.log(`✅ Found ${workers.length} workers matching ALL criteria`);
+    console.log(`✅ Found ${workers.length} workers matching query`);
+    console.log(`📋 Query used:`, JSON.stringify(query, null, 2));
     console.log('🎯 Matching workers:', workers.map(w => ({
       id: w._id,
       name: w.name,
@@ -599,27 +638,26 @@ router.get("/available", async (req: Request, res: Response) => {
 
     // If no workers match, show why
     if (workers.length === 0 && allWorkersDb.length > 0) {
-      console.warn('⚠️ No workers match strict criteria. Checking each worker:');
+      console.warn('⚠️ No workers match criteria. Checking each worker:');
       allWorkersDb.forEach(worker => {
         const checks = {
           hasCorrectStatus: worker.status === 'available',
           isActive: worker.isActive === true,
-          hasCorrectVerification: (() => {
-            const status = worker.verificationStatus;
-            if (typeof status === 'string') {
-              return ['verified', 'pending'].includes(status);
-            }
-            if (status && typeof status === 'object' && 'overall' in status) {
-              return ['verified', 'pending'].includes(status.overall || '');
-            }
-            return false;
-          })(),
-          hasLocation: !!worker.currentLocation?.coordinates,
           matchesCategory: serviceCategory ? worker.serviceCategories?.some(cat => 
             new RegExp(String(serviceCategory), 'i').test(cat)
           ) : true,
+          hasLocation: !!worker.currentLocation?.coordinates,
+          categories: worker.serviceCategories,
         };
-        console.warn(`  Worker ${worker.name} (${worker._id}):`, checks);
+        const reasons = [];
+        if (!checks.hasCorrectStatus) reasons.push(`status=${worker.status} (needs 'available')`);
+        if (!checks.isActive) reasons.push('isActive=false');
+        if (serviceCategory && !checks.matchesCategory) reasons.push(`no matching category for "${serviceCategory}"`);
+        
+        console.warn(`  Worker ${worker.name} (${worker._id}):`, {
+          ...checks,
+          reasons: reasons.length > 0 ? reasons : '✅ Should be included',
+        });
       });
     }
 
@@ -631,24 +669,54 @@ router.get("/available", async (req: Request, res: Response) => {
       const maxRadius = parseFloat(radius as string);
 
       availableWorkers = workers
-        .filter(worker => worker.currentLocation?.coordinates)
         .map(worker => {
-          const distance = calculateDistance(
-            userLat,
-            userLon,
-            worker.currentLocation!.coordinates!.latitude,
-            worker.currentLocation!.coordinates!.longitude
-          );
-          
-          return {
-            ...worker,
-            distance: Math.round(distance * 10) / 10,
-            estimatedArrival: Math.round(distance * 2 + Math.random() * 10),
-            isAvailable: true,
-          };
+          // If worker has location, calculate distance
+          if (worker.currentLocation?.coordinates?.latitude && worker.currentLocation?.coordinates?.longitude) {
+            const distance = calculateDistance(
+              userLat,
+              userLon,
+              worker.currentLocation.coordinates.latitude,
+              worker.currentLocation.coordinates.longitude
+            );
+            
+            return {
+              ...worker,
+              distance: Math.round(distance * 10) / 10,
+              estimatedArrival: Math.round(distance * 2 + Math.random() * 10),
+              isAvailable: true,
+            };
+          } else {
+            // Worker without location - still include them but mark distance as unknown
+            return {
+              ...worker,
+              distance: Infinity, // Will be filtered out if radius is specified
+              estimatedArrival: null,
+              isAvailable: true,
+            };
+          }
         })
-        .filter(worker => worker.distance <= maxRadius)
-        .sort((a, b) => a.distance - b.distance);
+        .filter(worker => {
+          // If radius is specified, filter by distance
+          // If no location, include them anyway (they'll show as "distance unknown")
+          if (maxRadius && maxRadius > 0) {
+            return worker.distance <= maxRadius || worker.distance === Infinity;
+          }
+          return true;
+        })
+        .sort((a, b) => {
+          // Sort: workers with known distance first, then by distance
+          if (a.distance === Infinity && b.distance !== Infinity) return 1;
+          if (a.distance !== Infinity && b.distance === Infinity) return -1;
+          return a.distance - b.distance;
+        });
+    } else {
+      // No location provided - return all workers without distance filtering
+      availableWorkers = workers.map(worker => ({
+        ...worker,
+        distance: undefined,
+        estimatedArrival: undefined,
+        isAvailable: true,
+      }));
     }
 
     console.log(`✅ Returning ${availableWorkers.length} available workers`);
@@ -915,6 +983,52 @@ router.get("/stats-by-category", async (req: Request, res: Response) => {
       error: error?.message || String(error),
       details: process.env.NODE_ENV === 'development' ? error?.stack : undefined
     });
+  }
+});
+
+// Claim reward points to cash (100 points = Rs. 1) - must be before GET /:id
+router.post("/:id/claim-rewards", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { pointsToClaim } = req.body as { pointsToClaim?: number };
+    const minPoints = 100;
+    const pointsPerRupee = 100;
+    if (pointsToClaim == null || pointsToClaim < minPoints) {
+      return res.status(400).json({ message: `Minimum ${minPoints} points required to claim. Rate: ${pointsPerRupee} points = Rs. 1` });
+    }
+    const worker = await WorkerUser.findById(id);
+    if (!worker) return res.status(404).json({ message: "Worker not found" });
+    const current = worker.rewardPoints ?? 0;
+    if (current < pointsToClaim) {
+      return res.status(400).json({ message: `Insufficient points. You have ${current} points.` });
+    }
+    const cashAmount = Math.floor(pointsToClaim / pointsPerRupee);
+    const newPoints = current - pointsToClaim;
+    const newEarnings = (worker.totalEarnings ?? 0) + cashAmount;
+    await WorkerUser.findByIdAndUpdate(id, {
+      rewardPoints: Math.max(0, newPoints),
+      totalEarnings: newEarnings,
+    });
+    const io = req.app.get('io');
+    if (io) {
+      io.to(String(id)).emit('worker:reward_points_updated', {
+        workerId: id,
+        totalPoints: Math.max(0, newPoints),
+        pointsUsed: pointsToClaim,
+        earningsUpdated: newEarnings,
+        cashClaimed: cashAmount,
+      });
+    }
+    return res.json({
+      message: 'Points claimed successfully',
+      pointsDeducted: pointsToClaim,
+      cashAdded: cashAmount,
+      totalEarnings: newEarnings,
+      rewardPoints: Math.max(0, newPoints),
+    });
+  } catch (err: any) {
+    console.error('Claim rewards error:', err);
+    return res.status(500).json({ message: 'Failed to claim rewards' });
   }
 });
 
