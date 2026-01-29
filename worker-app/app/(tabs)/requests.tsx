@@ -13,6 +13,7 @@ import {
   Modal,
   Platform,
   Vibration,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -833,10 +834,10 @@ export default function RequestsScreen() {
               }
             });
             
-            // Refresh to get full booking data from backend
+            // Refresh later to reconcile; do not refetch immediately so accepted job stays visible
             setTimeout(() => {
               fetchBookings();
-            }, 500);
+            }, 2500);
           }
         });
 
@@ -1029,32 +1030,37 @@ export default function RequestsScreen() {
           notificationSoundService.playNotificationSound('booking', 'accepted', worker.id);
         }
         
-        // Update booking in state with FULL booking data from backend response
-        // This ensures all fields (location, price, serviceName, etc.) are saved
+        // Helper to normalize API booking to Booking interface for display
+        const toBooking = (data: any): Booking => ({
+          _id: data._id,
+          userId: {
+            firstName: data.userId?.firstName ?? 'Customer',
+            lastName: data.userId?.lastName ?? '',
+            phone: data.userId?.phone,
+            profilePhoto: data.userId?.profilePhoto,
+          },
+          serviceName: data.serviceName || data.serviceCategory || 'Service',
+          serviceCategory: data.serviceCategory,
+          location: data.location || { address: 'Location not specified', city: data.location?.city, coordinates: data.location?.coordinates },
+          price: data.price ?? 0,
+          status: 'accepted',
+          createdAt: data.createdAt || new Date().toISOString(),
+          workerId: data.workerId || worker?.id,
+        });
+        
+        // INSTANT UI update: move accepted booking from Pending to Accepted in state (no refetch)
+        const bid = String(bookingData._id ?? bookingId);
         setBookings(prevBookings => {
           const updated = prevBookings.map(b => {
-            if (b._id === bookingId || b._id === bookingData._id) {
-              // Merge full booking data from backend response
-              return {
-                ...b,
-                ...bookingData, // Include all fields from backend
-                status: 'accepted',
-                workerId: bookingData.workerId || worker?.id,
-              };
+            if (String(b._id) === bid) {
+              return toBooking({ ...bookingData, status: 'accepted', workerId: bookingData.workerId || worker?.id });
             }
             return b;
           });
-          
-          // If booking not found in current list, add it (in case it's a new accepted booking)
-          const exists = updated.some(b => b._id === bookingData._id || b._id === bookingId);
+          const exists = updated.some(b => String(b._id) === bid);
           if (!exists && bookingData._id) {
-            updated.push({
-              _id: bookingData._id,
-              ...bookingData,
-              status: 'accepted',
-            } as Booking);
+            return [toBooking({ ...bookingData, status: 'accepted' }), ...prevBookings];
           }
-          
           return updated;
         });
         
@@ -1068,10 +1074,10 @@ export default function RequestsScreen() {
           'success'
         );
         
-        // Refresh bookings to get full updated data from backend (with all fields)
+        // Do NOT refetch here – optimistic update is enough. Refetch only in background after delay to reconcile.
         setTimeout(() => {
           fetchBookings();
-        }, 500); // Increased delay to ensure backend has saved all data
+        }, 2500);
       } else {
         const data = await response.json();
         showToast(
@@ -1319,6 +1325,13 @@ export default function RequestsScreen() {
                       <View style={styles.detailRow}>
                         <Ionicons name="call-outline" size={16} color="#666" />
                         <Text style={styles.detailText}>{booking.userId.phone}</Text>
+                        <TouchableOpacity
+                          style={styles.callUserButton}
+                          onPress={() => Linking.openURL(`tel:${booking.userId.phone}`)}
+                        >
+                          <Ionicons name="call" size={16} color="#fff" />
+                          <Text style={styles.callUserButtonText}>Call</Text>
+                        </TouchableOpacity>
                       </View>
                     )}
                   </View>
@@ -1384,6 +1397,19 @@ export default function RequestsScreen() {
                       <Ionicons name="cash-outline" size={16} color="#666" />
                       <Text style={styles.detailText}>Rs. {booking.price}</Text>
                     </View>
+                    {booking.userId.phone && (
+                      <View style={styles.detailRow}>
+                        <Ionicons name="call-outline" size={16} color="#666" />
+                        <Text style={styles.detailText}>{booking.userId.phone}</Text>
+                        <TouchableOpacity
+                          style={styles.callUserButton}
+                          onPress={() => Linking.openURL(`tel:${booking.userId.phone}`)}
+                        >
+                          <Ionicons name="call" size={16} color="#fff" />
+                          <Text style={styles.callUserButtonText}>Call</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
 
                   <View style={styles.actionButtons}>
@@ -1393,6 +1419,15 @@ export default function RequestsScreen() {
                     >
                       <Text style={styles.viewButtonText}>View</Text>
                     </TouchableOpacity>
+                    {booking.userId.phone && (
+                      <TouchableOpacity
+                        style={[styles.viewButton, { backgroundColor: '#10B981', borderColor: '#10B981' }]}
+                        onPress={() => Linking.openURL(`tel:${booking.userId.phone}`)}
+                      >
+                        <Ionicons name="call" size={16} color="#fff" style={{ marginRight: 4 }} />
+                        <Text style={[styles.viewButtonText, { color: '#fff' }]}>Call</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity 
                       style={styles.acceptButton}
                       onPress={() => {
@@ -1513,7 +1548,20 @@ export default function RequestsScreen() {
                   <Text style={styles.modalValue}>
                     {selectedBooking.userId.firstName} {selectedBooking.userId.lastName}
                   </Text>
-                  <Text style={styles.modalSubValue}>{selectedBooking.userId.phone}</Text>
+                  {selectedBooking.userId.phone ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
+                      <Text style={styles.modalSubValue}>{selectedBooking.userId.phone}</Text>
+                      <TouchableOpacity
+                        style={[styles.modalPrimaryButton, { backgroundColor: '#10B981', marginTop: 0, flex: 0, paddingVertical: 8, paddingHorizontal: 16 }]}
+                        onPress={() => Linking.openURL(`tel:${selectedBooking.userId.phone}`)}
+                      >
+                        <Ionicons name="call" size={18} color="#fff" style={{ marginRight: 6 }} />
+                        <Text style={styles.modalPrimaryButtonText}>Call Customer</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <Text style={styles.modalSubValue}>No phone</Text>
+                  )}
                 </View>
 
                 <View style={styles.modalSection}>
@@ -1549,15 +1597,41 @@ export default function RequestsScreen() {
                         });
 
                         if (res.ok) {
-                          const booking = await res.json();
-                          console.log('✅ Booking accepted:', booking._id);
+                          const bookingData = await res.json();
+                          console.log('✅ Booking accepted:', bookingData._id);
                           
-                          // Increment accepted count
+                          // INSTANT UI update: update booking in list so it appears under Accepted Jobs
+                          const toBooking = (data: any): Booking => ({
+                            _id: data._id,
+                            userId: {
+                              firstName: data.userId?.firstName ?? 'Customer',
+                              lastName: data.userId?.lastName ?? '',
+                              phone: data.userId?.phone,
+                              profilePhoto: data.userId?.profilePhoto,
+                            },
+                            serviceName: data.serviceName || data.serviceCategory || 'Service',
+                            serviceCategory: data.serviceCategory,
+                            location: data.location || { address: 'Location not specified', city: data.location?.city, coordinates: data.location?.coordinates },
+                            price: data.price ?? 0,
+                            status: 'accepted',
+                            createdAt: data.createdAt || new Date().toISOString(),
+                            workerId: data.workerId || worker?.id,
+                          });
+                          const bid = String(bookingData._id ?? selectedBooking._id);
+                          setBookings(prev => {
+                            const updated = prev.map(b =>
+                              String(b._id) === bid ? toBooking({ ...bookingData, status: 'accepted' }) : b
+                            );
+                            if (!updated.some(b => String(b._id) === bid)) {
+                              return [toBooking({ ...bookingData, status: 'accepted' }), ...prev];
+                            }
+                            return updated;
+                          });
+                          
                           await saveRequestStats(true, false);
-                          
                           showToast('Booking accepted! You can now start navigation.', 'Success', 'success');
                           closeDetails();
-                          fetchBookings();
+                          setTimeout(() => fetchBookings(), 2500);
                         } else {
                           const errorText = await res.text();
                           console.error('❌ Failed to accept:', errorText);
@@ -1775,6 +1849,21 @@ const styles = StyleSheet.create({
   viewButtonText: {
     color: '#FF7A2C',
     fontSize: 14,
+    fontWeight: '600',
+  },
+  callUserButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#10B981',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  callUserButtonText: {
+    color: '#fff',
+    fontSize: 12,
     fontWeight: '600',
   },
   emptyState: {
