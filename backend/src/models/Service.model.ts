@@ -44,7 +44,7 @@ const ServiceSchema: Schema = new Schema({
     type: String, 
     required: true,
     trim: true,
-    enum: ['Plumber', 'Electrician', 'Carpenter', 'Cleaner', 'Mechanic', 'AC Repair', 'Painter', 'Mason', 'Cook', 'Driver', 'Security', 'Beautician', 'Technician', 'Delivery', 'Gardener']
+    enum: ['Plumber', 'Electrician', 'Carpenter', 'Cleaner', 'Mechanic', 'AC Repair', 'Painter', 'Mason', 'Cook', 'Driver', 'Security', 'Beautician', 'Technician', 'Delivery', 'Gardener', 'Workers']
   },
   subCategory: { 
     type: String, 
