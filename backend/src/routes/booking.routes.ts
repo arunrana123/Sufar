@@ -283,6 +283,8 @@ router.post('/', async (req: Request, res: Response) => {
           console.log(`  ${i+1}. ${w.worker.name} - ${badgeName} (${w.worker.completedJobs || 0} jobs, ${(w.worker.rating || 0).toFixed(1)}★, verified: ${verificationStatus}) - ${w.distance === Infinity ? 'Unknown' : w.distance.toFixed(2) + ' km'}`);
         });
 
+        // Populate userId so workers receive customer name and phone for display and call
+        await booking.populate('userId', 'firstName lastName profilePhoto phone');
         const bookingRequest = {
           _id: booking._id,
           userId: booking.userId,
@@ -463,7 +465,7 @@ router.get('/worker/:workerId', async (req: Request, res: Response) => {
 
     const bookings = await Booking.find(filter)
       .sort({ createdAt: -1 })
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .exec();
 
     console.log(`✅ Fetched ${bookings.length} bookings for worker ${workerId} from database`);
@@ -506,7 +508,7 @@ router.patch('/:id/status', async (req: Request, res: Response) => {
     }
 
     const booking = await Booking.findByIdAndUpdate(id, updateData, { new: true })
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .populate('workerId', 'firstName lastName profileImage')
       .exec();
 
@@ -699,7 +701,7 @@ router.patch('/:id/assign', async (req: Request, res: Response) => {
       { workerId, status: 'accepted' },
       { new: true }
     )
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .populate('workerId', 'firstName lastName profileImage')
       .exec();
 
@@ -796,7 +798,7 @@ router.patch('/:id/review', async (req: Request, res: Response) => {
       { rating, review: comment },
       { new: true }
     )
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .populate('workerId', 'firstName lastName profileImage rating totalReviews')
       .exec();
 
@@ -1035,7 +1037,7 @@ router.patch('/:id/confirm-payment', async (req: Request, res: Response) => {
     }
 
     const updatedBooking = await Booking.findByIdAndUpdate(id, updateData, { new: true })
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .populate('workerId', 'firstName lastName profileImage')
       .exec();
 
@@ -1253,7 +1255,7 @@ router.patch('/:id/accept', async (req: Request, res: Response) => {
     
     // Reload booking to ensure all populated fields are included
     const savedBooking = await Booking.findById(id)
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .populate('workerId', 'name phone email currentLocation.coordinates')
       .lean();
     
@@ -1470,7 +1472,7 @@ router.patch('/:id/reject', async (req: Request, res: Response) => {
     
     // Reload booking to ensure all fields are included in response
     const savedBooking = await Booking.findById(id)
-      .populate('userId', 'firstName lastName profilePhoto')
+      .populate('userId', 'firstName lastName profilePhoto phone')
       .lean();
 
     // Emit socket event with full booking data
@@ -1758,15 +1760,21 @@ router.get('/:id', async (req: Request, res: Response) => {
       console.log('ℹ️ No worker assigned to booking yet');
     }
 
-    // Include customer (user) name for worker app JobNavigationScreen
+    // Include customer (user) name and phone for worker app JobNavigationScreen and Call
     let userName: string | undefined;
+    let userId: { firstName?: string; lastName?: string; phone?: string } | undefined;
     if (booking.userId) {
       try {
         const userDoc = await User.findById(booking.userId).lean();
         if (userDoc) {
-          const u = userDoc as { firstName?: string; lastName?: string; name?: string };
+          const u = userDoc as { firstName?: string; lastName?: string; name?: string; phone?: string };
           const fullName = [u.firstName, u.lastName].filter(Boolean).join(' ').trim();
           userName = (u.name ?? fullName) || undefined;
+          userId = {
+            firstName: u.firstName,
+            lastName: u.lastName,
+            phone: u.phone,
+          };
         }
       } catch (_) {}
     }
@@ -1782,6 +1790,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       workerLocation,
       worker,
       userName,
+      userId,
       startTime: booking.status === 'in_progress' ? booking.updatedAt : booking.createdAt,
       estimatedDuration: booking.estimatedDuration,
       remainingTime: booking.estimatedDuration,
