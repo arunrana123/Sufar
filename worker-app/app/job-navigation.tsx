@@ -9,6 +9,7 @@ import {
   Dimensions,
   Platform,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -1566,8 +1567,20 @@ export default function JobNavigationScreen() {
               {/* Customer Info */}
               <View style={styles.customerInfo}>
                 <Text style={styles.customerLabel}>Customer:</Text>
-                <Text style={styles.customerName}>{booking?.userName ?? 'Customer'}</Text>
+                <Text style={styles.customerName}>{booking?.userName ?? (booking?.userId ? `${booking.userId.firstName || ''} ${booking.userId.lastName || ''}`.trim() : 'Customer')}</Text>
                 <Text style={styles.customerAddress}>{booking?.location?.address}</Text>
+                {booking?.userId?.phone ? (
+                  <View style={styles.customerPhoneRow}>
+                    <Text style={styles.customerPhone}>{booking.userId.phone}</Text>
+                    <TouchableOpacity
+                      style={styles.callCustomerButton}
+                      onPress={() => Linking.openURL(`tel:${booking.userId.phone}`)}
+                    >
+                      <Ionicons name="call" size={18} color="#fff" style={{ marginRight: 6 }} />
+                      <Text style={styles.callCustomerButtonText}>Call Customer</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
               </View>
 
               {/* Arrived Badge - only show when arrived */}
@@ -1656,8 +1669,20 @@ export default function JobNavigationScreen() {
               {/* Customer Info */}
               <View style={styles.customerInfo}>
                 <Text style={styles.customerLabel}>Customer:</Text>
-                <Text style={styles.customerName}>{booking?.userName ?? 'Customer'}</Text>
+                <Text style={styles.customerName}>{booking?.userName ?? (booking?.userId ? `${booking.userId.firstName || ''} ${booking.userId.lastName || ''}`.trim() : 'Customer')}</Text>
                 <Text style={styles.customerAddress}>{booking?.location?.address}</Text>
+                {booking?.userId?.phone ? (
+                  <View style={styles.customerPhoneRow}>
+                    <Text style={styles.customerPhone}>{booking.userId.phone}</Text>
+                    <TouchableOpacity
+                      style={styles.callCustomerButton}
+                      onPress={() => Linking.openURL(`tel:${booking.userId.phone}`)}
+                    >
+                      <Ionicons name="call" size={18} color="#fff" style={{ marginRight: 6 }} />
+                      <Text style={styles.callCustomerButtonText}>Call Customer</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
               </View>
 
               {/* Work Duration (when working) */}
@@ -1885,6 +1910,30 @@ const styles = StyleSheet.create({
   customerAddress: {
     fontSize: 14,
     color: '#666',
+  },
+  customerPhoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  customerPhone: {
+    fontSize: 14,
+    color: '#666',
+  },
+  callCustomerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#10B981',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  callCustomerButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   workTimer: {
     flexDirection: 'row',
