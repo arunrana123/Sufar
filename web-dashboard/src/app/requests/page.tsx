@@ -558,6 +558,22 @@ export default function RequestsPage() {
                 }
               }
 
+              // When approving, also update general document verification so worker app shows Verified for citizenship, license, etc.
+              if (action === 'approve') {
+                const documentTypes = ['profilePhoto', 'certificate', 'citizenship', 'license'];
+                for (const docType of documentTypes) {
+                  try {
+                    await fetch(`${apiUrl}/api/admin/verify-document`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ workerId: requestId, documentType: docType, status: 'verified' }),
+                    });
+                  } catch (e) {
+                    console.warn(`Verify general doc ${docType}:`, e);
+                  }
+                }
+              }
+
               if (allVerified || categoriesToVerify.length > 0) {
                 await fetchRequests();
                 if (selectedRequest?._id === requestId) {
