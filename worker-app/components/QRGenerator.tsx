@@ -74,21 +74,29 @@ export default function QRGenerator({ onClose }: QRGeneratorProps) {
     );
   };
 
-  if (!worker) {
+  // Not registered properly (no worker) or not verified — show message; allow QR only when verified
+  if (!worker || !worker.id) {
     return (
       <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.headerButton} onPress={onClose}>
+            <Ionicons name="close" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Access Required</Text>
+          <View style={styles.headerButton} />
+        </View>
         <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle" size={64} color="#FF7A2C" />
-          <Text style={styles.errorText}>Worker data not available</Text>
+          <Ionicons name="alert-circle" size={80} color="#FF7A2C" />
+          <Text style={styles.errorTitle}>You need to be verified to get access on worker full.</Text>
+          <Text style={styles.errorText}>Please register and complete verification to generate your QR code.</Text>
           <TouchableOpacity style={styles.button} onPress={onClose}>
-            <Text style={styles.buttonText}>Close</Text>
+            <Text style={styles.buttonText}>OK</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  // Show verification required message if worker is not verified
   if (!isWorkerVerified) {
     return (
       <SafeAreaView style={styles.container}>
@@ -99,25 +107,24 @@ export default function QRGenerator({ onClose }: QRGeneratorProps) {
           <Text style={styles.headerTitle}>Verification Required</Text>
           <View style={styles.headerButton} />
         </View>
-        
         <View style={styles.errorContainer}>
           <Ionicons name="document-text-outline" size={80} color="#FF7A2C" />
-          <Text style={styles.errorTitle}>Verification Required</Text>
+          <Text style={styles.errorTitle}>You need to be verified to get access on worker full.</Text>
           <Text style={styles.errorText}>
-            Please verify the required documents first. Once you submit your documents and get verified by admin, you will be ready to go and can access your QR code.
+            Complete document verification and get at least one service category verified. Then you can generate your QR code.
           </Text>
-          <TouchableOpacity 
-            style={styles.button} 
+          <TouchableOpacity
+            style={styles.button}
             onPress={() => {
               onClose();
               router.push('/document-verification');
             }}
           >
             <Ionicons name="document-text" size={20} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.buttonText}>Go to Document Verification</Text>
+            <Text style={styles.buttonText}>Go to Verification</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.secondaryButton} onPress={onClose}>
-            <Text style={styles.secondaryButtonText}>Close</Text>
+            <Text style={styles.secondaryButtonText}>OK</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
