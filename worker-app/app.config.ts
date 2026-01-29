@@ -38,6 +38,8 @@ const config = {
       bundleIdentifier: 'com.arun22.workerapp',
       supportsTablet: true,
       infoPlist: {
+        NSFaceIDUsageDescription:
+          'This app uses Face ID to unlock the app and secure your account.',
         NSLocationWhenInUseUsageDescription:
           'This app needs location access to show your position on the map and help customers find nearby workers.',
         NSLocationAlwaysAndWhenInUseUsageDescription:
