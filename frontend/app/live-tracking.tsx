@@ -1046,9 +1046,37 @@ export default function LiveTrackingScreen() {
           } : {}),
         } : null);
         
-        // Show notification if payment status changed to paid
+        // When payment becomes paid, instantly prompt for rating and review
         if (data.paymentStatus === 'paid' || data.booking?.paymentStatus === 'paid') {
           console.log('✅ Payment status updated to paid!');
+          const bid = bookingId;
+          const b = data.booking || booking;
+          const wName = (b?.workerId && (b.workerId as any)?.firstName) ? `${(b.workerId as any).firstName} ${(b.workerId as any).lastName || ''}`.trim() : workerName || 'Worker';
+          const wId = typeof b?.workerId === 'string' ? b.workerId : (b?.workerId as any)?._id || '';
+          const amt = b?.finalAmount ?? b?.price ?? 0;
+          const svcName = (b as any)?.serviceName || 'Service';
+          Alert.alert(
+            '✅ Payment Confirmed!',
+            'Would you like to rate and review the service?',
+            [
+              {
+                text: 'Rate & Review',
+                onPress: () => {
+                  router.replace({
+                    pathname: '/review',
+                    params: {
+                      bookingId: bid,
+                      serviceTitle: svcName,
+                      workerName: wName,
+                      workerId: wId,
+                      amount: String(amt),
+                    },
+                  });
+                },
+              },
+              { text: 'Later', style: 'cancel' },
+            ]
+          );
         }
         
         // Refresh booking details to ensure consistency
@@ -1262,12 +1290,30 @@ export default function LiveTrackingScreen() {
           ...data.booking,
         } : null);
         
-        // Show success message based on payment status
+        // When payment is paid, instantly ask for rating and review
         if (data.booking.paymentStatus === 'paid') {
+          const workerIdStr = typeof booking?.workerId === 'string' ? booking.workerId : (booking?.workerId as any)?._id || '';
           Alert.alert(
             '✅ Payment Completed!',
-            'Payment has been confirmed by both parties. Status updated to paid.',
-            [{ text: 'OK' }]
+            'Payment has been confirmed. Would you like to rate and review the service?',
+            [
+              {
+                text: 'Rate & Review',
+                onPress: () => {
+                  router.replace({
+                    pathname: '/review',
+                    params: {
+                      bookingId: booking?._id || bookingId,
+                      serviceTitle: (booking as any)?.serviceName || 'Service',
+                      workerName: workerName || 'Worker',
+                      workerId: workerIdStr,
+                      amount: String((booking as any)?.finalAmount ?? (booking as any)?.price ?? 0),
+                    },
+                  });
+                },
+              },
+              { text: 'Later', style: 'cancel' },
+            ]
           );
         } else {
           Alert.alert(
