@@ -6,11 +6,13 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   ActivityIndicator,
   Alert,
   TextInput,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -20,7 +22,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { getApiUrl } from '@/lib/config';
 import { socketService } from '@/lib/SocketService';
 import { getMapboxDirections } from '@/lib/MapboxDirectionsService';
-import { Platform } from 'react-native';
 
 // Load react-native-maps for map rendering (only on native platforms, not web)
 let RNMapView: any = null;
@@ -419,7 +420,7 @@ export default function OrderDeliveryTrackingScreen() {
     return (
       <View style={styles.container}>
         <Stack.Screen options={{ headerShown: false }} />
-        <SafeAreaView style={styles.safe}>
+        <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.primary} />
             <Text style={[styles.loadingText, { color: theme.text }]}>
@@ -435,7 +436,7 @@ export default function OrderDeliveryTrackingScreen() {
     return (
       <View style={styles.container}>
         <Stack.Screen options={{ headerShown: false }} />
-        <SafeAreaView style={styles.safe}>
+        <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
           <View style={[styles.header, { backgroundColor: theme.tint }]}>
             <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
               <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -459,7 +460,7 @@ export default function OrderDeliveryTrackingScreen() {
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -716,7 +717,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 60,
+    paddingBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
