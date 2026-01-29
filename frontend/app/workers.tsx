@@ -1,6 +1,7 @@
 // WORKERS SCREEN - Browse available workers by service category
 // Features: Worker list with profiles, ratings, availability status, navigate to worker-profile
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Platform } from 'react-native';
+import { StyleSheet, View, Pressable, ScrollView, Platform, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -35,7 +36,7 @@ export default function WorkersScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safe}>
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
         {/* Header */}
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <Pressable onPress={() => router.replace('/home')} style={styles.backBtn}>
@@ -78,7 +79,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
