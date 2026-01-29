@@ -77,7 +77,7 @@ export default function BookServiceScreen() {
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4A90E2" />
+        <ActivityIndicator size="large" color={theme.tint} />
         <Text style={styles.loadingText}>Loading...</Text>
       </View>
     );
@@ -491,9 +491,9 @@ export default function BookServiceScreen() {
             <View style={styles.serviceInfo}>
               <Text style={styles.serviceName}>{service.serviceName || service.name}</Text>
               <Text style={styles.serviceCategory}>{service.serviceCategory || service.category}</Text>
-              <View style={styles.priceContainer}>
-                <Text style={styles.priceLabel}>Price</Text>
-                <Text style={styles.servicePrice}>Rs. {service.price}</Text>
+              <View style={[styles.priceContainer, { backgroundColor: theme.tint + '18' }]}>
+                <Text style={[styles.priceLabel, { color: theme.icon }]}>Price</Text>
+                <Text style={[styles.servicePrice, { color: theme.tint }]}>Rs. {service.price}</Text>
               </View>
             </View>
           </View>
@@ -505,13 +505,13 @@ export default function BookServiceScreen() {
               <Text style={styles.sectionSubtitle}>Upload images of the problem area</Text>
             </View>
             
-            <TouchableOpacity style={styles.addPhotoButton} onPress={pickImage}>
+            <TouchableOpacity style={[styles.addPhotoButton, { backgroundColor: theme.tint + '0C', borderColor: theme.tint + '40' }]} onPress={pickImage}>
               <View style={styles.addPhotoIconContainer}>
-                <Ionicons name="camera" size={32} color="#3B82F6" />
-                <Ionicons name="add" size={16} color="#3B82F6" style={styles.addIcon} />
+                <Ionicons name="camera" size={32} color={theme.tint} />
+                <Ionicons name="add" size={16} color={theme.tint} style={styles.addIcon} />
               </View>
-              <Text style={styles.addPhotoText}>Tap to add photos</Text>
-              <Text style={styles.addPhotoSubtext}>Max 5 photos</Text>
+              <Text style={[styles.addPhotoText, { color: theme.tint }]}>Tap to add photos</Text>
+              <Text style={[styles.addPhotoSubtext, { color: theme.icon }]}>Max 5 photos</Text>
             </TouchableOpacity>
             
             {images.length > 0 && (
@@ -538,8 +538,8 @@ export default function BookServiceScreen() {
               <Text style={styles.sectionSubtitle}>Where should we provide the service?</Text>
             </View>
             <View style={styles.locationCard}>
-              <View style={styles.locationIconContainer}>
-                <Ionicons name="location" size={24} color="#3B82F6" />
+              <View style={[styles.locationIconContainer, { backgroundColor: theme.tint + '18' }]}>
+                <Ionicons name="location" size={24} color={theme.tint} />
               </View>
               <View style={styles.locationInfo}>
                 <Text style={styles.locationLabel}>Current Location</Text>
@@ -560,22 +560,22 @@ export default function BookServiceScreen() {
             
             <View style={styles.scheduleOptions}>
               <TouchableOpacity
-                style={[styles.scheduleOption, isNow && styles.selectedOption]}
+                style={[styles.scheduleOption, isNow && { backgroundColor: theme.tint, borderColor: theme.tint }]}
                 onPress={() => {
                   setIsNow(true);
                   setScheduledDate(null);
                 }}
               >
-                <Ionicons name="flash" size={20} color={isNow ? '#fff' : '#3B82F6'} />
-                <Text style={[styles.optionText, isNow && styles.selectedText]}>Now</Text>
+                <Ionicons name="flash" size={20} color={isNow ? '#fff' : theme.tint} />
+                <Text style={[styles.optionText, { color: isNow ? '#fff' : theme.tint }]}>Now</Text>
               </TouchableOpacity>
               
               <TouchableOpacity
-                style={[styles.scheduleOption, !isNow && styles.selectedOption]}
+                style={[styles.scheduleOption, !isNow && { backgroundColor: theme.tint, borderColor: theme.tint }]}
                 onPress={() => setIsNow(false)}
               >
-                <Ionicons name="calendar" size={20} color={!isNow ? '#fff' : '#3B82F6'} />
-                <Text style={[styles.optionText, !isNow && styles.selectedText]}>Schedule</Text>
+                <Ionicons name="calendar" size={20} color={!isNow ? '#fff' : theme.tint} />
+                <Text style={[styles.optionText, { color: !isNow ? '#fff' : theme.tint }]}>Schedule</Text>
               </TouchableOpacity>
             </View>
 
@@ -591,7 +591,7 @@ export default function BookServiceScreen() {
                       key={date.toISOString()}
                       style={[
                         styles.dateCard,
-                        selectedDate.toDateString() === date.toDateString() && styles.selectedDateCard
+                        selectedDate.toDateString() === date.toDateString() && { backgroundColor: theme.tint, borderColor: theme.tint }
                       ]}
                       onPress={() => handleDateSelect(date)}
                     >
@@ -614,7 +614,7 @@ export default function BookServiceScreen() {
                 {/* Selected Date and Time Display */}
                 <View style={styles.selectedDateTimeContainer}>
                   <View style={styles.selectedDateTimeItem}>
-                    <Ionicons name="calendar-outline" size={20} color="#3B82F6" />
+                    <Ionicons name="calendar-outline" size={20} color={theme.tint} />
                     <Text style={styles.selectedDateTimeText}>
                       {formatDate(selectedDate)}
                     </Text>
@@ -624,7 +624,7 @@ export default function BookServiceScreen() {
                     style={styles.selectedDateTimeItem}
                     onPress={() => setShowTimePicker(true)}
                   >
-                    <Ionicons name="time-outline" size={20} color="#3B82F6" />
+                    <Ionicons name="time-outline" size={20} color={theme.tint} />
                     <Text style={styles.selectedDateTimeText}>
                       {formatTime(selectedTime)}
                     </Text>
@@ -637,7 +637,7 @@ export default function BookServiceScreen() {
 
           {/* Book Button */}
           <TouchableOpacity
-            style={[styles.bookButton, loading && styles.disabledButton]}
+            style={[styles.bookButton, { backgroundColor: theme.tint }, loading && styles.disabledButton]}
             onPress={isNow ? handleInstantBooking : bookService}
             disabled={loading}
           >
@@ -814,7 +814,6 @@ const styles = StyleSheet.create({
   priceContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F0F9FF',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
@@ -822,14 +821,12 @@ const styles = StyleSheet.create({
   },
   priceLabel: {
     fontSize: 12,
-    color: '#6B7280',
     marginRight: 6,
     fontWeight: '500',
   },
   servicePrice: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#3B82F6',
   },
   section: {
     marginBottom: 24,
@@ -849,12 +846,10 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   addPhotoButton: {
-    backgroundColor: '#F8FAFC',
     borderRadius: 16,
     padding: 24,
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#E2E8F0',
     borderStyle: 'dashed',
     minHeight: 120,
     justifyContent: 'center',
@@ -871,13 +866,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   addPhotoText: {
-    color: '#3B82F6',
     fontSize: 16,
     fontWeight: '600',
     marginBottom: 4,
   },
   addPhotoSubtext: {
-    color: '#6B7280',
     fontSize: 12,
     fontWeight: '400',
   },
@@ -929,7 +922,6 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 12,
-    backgroundColor: '#F0F9FF',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 16,
@@ -969,15 +961,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  selectedOption: {
-    backgroundColor: '#3B82F6',
-    borderColor: '#3B82F6',
-  },
   optionText: {
     marginTop: 8,
     fontSize: 14,
     fontWeight: '500',
-    color: '#3B82F6',
   },
   selectedText: {
     color: '#fff',
@@ -1012,10 +999,6 @@ const styles = StyleSheet.create({
     minWidth: 60,
     borderWidth: 1,
     borderColor: '#E5E7EB',
-  },
-  selectedDateCard: {
-    backgroundColor: '#3B82F6',
-    borderColor: '#3B82F6',
   },
   dateDay: {
     fontSize: 20,
@@ -1079,7 +1062,6 @@ const styles = StyleSheet.create({
     color: '#1F2937',
   },
   bookButton: {
-    backgroundColor: '#3B82F6',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
