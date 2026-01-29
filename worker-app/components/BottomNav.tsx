@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Modal, Alert } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Modal, Alert, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, usePathname, useSegments } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import QRGenerator from './QRGenerator';
 import { useAuth } from '@/contexts/AuthContext';
 import { isFullyVerified } from '@/lib/permissions';
@@ -9,6 +10,7 @@ import { isFullyVerified } from '@/lib/permissions';
 export default function BottomNav() {
   const pathname = usePathname();
   const segments = useSegments();
+  const insets = useSafeAreaInsets();
   const [showQRModal, setShowQRModal] = useState(false);
   const { worker } = useAuth();
 
@@ -107,9 +109,10 @@ export default function BottomNav() {
     return false;
   };
 
+  const bottomInset = Platform.OS === 'ios' ? Math.max(insets.bottom, 12) : 20;
   return (
     <>
-      <View style={styles.bottomNav}>
+      <View style={[styles.bottomNav, { paddingBottom: bottomInset }]}>
         {navItems.map((item) => {
           const active = isActive(item);
           
@@ -199,7 +202,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
     paddingVertical: 12,
-    paddingBottom: 20,
     borderTopWidth: 2,
     borderTopColor: '#E0E0E0',
     shadowColor: '#000',
