@@ -2,6 +2,7 @@ import React from 'react';
 import { View, StyleSheet, Pressable, Platform } from 'react-native';
 import { usePathname, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/ThemedText';
 
@@ -22,6 +23,7 @@ function getTarget(key: TabKey) {
 
 export default function BottomNav() {
   const pathname = usePathname();
+  const insets = useSafeAreaInsets();
 
   const items: Array<{ key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }>= [
     { key: 'home', label: 'Home', icon: 'home' },
@@ -30,8 +32,9 @@ export default function BottomNav() {
     { key: 'menu', label: 'Menu', icon: 'grid-outline' },
   ];
 
+  const bottomInset = Platform.OS === 'ios' ? Math.max(insets.bottom, 12) : 12;
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingBottom: bottomInset }]}>
       {items.map((it, index) => {
         const target = getTarget(it.key);
         const active = pathname === target;
@@ -71,7 +74,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     paddingTop: 8,
-    paddingBottom: Platform.select({ ios: 18, android: 12 }),
     backgroundColor: '#BFE3FF',
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
