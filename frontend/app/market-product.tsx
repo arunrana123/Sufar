@@ -18,6 +18,7 @@ import { ThemedView } from '@/components/ThemedView';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useCart } from '@/contexts/CartContext';
 import { getApiUrl } from '@/lib/config';
+import { getMarketMockProductById } from './market';
 
 interface Product {
   _id: string;
@@ -55,14 +56,25 @@ export default function ProductDetailScreen() {
     try {
       setLoading(true);
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/market/products/${productId}`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        setProduct(data.product || data);
+      let data: any = null;
+      try {
+        const response = await fetch(`${apiUrl}/api/market/products/${productId}`);
+        if (response.ok) {
+          data = await response.json();
+          const productData = data.product || data;
+          if (productData && (productData._id || productData.name)) {
+            setProduct(productData);
+            return;
+          }
+        }
+      } catch (_) {
+        // Use default product by id below
+      }
+      const mockById = productId ? getMarketMockProductById(productId) : null;
+      if (mockById) {
+        setProduct(mockById);
       } else {
-        // Mock data for now
-        const mockProduct: Product = {
+        const fallback: Product = {
           _id: productId || '1',
           name: 'Bulk Vegetables',
           label: 'Fresh Vegetables - 50 kg',
@@ -78,10 +90,12 @@ export default function ProductDetailScreen() {
           phoneNumber: '+977-9841234567',
           description: 'Fresh vegetables in bulk - 50 kg pack. Includes tomatoes, onions, potatoes, and seasonal vegetables.',
         };
-        setProduct(mockProduct);
+        setProduct(fallback);
       }
     } catch (error) {
       console.error('Error fetching product:', error);
+      const mockById = productId ? getMarketMockProductById(productId) : null;
+      if (mockById) setProduct(mockById);
     } finally {
       setLoading(false);
     }
@@ -279,36 +293,36 @@ export default function ProductDetailScreen() {
               )}
             </View>
 
-            {product.description && (
+            {product.description != null && String(product.description).trim() !== '' ? (
               <ThemedText style={[styles.productDescription, { color: theme.secondary }]}>
-                {product.description}
+                {String(product.description)}
               </ThemedText>
-            )}
+            ) : null}
 
             <View style={styles.priceSection}>
               <ThemedText style={[styles.price, { color: theme.primary }]}>
                 Rs. {finalPrice.toFixed(2)}
               </ThemedText>
-              {product.originalPrice && (
+              {(product.originalPrice ?? 0) > 0 && (
                 <ThemedText style={[styles.originalPrice, { color: theme.secondary }]}>
-                  Rs. {product.originalPrice.toFixed(2)}
+                  Rs. {Number(product.originalPrice).toFixed(2)}
                 </ThemedText>
               )}
             </View>
 
-            {product.rating && (
+            {(product.rating ?? 0) > 0 ? (
               <View style={styles.ratingSection}>
                 <Ionicons name="star" size={16} color="#FFD700" />
                 <ThemedText style={[styles.ratingText, { color: theme.text }]}>
-                  {product.rating.toFixed(1)} ({product.reviewCount || 0} reviews)
+                  {Number(product.rating).toFixed(1)} ({product.reviewCount ?? 0} reviews)
                 </ThemedText>
               </View>
-            )}
+            ) : null}
 
             {/* Contact Info */}
-            {(product.phoneNumber || product.deliveryLocation) && (
+            {(!!product.phoneNumber || !!product.deliveryLocation) ? (
               <View style={styles.contactSection}>
-                {product.phoneNumber && (
+                {product.phoneNumber != null && String(product.phoneNumber).trim() !== '' ? (
                   <TouchableOpacity
                     style={[styles.contactRow, { backgroundColor: theme.inputBackground }]}
                     onPress={() => handleCall(product.phoneNumber!)}
@@ -319,14 +333,14 @@ export default function ProductDetailScreen() {
                         Phone Number
                       </ThemedText>
                       <ThemedText style={[styles.contactValue, { color: theme.text }]}>
-                        {product.phoneNumber}
+                        {String(product.phoneNumber)}
                       </ThemedText>
                     </View>
                     <Ionicons name="chevron-forward" size={20} color={theme.icon} />
                   </TouchableOpacity>
-                )}
+                ) : null}
 
-                {product.deliveryLocation && (
+                {product.deliveryLocation != null && String(product.deliveryLocation).trim() !== '' ? (
                   <View style={[styles.contactRow, { backgroundColor: theme.inputBackground }]}>
                     <Ionicons name="location" size={20} color={theme.primary} />
                     <View style={styles.contactInfo}>
@@ -334,13 +348,13 @@ export default function ProductDetailScreen() {
                         Delivery Location
                       </ThemedText>
                       <ThemedText style={[styles.contactValue, { color: theme.text }]}>
-                        {product.deliveryLocation}
+                        {String(product.deliveryLocation)}
                       </ThemedText>
                     </View>
                   </View>
-                )}
+                ) : null}
               </View>
-            )}
+            ) : null}
 
             {/* Action Buttons */}
             <View style={styles.actionButtons}>
