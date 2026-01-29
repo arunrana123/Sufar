@@ -2,7 +2,8 @@
 // Features: Toggle online/offline status, GPS location tracking, add/edit services, incoming booking requests banner, helpful tooltips
 import React, { useState, useEffect, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Pressable, SafeAreaView, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Pressable, Alert, Platform, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
@@ -943,8 +944,8 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <SafeAreaView style={styles.safe}>
-        {/* Header */}
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
+        {/* Header - full-bleed on Android */}
         <View style={styles.header}>
           <Pressable onPress={() => router.push('/(tabs)/profile')}>
             {worker?.profileImage ? (
@@ -1232,7 +1233,7 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
     paddingHorizontal: 12,
-    paddingTop: 50,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     paddingBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
