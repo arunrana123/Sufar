@@ -165,47 +165,13 @@ export default function LoginScreen({ onLoginSuccess, onSwitchToSignup, prefille
 
     try {
       const apiUrl = getApiUrl();
-      console.log('🔐 Worker login attempt started');
-      console.log('API URL:', apiUrl);
-      console.log('Full login URL:', `${apiUrl}/api/workers/login`);
-      
-      // Validate API URL
-      if (!apiUrl || apiUrl === 'undefined' || apiUrl.includes('undefined')) {
-        Alert.alert(
-          'Configuration Error',
-          'API URL is not configured correctly. Please check your environment variables.',
-          [{ text: 'OK' }]
-        );
-        setLoading(false);
-        return;
-      }
-      
-      // Verify IP address is correct (allow localhost and 10.0.2.2 for emulators)
-      // Use the default IP from config instead of hardcoding
-      const expectedIp = '192.168.1.66'; // Should match DEFAULT_API_URL in config.ts
-      if (!apiUrl.includes(expectedIp) && !apiUrl.includes('localhost') && !apiUrl.includes('10.0.2.2')) {
-        console.error(`❌ ERROR: API URL does not contain expected IP (${expectedIp}):`, apiUrl);
-        Alert.alert(
-          'Configuration Error',
-          `Wrong server IP detected: ${apiUrl}\n\nExpected: http://${expectedIp}:5001\n\nPlease check your configuration.`,
-          [{ text: 'OK' }]
-        );
-        setLoading(false);
-        return;
-      } else {
-        console.log('✅ API URL is correct:', apiUrl);
-      }
-      
-      // Use robust login request with automatic retry
-      console.log('📡 Making login request...');
-      console.log('📡 Using robust network utility with retry logic');
       
       try {
         console.log('📡 Sending login request...');
         const response = await loginRequest('/api/workers/login', {
           email,
           password,
-        }, apiUrl);
+        });
         
         console.log('✅ Login response received, status:', response.status);
         
