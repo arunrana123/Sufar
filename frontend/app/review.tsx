@@ -107,8 +107,8 @@ export default function ReviewScreen() {
       if (response.ok) {
         console.log('✅ Review submitted successfully:', data);
         Alert.alert(
-          'Success',
-          'Successfully submitted and updated the rating and review comment.',
+          'Thank You!',
+          'Your rating and review have been submitted successfully and updated.',
           [
             {
               text: 'Done',
