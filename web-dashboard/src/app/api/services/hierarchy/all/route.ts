@@ -6,7 +6,7 @@ export async function GET(request: NextRequest) {
   try {
     console.log('Fetching hierarchical services...');
     
-    const response = await fetch(`${BACKEND_URL}/api/services/hierarchy/all`, {
+    const response = await fetch(`${BACKEND_URL}/api/services/hierarchy/all?includeInactive=true`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
