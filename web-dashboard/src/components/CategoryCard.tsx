@@ -30,6 +30,7 @@ export default function CategoryCard({ category, onClick }: CategoryCardProps) {
       'Technician': '⚙️',
       'Delivery': '🚚',
       'Gardener': '🌱',
+      'Workers': '👷',
     };
     return icons[categoryName] || '🔧';
   };
@@ -51,6 +52,7 @@ export default function CategoryCard({ category, onClick }: CategoryCardProps) {
       'Technician': 'from-violet-500 to-violet-600',
       'Delivery': 'from-emerald-500 to-emerald-600',
       'Gardener': 'from-lime-500 to-lime-600',
+      'Workers': 'from-slate-500 to-slate-600',
     };
     return colors[categoryName] || 'from-gray-500 to-gray-600';
   };
