@@ -38,6 +38,34 @@ interface Product {
   isRecommended?: boolean;
 }
 
+function getDefaultMarketProducts(): Product[] {
+  return [
+    { _id: '1', name: 'Cotton T-Shirt', label: 'Premium Cotton T-Shirt', price: 899, originalPrice: 1299, discount: 30, images: ['https://via.placeholder.com/300'], category: 'Clothes', inStock: true, rating: 4.5, reviewCount: 120, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234567' },
+    { _id: '2', name: 'Wooden Chair', label: 'Modern Wooden Chair', price: 2500, images: ['https://via.placeholder.com/300'], category: 'Furnitures', inStock: true, rating: 4.8, reviewCount: 45, isRecommended: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234567', description: 'Comfortable modern wooden chair' },
+    { _id: '3', name: 'Bulk Vegetables', label: 'Fresh Vegetables - 50 kg', price: 2500, originalPrice: 3000, discount: 16, images: ['https://via.placeholder.com/300'], category: 'Wholesale', inStock: true, rating: 4.7, reviewCount: 80, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234567', description: 'Fresh vegetables in bulk - 50 kg pack' },
+    { _id: '4', name: 'Office Desk', label: 'Modern Office Desk', price: 3500, images: ['https://via.placeholder.com/300'], category: 'Furnitures', inStock: true, rating: 4.6, reviewCount: 30, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234567' },
+    { _id: '5', name: 'Rice - 1 Quintal', label: 'Premium Rice - 1 Quintal (100 kg)', price: 8000, images: ['https://via.placeholder.com/300'], category: 'Wholesale', inStock: true, rating: 4.8, reviewCount: 120, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234568', description: 'High quality rice - 1 quintal (100 kg)' },
+    { _id: '6', name: 'Live Chicken', label: 'Live Chicken - Bulk Order', price: 350, images: ['https://via.placeholder.com/300'], category: 'Wholesale', inStock: true, rating: 4.6, reviewCount: 45, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234569', description: 'Fresh live chicken - per kg' },
+    { _id: '7', name: 'Bulk Meat', label: 'Fresh Meat - 20 kg', price: 12000, images: ['https://via.placeholder.com/300'], category: 'Wholesale', inStock: true, rating: 4.9, reviewCount: 200, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234570', description: 'Fresh meat - 20 kg pack' },
+    { _id: '8', name: 'Potatoes - 1 Quintal', label: 'Fresh Potatoes - 1 Quintal', price: 3000, images: ['https://via.placeholder.com/300'], category: 'Wholesale', inStock: true, rating: 4.5, reviewCount: 90, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234571', description: 'Fresh potatoes - 1 quintal (100 kg)' },
+    { _id: '9', name: 'King Size Bed', label: 'King Size Bed with Mattress', price: 45000, originalPrice: 55000, discount: 18, images: ['https://via.placeholder.com/300'], category: 'Furnitures', inStock: true, rating: 4.9, reviewCount: 150, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234572', description: 'Premium king size bed with comfortable mattress' },
+    { _id: '10', name: 'Low Bed', label: 'Modern Low Bed Frame', price: 12000, images: ['https://via.placeholder.com/300'], category: 'Furnitures', inStock: true, rating: 4.6, reviewCount: 80, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234573', description: 'Stylish low bed frame for modern bedrooms' },
+    { _id: '11', name: 'Dining Table', label: 'Wooden Dining Table - 6 Seater', price: 18000, originalPrice: 22000, discount: 18, images: ['https://via.placeholder.com/300'], category: 'Furnitures', inStock: true, rating: 4.7, reviewCount: 95, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234574', description: 'Solid wood dining table for 6 people' },
+    { _id: '12', name: 'Cupboard', label: 'Wardrobe Cupboard - 4 Door', price: 25000, images: ['https://via.placeholder.com/300'], category: 'Furnitures', inStock: true, rating: 4.8, reviewCount: 120, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234575', description: 'Spacious 4-door wardrobe cupboard' },
+    { _id: '19', name: 'Hammer Set', label: 'Professional Hammer Set - 3 Pieces', price: 1200, originalPrice: 1500, discount: 20, images: ['https://via.placeholder.com/300'], category: 'Hardware', inStock: true, rating: 4.7, reviewCount: 85, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234582', description: 'Professional quality hammer set' },
+    { _id: '20', name: 'Screwdriver Set', label: 'Multi-Purpose Screwdriver Set - 20 Pieces', price: 800, images: ['https://via.placeholder.com/300'], category: 'Hardware', inStock: true, rating: 4.6, reviewCount: 120, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234583', description: 'Complete screwdriver set' },
+    { _id: '23', name: 'Drill Machine', label: 'Electric Drill Machine - 500W', price: 4500, originalPrice: 5500, discount: 18, images: ['https://via.placeholder.com/300'], category: 'Hardware', inStock: true, rating: 4.8, reviewCount: 150, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234586', description: 'Powerful electric drill machine' },
+    { _id: '49', name: 'Local Eggs', label: 'Fresh Local Eggs - 30 Pieces', price: 450, images: ['https://via.placeholder.com/300'], category: 'Farm', inStock: true, rating: 4.6, reviewCount: 150, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234611', description: 'Fresh local eggs - 30 pieces per tray' },
+    { _id: '50', name: 'Organic Eggs', label: 'Organic Free Range Eggs - 30 Pieces', price: 650, originalPrice: 750, discount: 13, images: ['https://via.placeholder.com/300'], category: 'Farm', inStock: true, rating: 4.8, reviewCount: 200, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234612', description: 'Premium organic eggs - 30 pieces' },
+    { _id: '55', name: 'Tomato - Carton', label: 'Fresh Tomatoes - 1 Carton (20 kg)', price: 1200, originalPrice: 1400, discount: 14, images: ['https://via.placeholder.com/300'], category: 'Farm', inStock: true, rating: 4.7, reviewCount: 180, isPopular: true, deliveryLocation: 'Kathmandu', phoneNumber: '+977-9841234617', description: 'Fresh red tomatoes - 1 carton (20 kg)' },
+  ];
+}
+
+export function getMarketMockProductById(id: string): Product | null {
+  const list = getDefaultMarketProducts();
+  return list.find((p) => p._id === id) || null;
+}
+
 export default function MarketScreen() {
   const { theme } = useTheme();
   const { getTotalItems } = useCart();
@@ -55,16 +83,22 @@ export default function MarketScreen() {
     try {
       setLoading(true);
       const apiUrl = getApiUrl();
-      const response = await fetch(`${apiUrl}/api/market/products`);
-      
-      if (response.ok) {
-        const data = await response.json();
-        setProducts(data.products || []);
-        const productCategories = (data.products || []).map((p: Product) => String(p.category || ''));
-        const uniqueCategories = Array.from(new Set(productCategories)) as string[];
-        setCategories(uniqueCategories);
+      let list: Product[] = [];
+      try {
+        const response = await fetch(`${apiUrl}/api/market/products`);
+        if (response.ok) {
+          const data = await response.json();
+          list = data.products || [];
+        }
+      } catch (_) {
+        // Network or API error - will use default content below
+      }
+      if (list.length > 0) {
+        setProducts(list);
+        const productCategories = list.map((p: Product) => String(p.category || ''));
+        setCategories(Array.from(new Set(productCategories)) as string[]);
       } else {
-        // Mock data for now
+        // Default content so Popular, Wholesale, Furnitures, Hardware, Farm are never empty
         const mockProducts: Product[] = [
           {
             _id: '1',
@@ -973,8 +1007,9 @@ export default function MarketScreen() {
       }
     } catch (error) {
       console.error('Error fetching products:', error);
-      setProducts([]);
-      setCategories([]);
+      const mockProducts = getDefaultMarketProducts();
+      setProducts(mockProducts);
+      setCategories(['Clothes', 'Furnitures', 'Wholesale', 'Hardware', 'Farm', 'Electronics']);
     } finally {
       setLoading(false);
     }
