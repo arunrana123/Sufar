@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { pushNotificationService } from '../lib/PushNotificationService';
 import GlobalBookingAlert from '../components/GlobalBookingAlert';
+import GlobalDeliveryAlert from '../components/GlobalDeliveryAlert';
 import SecurityGate from '../components/SecurityGate';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -122,6 +123,8 @@ function RootLayoutNav() {
         </Stack>
         {/* Global booking alert - shows on ANY screen when new request arrives */}
         <GlobalBookingAlert />
+        {/* Global delivery alert - shows on ANY screen when delivery is assigned */}
+        <GlobalDeliveryAlert />
       </View>
       <StatusBar style="auto" />
     </ThemeProvider>
