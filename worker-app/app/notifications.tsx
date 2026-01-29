@@ -536,11 +536,11 @@ export default function NotificationsScreen() {
   const unreadCount = notifications.filter((n) => !(n.read || n.isRead)).length;
 
   // Fetch unread count from backend
-  const fetchUnreadCount = async () => {
+  const fetchUnreadCount = async (): Promise<number> => {
     if (!worker?.id) return 0;
-    
+    const apiUrl = getApiUrl();
+    if (!apiUrl || typeof apiUrl !== 'string' || apiUrl.trim() === '') return 0;
     try {
-      const apiUrl = getApiUrl();
       const response = await fetch(`${apiUrl}/api/notifications/user/${worker.id}/unread-count`, {
         method: 'GET',
         headers: {
@@ -552,8 +552,8 @@ export default function NotificationsScreen() {
         const data = await response.json();
         return data.count || 0;
       }
-    } catch (error) {
-      console.error('Error fetching unread count:', error);
+    } catch {
+      // Network/backend unreachable: return 0 without surfacing error
     }
     return 0;
   };
