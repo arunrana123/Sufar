@@ -2,14 +2,16 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import AuthScreen from '../screens/AuthScreen';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { useState, useEffect } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { pushNotificationService } from '../lib/PushNotificationService';
 import GlobalBookingAlert from '../components/GlobalBookingAlert';
 import GlobalDeliveryAlert from '../components/GlobalDeliveryAlert';
+import GlobalReviewThankYou from '../components/GlobalReviewThankYou';
 import SecurityGate from '../components/SecurityGate';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -105,9 +107,11 @@ function RootLayoutNav() {
 
   // If authenticated and security passed, show main app
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <View style={{ flex: 1 }}>
-        <Stack>
+    <SafeAreaProvider>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <SafeAreaView style={{ flex: 1 }} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
+          <View style={{ flex: 1 }}>
+            <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="search" options={{ headerShown: false }} />
           <Stack.Screen name="notifications" options={{ headerShown: false }} />
@@ -120,14 +124,18 @@ function RootLayoutNav() {
           <Stack.Screen name="security" options={{ headerShown: false }} />
           <Stack.Screen name="order-delivery-tracking" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        </Stack>
-        {/* Global booking alert - shows on ANY screen when new request arrives */}
-        <GlobalBookingAlert />
-        {/* Global delivery alert - shows on ANY screen when delivery is assigned */}
-        <GlobalDeliveryAlert />
-      </View>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+            </Stack>
+            {/* Global booking alert - shows on ANY screen when new request arrives */}
+            <GlobalBookingAlert />
+            {/* Global delivery alert - shows on ANY screen when delivery is assigned */}
+            <GlobalDeliveryAlert />
+            {/* Thank you message when user submits rating and review */}
+            <GlobalReviewThankYou />
+          </View>
+        </SafeAreaView>
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 
