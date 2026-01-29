@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Service } from '@/lib/services';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface ServiceCardProps {
   service: Service;
@@ -10,6 +11,7 @@ interface ServiceCardProps {
 }
 
 export default function ServiceCard({ service, onPress }: ServiceCardProps) {
+  const { theme } = useTheme();
   const formatPrice = () => {
     const priceText = `Rs. ${service.price}`;
     switch (service.priceType) {
@@ -98,12 +100,18 @@ export default function ServiceCard({ service, onPress }: ServiceCardProps) {
       
       {/* Action Buttons */}
       <View style={styles.actionButtons}>
-        <Pressable style={styles.viewButton} onPress={handleViewService}>
-          <Ionicons name="eye-outline" size={16} color="#3B82F6" />
-          <Text style={styles.viewButtonText}>View</Text>
+        <Pressable
+          style={[styles.viewButton, { backgroundColor: theme.tint + '18', borderColor: theme.border }]}
+          onPress={handleViewService}
+        >
+          <Ionicons name="eye-outline" size={16} color={theme.tint} />
+          <Text style={[styles.viewButtonText, { color: theme.tint }]}>View</Text>
         </Pressable>
         
-        <Pressable style={styles.bookButton} onPress={handleBookService}>
+        <Pressable
+          style={[styles.bookButton, { backgroundColor: theme.tint }]}
+          onPress={handleBookService}
+        >
           <Ionicons name="calendar-outline" size={16} color="#fff" />
           <Text style={styles.bookButtonText}>Book</Text>
         </Pressable>
@@ -198,17 +206,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F3F4F6',
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
   },
   viewButtonText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#3B82F6',
     marginLeft: 6,
   },
   bookButton: {
@@ -216,7 +221,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#3B82F6',
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 8,
