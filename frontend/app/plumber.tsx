@@ -1,7 +1,8 @@
 // PLUMBER SERVICE CATEGORY SCREEN - Lists all plumbing services with search and filters
 // Features: Service grid, search by title, filter by price range, category info header, navigate to book-service
 // Note: This pattern is reused for all service categories (electrician, mechanic, carpenter, etc.)
-import { SafeAreaView, StyleSheet, View, Pressable, ScrollView, Platform, TextInput, Modal, TouchableOpacity } from 'react-native';
+import { SafeAreaView as RNSafeAreaView, StyleSheet, View, Pressable, ScrollView, Platform, TextInput, Modal, TouchableOpacity, StatusBar } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/ThemedText';
@@ -59,8 +60,8 @@ export default function PlumberScreen() {
   return (
     <ThemedView style={styles.container}>
       <Stack.Screen options={{ headerShown: false }} />
-      <SafeAreaView style={styles.safe}>
-        {/* Header */}
+      <SafeAreaView style={styles.safe} edges={Platform.OS === 'ios' ? ['top', 'left', 'right'] : ['left', 'right']}>
+        {/* Header - full-bleed on Android */}
         <View style={[styles.header, { backgroundColor: theme.tint }]}>
           <TouchableOpacity onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/home'); }} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -109,7 +110,7 @@ export default function PlumberScreen() {
           onRequestClose={() => setSearchVisible(false)}
         >
           <View style={[styles.searchModal, { backgroundColor: theme.background }]}>
-            <SafeAreaView style={styles.searchSafe}>
+            <RNSafeAreaView style={styles.searchSafe}>
               {/* Search Header */}
               <View style={[styles.searchHeader, { backgroundColor: theme.card, borderBottomColor: theme.border }]}>
                 <TouchableOpacity onPress={() => setSearchVisible(false)} style={styles.closeBtn}>
@@ -168,7 +169,7 @@ export default function PlumberScreen() {
                   )}
                 </View>
               </ScrollView>
-            </SafeAreaView>
+            </RNSafeAreaView>
           </View>
         </Modal>
       </SafeAreaView>
@@ -197,7 +198,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     backgroundColor: '#3B82F6',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -239,7 +240,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 15,
-    paddingTop: Platform.OS === 'ios' ? 50 : 15,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 24) : 50,
     borderBottomWidth: 1,
   },
   closeBtn: {
