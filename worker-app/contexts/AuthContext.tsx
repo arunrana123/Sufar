@@ -62,7 +62,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const loadStoredWorker = async () => {
     try {
       // Set a timeout to ensure loading doesn't hang forever (max 3 seconds)
-      const timeoutPromise = new Promise((resolve) => {
+      const timeoutPromise = new Promise<string | null>((resolve) => {
         setTimeout(() => {
           console.log('⚠️ AsyncStorage timeout - proceeding with app load');
           resolve(null);
@@ -75,7 +75,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const storedWorker = await Promise.race([storagePromise, timeoutPromise]);
       
       if (storedWorker) {
-        console.log('Stored worker data exists, but user must login');
+        try {
+          const parsed = JSON.parse(storedWorker);
+          if (parsed && parsed.id && parsed.token) {
+            setWorker(parsed);
+            console.log('Worker restored from storage - will show PIN/biometric gate');
+          }
+        } catch (parseError) {
+          console.error('Error parsing stored worker:', parseError);
+        }
       }
     } catch (error) {
       console.error('Error loading stored worker:', error);
