@@ -37,6 +37,15 @@ export default function LoginScreen() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { login } = useAuth();
   const [googleLoading, setGoogleLoading] = useState(false);
+  // Forgot password flow states (must be declared before any conditional return)
+  const [forgotVisible, setForgotVisible] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'email' | 'otp' | 'reset'>('email');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [otp, setOtp] = useState('');
+  const [verifiedOtp, setVerifiedOtp] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
 
   // Google Sign-In Hook
   const [request, response, promptAsync] = Google.useAuthRequest({
@@ -116,20 +125,15 @@ export default function LoginScreen() {
     WebBrowser.maybeCompleteAuthSession();
   }, []);
 
-  // Show onboarding for new users
+  const handleOnboardingComplete = async () => {
+    await AsyncStorage.setItem('hasCompletedOnboarding', 'true');
+    setShowOnboarding(false);
+    router.replace('/home');
+  };
+  // Show onboarding for new users (return after all hooks)
   if (showOnboarding) {
     return <UserOnboarding onComplete={handleOnboardingComplete} />;
   }
-  
-  // Forgot password flow states
-  const [forgotVisible, setForgotVisible] = useState(false);
-  const [forgotStep, setForgotStep] = useState<'email' | 'otp' | 'reset'>('email');
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [otp, setOtp] = useState('');
-  const [verifiedOtp, setVerifiedOtp] = useState<string | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [forgotLoading, setForgotLoading] = useState(false);
 
   const handleGoogleLogin = () => {
     setGoogleLoading(true);
@@ -140,11 +144,7 @@ export default function LoginScreen() {
     });
   };
 
-  const handleOnboardingComplete = async () => {
-    await AsyncStorage.setItem('hasCompletedOnboarding', 'true');
-    setShowOnboarding(false);
-    router.replace('/home');
-  };
+ 
 
   const handleLogin = async () => {
     if (!email || !password) {
