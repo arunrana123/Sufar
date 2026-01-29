@@ -60,6 +60,9 @@ export interface SocketEvents {
   // Payment events
   'payment:status_updated': (data: { bookingId: string; paymentStatus: string; userConfirmed: boolean; workerConfirmed: boolean; booking?: any }) => void;
 
+  // Review events (thank you message when user submits rating and comment)
+  'review:submitted': (data: { workerId: string; bookingId: string; rating: number; comment?: string; thankYouMessage: string }) => void;
+
   // Notification events
   'notification:new': (notification: any) => void;
   'notification:read': (notificationId: string) => void;
