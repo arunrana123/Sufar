@@ -561,7 +561,7 @@ export default function RequestsScreen() {
             return;
           }
           
-          // Check if worker has this service category (case-insensitive)
+          // Check if worker has this service category (case-insensitive, handle variations)
           const hasServiceCategory = (() => {
             if (!booking.serviceCategory || !worker) {
               console.log('⚠️ Missing serviceCategory or worker data');
@@ -571,14 +571,30 @@ export default function RequestsScreen() {
             const workerCategories = worker.serviceCategories || [];
             const bookingCategory = booking.serviceCategory.toLowerCase().trim();
             
-            // Check if worker has this service category (case-insensitive match)
-            const hasCategory = workerCategories.some(
-              (cat: string) => cat.toLowerCase().trim() === bookingCategory
-            );
+            // Normalize category names for matching (handle variations like "Carpenter" vs "Carpentry")
+            const normalizeCategory = (cat: string): string => {
+              const normalized = cat.toLowerCase().trim();
+              // Handle common variations
+              if (normalized.includes('carpenter') || normalized.includes('carpentry')) {
+                return 'carpenter';
+              }
+              return normalized;
+            };
+            
+            const normalizedBookingCategory = normalizeCategory(booking.serviceCategory);
+            
+            // Check if worker has this service category (flexible matching)
+            const hasCategory = workerCategories.some((cat: string) => {
+              const normalizedWorkerCat = normalizeCategory(cat);
+              return normalizedWorkerCat === normalizedBookingCategory || 
+                     normalizedWorkerCat.includes(normalizedBookingCategory) || 
+                     normalizedBookingCategory.includes(normalizedWorkerCat);
+            });
             
             if (!hasCategory) {
               console.log(`⚠️ Worker does not have service category: ${booking.serviceCategory}`);
               console.log(`📋 Worker categories:`, workerCategories);
+              console.log(`📋 Normalized booking category: ${normalizedBookingCategory}`);
               return false;
             }
             
@@ -586,17 +602,38 @@ export default function RequestsScreen() {
             return true;
           })();
           
-          // Check if worker is verified for this service category
+          // Check if worker is verified for this service category (handle variations)
           const isServiceVerified = (() => {
             if (!booking.serviceCategory || !worker) {
               return false;
             }
             
-            const categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+            // Check verification status for the exact category first
+            let categoryStatus = worker.categoryVerificationStatus?.[booking.serviceCategory];
+            
+            // If not found, try to find a matching category in verification status
+            if (!categoryStatus && worker.categoryVerificationStatus) {
+              const normalizedBookingCategory = booking.serviceCategory.toLowerCase().trim();
+              const matchingCategory = Object.keys(worker.categoryVerificationStatus).find(cat => {
+                const normalizedCat = cat.toLowerCase().trim();
+                // Handle variations like "Carpenter" vs "Carpentry"
+                if (normalizedBookingCategory.includes('carpenter') || normalizedBookingCategory.includes('carpentry')) {
+                  return normalizedCat.includes('carpenter') || normalizedCat.includes('carpentry');
+                }
+                return normalizedCat === normalizedBookingCategory;
+              });
+              
+              if (matchingCategory) {
+                categoryStatus = worker.categoryVerificationStatus[matchingCategory];
+                console.log(`✅ Found matching verification status for category variation: ${matchingCategory}`);
+              }
+            }
+            
             const isVerified = categoryStatus === 'verified';
             
             if (!isVerified) {
               console.log(`⚠️ Worker service category "${booking.serviceCategory}" is not verified. Status: ${categoryStatus}`);
+              console.log(`📋 Available verification statuses:`, Object.keys(worker.categoryVerificationStatus || {}));
             }
             
             return isVerified;
@@ -688,34 +725,52 @@ export default function RequestsScreen() {
           fetchBookings();
         });
         
-        // Listen for booking updates
+        // Listen for booking updates - save ALL booking data
         socketService.on('booking:updated', (updatedBooking: any) => {
           console.log('📢 Booking updated event received in worker app:', updatedBooking);
-          // Update in state immediately for real-time UI updates
+          // Use full booking data from event (includes all fields: location, price, serviceName, etc.)
+          const fullBookingData = updatedBooking.booking || updatedBooking;
+          
+          // Update in state immediately for real-time UI updates with FULL data
           setBookings(prevBookings => {
-            const exists = prevBookings.some(b => b._id === updatedBooking._id);
+            const exists = prevBookings.some(b => b._id === fullBookingData._id || b._id === updatedBooking._id);
             if (exists) {
-              return prevBookings.map(b =>
-                b._id === updatedBooking._id ? { ...b, ...updatedBooking } : b
-              );
+              // Merge ALL fields from full booking data
+              return prevBookings.map(b => {
+                const bookingId = fullBookingData._id || updatedBooking._id;
+                if (b._id === bookingId) {
+                  return {
+                    ...b,
+                    ...fullBookingData, // Include ALL fields from backend
+                    status: fullBookingData.status || updatedBooking.status || b.status,
+                    workerId: fullBookingData.workerId || updatedBooking.workerId || b.workerId,
+                    location: fullBookingData.location || b.location,
+                    price: fullBookingData.price ?? b.price,
+                    serviceName: fullBookingData.serviceName || b.serviceName,
+                    serviceCategory: fullBookingData.serviceCategory || b.serviceCategory,
+                  };
+                }
+                return b;
+              });
             } else {
-              // If booking doesn't exist and is assigned to this worker, add it
-              if (updatedBooking.workerId === worker.id || String(updatedBooking.workerId) === String(worker.id)) {
+              // If booking doesn't exist and is assigned to this worker, add it with FULL data
+              const workerId = fullBookingData.workerId || updatedBooking.workerId;
+              if (workerId === worker.id || String(workerId) === String(worker.id)) {
                 const newBooking: Booking = {
-                  _id: updatedBooking._id,
+                  _id: fullBookingData._id || updatedBooking._id,
                   userId: {
-                    firstName: updatedBooking.userId?.firstName || 'Customer',
-                    lastName: updatedBooking.userId?.lastName || '',
-                    phone: updatedBooking.userId?.phone || '',
-                    profilePhoto: updatedBooking.userId?.profilePhoto,
+                    firstName: fullBookingData.userId?.firstName || updatedBooking.userId?.firstName || 'Customer',
+                    lastName: fullBookingData.userId?.lastName || updatedBooking.userId?.lastName || '',
+                    phone: fullBookingData.userId?.phone || updatedBooking.userId?.phone || '',
+                    profilePhoto: fullBookingData.userId?.profilePhoto || updatedBooking.userId?.profilePhoto,
                   },
-                  serviceName: updatedBooking.serviceName || updatedBooking.serviceCategory || 'Service',
-                  serviceCategory: updatedBooking.serviceCategory,
-                  location: updatedBooking.location || { address: 'Location not specified' },
-                  price: updatedBooking.price || 0,
-                  status: updatedBooking.status || 'pending',
-                  createdAt: updatedBooking.createdAt || new Date().toISOString(),
-                  workerId: updatedBooking.workerId,
+                  serviceName: fullBookingData.serviceName || updatedBooking.serviceName || fullBookingData.serviceCategory || 'Service',
+                  serviceCategory: fullBookingData.serviceCategory || updatedBooking.serviceCategory,
+                  location: fullBookingData.location || updatedBooking.location || { address: 'Location not specified' },
+                  price: fullBookingData.price ?? updatedBooking.price ?? 0,
+                  status: fullBookingData.status || updatedBooking.status || 'pending',
+                  createdAt: fullBookingData.createdAt || updatedBooking.createdAt || new Date().toISOString(),
+                  workerId: workerId,
                 };
                 return [newBooking, ...prevBookings];
               }
@@ -724,24 +779,61 @@ export default function RequestsScreen() {
           });
           
           // Refresh from backend to ensure consistency
-          if (updatedBooking.workerId === worker.id || String(updatedBooking.workerId) === String(worker.id)) {
+          const workerId = fullBookingData.workerId || updatedBooking.workerId;
+          if (workerId === worker.id || String(workerId) === String(worker.id)) {
             setTimeout(() => {
               fetchBookings();
             }, 500);
           }
         });
         
-        // Listen for booking:accepted event to update counts immediately
+        // Listen for booking:accepted event - save ALL booking data
         socketService.on('booking:accepted', (data: any) => {
           console.log('✅ Booking accepted event received:', data);
-          if (data.workerId === worker.id || String(data.workerId) === String(worker.id)) {
-            // Update bookings immediately
-            setBookings(prevBookings =>
-              prevBookings.map(b =>
-                b._id === data.bookingId ? { ...b, status: 'accepted', workerId: data.workerId } : b
-              )
-            );
-            // Refresh to get full booking data
+          // Use full booking data from event
+          const fullBookingData = data.booking || data;
+          const bookingId = fullBookingData._id || data.bookingId;
+          const workerId = fullBookingData.workerId || data.workerId;
+          
+          if (workerId === worker.id || String(workerId) === String(worker.id)) {
+            // Update bookings immediately with FULL booking data
+            setBookings(prevBookings => {
+              const exists = prevBookings.some(b => b._id === bookingId);
+              if (exists) {
+                // Merge ALL fields from full booking data
+                return prevBookings.map(b =>
+                  b._id === bookingId
+                    ? {
+                        ...b,
+                        ...fullBookingData, // Include ALL fields: location, price, serviceName, etc.
+                        status: 'accepted',
+                        workerId: workerId,
+                      }
+                    : b
+                );
+              } else {
+                // Add new accepted booking with full data
+                const newBooking: Booking = {
+                  _id: bookingId,
+                  userId: {
+                    firstName: fullBookingData.userId?.firstName || 'Customer',
+                    lastName: fullBookingData.userId?.lastName || '',
+                    phone: fullBookingData.userId?.phone || '',
+                    profilePhoto: fullBookingData.userId?.profilePhoto,
+                  },
+                  serviceName: fullBookingData.serviceName || fullBookingData.serviceCategory || 'Service',
+                  serviceCategory: fullBookingData.serviceCategory,
+                  location: fullBookingData.location || { address: 'Location not specified' },
+                  price: fullBookingData.price ?? 0,
+                  status: 'accepted',
+                  createdAt: fullBookingData.createdAt || new Date().toISOString(),
+                  workerId: workerId,
+                };
+                return [newBooking, ...prevBookings];
+              }
+            });
+            
+            // Refresh to get full booking data from backend
             setTimeout(() => {
               fetchBookings();
             }, 500);
@@ -921,20 +1013,50 @@ export default function RequestsScreen() {
       });
 
       if (response.ok) {
-        const booking = await response.json();
-        console.log('✅ Booking accepted successfully:', booking._id);
+        const bookingData = await response.json();
+        console.log('✅ Booking accepted successfully:', bookingData._id);
+        console.log('📦 Full booking data received:', {
+          id: bookingData._id,
+          status: bookingData.status,
+          workerId: bookingData.workerId,
+          serviceName: bookingData.serviceName,
+          location: bookingData.location,
+          price: bookingData.price,
+        });
         
         // Play success sound
         if (worker?.id) {
           notificationSoundService.playNotificationSound('booking', 'accepted', worker.id);
         }
         
-        // Update booking in state immediately for real-time UI update
-        setBookings(prevBookings =>
-          prevBookings.map(b =>
-            b._id === bookingId ? { ...b, status: 'accepted', workerId: worker?.id } : b
-          )
-        );
+        // Update booking in state with FULL booking data from backend response
+        // This ensures all fields (location, price, serviceName, etc.) are saved
+        setBookings(prevBookings => {
+          const updated = prevBookings.map(b => {
+            if (b._id === bookingId || b._id === bookingData._id) {
+              // Merge full booking data from backend response
+              return {
+                ...b,
+                ...bookingData, // Include all fields from backend
+                status: 'accepted',
+                workerId: bookingData.workerId || worker?.id,
+              };
+            }
+            return b;
+          });
+          
+          // If booking not found in current list, add it (in case it's a new accepted booking)
+          const exists = updated.some(b => b._id === bookingData._id || b._id === bookingId);
+          if (!exists && bookingData._id) {
+            updated.push({
+              _id: bookingData._id,
+              ...bookingData,
+              status: 'accepted',
+            } as Booking);
+          }
+          
+          return updated;
+        });
         
         // Save stats (count will be updated automatically by useEffect when bookings change)
         await saveRequestStats(true, false);
@@ -946,10 +1068,10 @@ export default function RequestsScreen() {
           'success'
         );
         
-        // Refresh bookings to get full updated data from backend
+        // Refresh bookings to get full updated data from backend (with all fields)
         setTimeout(() => {
           fetchBookings();
-        }, 300);
+        }, 500); // Increased delay to ensure backend has saved all data
       } else {
         const data = await response.json();
         showToast(
@@ -1010,6 +1132,25 @@ export default function RequestsScreen() {
               });
 
               if (response.ok) {
+                const data = await response.json();
+                console.log('✅ Booking rejected successfully:', data.booking?._id || bookingId);
+                
+                // Update booking in state with full data from backend response
+                if (data.booking) {
+                  setBookings(prevBookings =>
+                    prevBookings.map(b =>
+                      b._id === bookingId || b._id === data.booking._id
+                        ? { ...b, ...data.booking, status: data.booking.status || 'pending' }
+                        : b
+                    )
+                  );
+                } else {
+                  // If no booking data returned, just remove from list or mark as rejected
+                  setBookings(prevBookings =>
+                    prevBookings.filter(b => b._id !== bookingId)
+                  );
+                }
+                
                 // Increment rejected count
                 await saveRequestStats(false, true);
                 
@@ -1018,7 +1159,11 @@ export default function RequestsScreen() {
                   'Request Rejected',
                   'info'
                 );
-                fetchBookings();
+                
+                // Refresh bookings to get updated data from backend
+                setTimeout(() => {
+                  fetchBookings();
+                }, 500);
               } else {
                 showToast(
                   'Failed to reject request. Please try again.',
