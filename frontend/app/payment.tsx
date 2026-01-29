@@ -230,22 +230,19 @@ export default function PaymentScreen() {
                         );
                       }
                     } else {
-                      Alert.alert(
-                        'Payment Successful!',
-                        'Your payment has been processed successfully.',
-                        [
-                          {
-                            text: 'Leave Review',
-                            onPress: () => router.replace({
-                              pathname: '/review',
-                              params: {
-                                bookingId,
-                                serviceTitle,
-                              },
-                            }),
-                          },
-                        ]
-                      );
+                      // Service: instantly ask for rating and review
+                      const workerName = params.workerName as string || '';
+                      const workerIdParam = params.workerId as string || '';
+                      router.replace({
+                        pathname: '/review',
+                        params: {
+                          bookingId,
+                          serviceTitle,
+                          workerName,
+                          workerId: workerIdParam,
+                          amount: String(amount),
+                        },
+                      });
                     }
                   }, 2000);
                 },
@@ -320,22 +317,19 @@ export default function PaymentScreen() {
               ]
             );
           } else {
-            Alert.alert(
-              'Payment Successful!',
-              'Your payment has been processed successfully.',
-              [
-                {
-                  text: 'Leave Review',
-                  onPress: () => router.replace({
-                    pathname: '/review',
-                    params: {
-                      bookingId,
-                      serviceTitle,
-                    },
-                  }),
-                },
-              ]
-            );
+            // Service booking: instantly navigate to rating and review
+            const workerName = params.workerName as string || '';
+            const workerIdParam = params.workerId as string || '';
+            router.replace({
+              pathname: '/review',
+              params: {
+                bookingId,
+                serviceTitle,
+                workerName,
+                workerId: workerIdParam,
+                amount: String(amount),
+              },
+            });
           }
         } else {
           Alert.alert('Payment Failed', data.message || 'Failed to process payment');
