@@ -3,6 +3,7 @@
 // Features: User registration/login, Google Sign-In, profile updates, password reset
 import { Router, type Request, type Response } from "express";
 import User from "../models/User.model";
+import WorkerUser from "../models/WorkerUser.model";
 import crypto from 'crypto';
 import { logAdminActivity } from "./dashboard.routes";
 import { OAuth2Client } from 'google-auth-library';
@@ -747,6 +748,41 @@ router.get('/all', async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Fetch users error:', err);
     return res.status(500).json({ message: 'Failed to fetch users' });
+  }
+});
+
+// Get all registered accounts: users (admin + customer) + workers - for dashboard
+router.get('/all-including-workers', async (req: Request, res: Response) => {
+  try {
+    const users = await User.find({}, '-password -resetToken -otpCode -otpExpires').sort({ createdAt: -1 }).lean();
+    const workers = await WorkerUser.find({}).select('-password').sort({ createdAt: -1 }).lean();
+    const userRows = (users as any[]).map((u) => ({
+      _id: u._id,
+      username: u.username,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      email: u.email,
+      role: u.role || 'user',
+      createdAt: u.createdAt,
+      source: 'user' as const,
+    }));
+    const workerRows = (workers as any[]).map((w) => ({
+      _id: w._id,
+      username: w.name || '',
+      firstName: w.name || '',
+      lastName: '',
+      email: w.email,
+      role: 'worker' as const,
+      createdAt: w.createdAt,
+      source: 'worker' as const,
+    }));
+    const combined = [...userRows, ...workerRows].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+    return res.json(combined);
+  } catch (err) {
+    console.error('Fetch all-including-workers error:', err);
+    return res.status(500).json({ message: 'Failed to fetch users and workers' });
   }
 });
 
