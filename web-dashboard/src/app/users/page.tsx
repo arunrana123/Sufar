@@ -11,6 +11,7 @@ type User = {
   email: string;
   role: string;
   createdAt: string;
+  source?: 'user' | 'worker';
 };
 
 export default function UsersPage() {
@@ -38,80 +39,97 @@ export default function UsersPage() {
   }, [router]);
 
   const fetchUsers = async () => {
+    setLoading(true);
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+    const directUrl = `${apiUrl}/api/users/all-including-workers`;
+    const proxyUrl = '/api/proxy/api/users/all-including-workers';
+
+    let res: Response | null = null;
     try {
-      setLoading(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-      const res = await fetch(`${apiUrl}/api/users/all`);
-      
-      if (res.ok) {
+      res = await fetch(directUrl, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
+    } catch {
+      try {
+        res = await fetch(proxyUrl, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
+      } catch (proxyError) {
+        console.error('Error fetching users (direct and proxy failed):', proxyError);
+        setUsers([]);
+        return;
+      }
+    }
+
+    try {
+      if (res && res.ok) {
         const data = await res.json();
         setUsers(data);
-        console.log('Users synced with backend successfully');
+        console.log('Users and workers synced with backend successfully');
       } else {
-        console.warn('Backend sync failed');
         setUsers([]);
       }
-    } catch (error) {
-      console.error('Error fetching users:', error);
+    } catch (e) {
       setUsers([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDeleteUser = async (userId: string, userName: string) => {
+  const handleDeleteUser = async (userId: string, userName: string, source?: 'user' | 'worker') => {
+    if (source === 'worker') return;
     if (!confirm(`Are you sure you want to delete user "${userName}"? This action cannot be undone.`)) {
       return;
     }
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+    let res: Response | null = null;
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-      const res = await fetch(`${apiUrl}/api/users/${userId}`, {
-        method: 'DELETE',
-      });
-
-      if (res.ok) {
-        setUsers(users.filter(user => user._id !== userId));
-        alert('User deleted successfully!');
-      } else {
-        const errorData = await res.json();
-        alert(errorData.message || 'Failed to delete user. Please try again.');
+      res = await fetch(`${apiUrl}/api/users/${userId}`, { method: 'DELETE' });
+    } catch {
+      try {
+        res = await fetch(`/api/proxy/api/users/${userId}`, { method: 'DELETE' });
+      } catch (e) {
+        alert('Failed to delete user. Please try again.');
+        return;
       }
-    } catch (error) {
-      console.error('Error deleting user:', error);
-      alert('Failed to delete user. Please try again.');
+    }
+    if (res?.ok) {
+      setUsers(users.filter(user => user._id !== userId));
+      alert('User deleted successfully!');
+    } else {
+      const errorData = await res?.json().catch(() => ({}));
+      alert(errorData?.message || 'Failed to delete user. Please try again.');
     }
   };
 
   const handleClearAllUsers = async () => {
-    const nonAdminUsers = users.filter(user => user.role !== 'admin');
-    
+    const nonAdminUsers = users.filter(user => user.role !== 'admin' && user.source === 'user');
+
     if (nonAdminUsers.length === 0) {
-      alert('No users to delete (only admin users exist).');
+      alert('No customer users to delete (only admin, workers, or no users).');
       return;
     }
 
-    if (!confirm(`Are you sure you want to delete all ${nonAdminUsers.length} users? This action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to delete all ${nonAdminUsers.length} customer user(s)? This does not delete workers. This action cannot be undone.`)) {
       return;
     }
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+    let res: Response | null = null;
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-      const res = await fetch(`${apiUrl}/api/users/all`, {
-        method: 'DELETE',
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(users.filter(user => user.role === 'admin')); // Keep only admin users
-        alert(`All ${data.deletedCount} users deleted successfully!`);
-      } else {
-        const errorData = await res.json();
-        alert(errorData.message || 'Failed to delete all users. Please try again.');
+      res = await fetch(`${apiUrl}/api/users/all`, { method: 'DELETE' });
+    } catch {
+      try {
+        res = await fetch('/api/proxy/api/users/all', { method: 'DELETE' });
+      } catch (e) {
+        alert('Failed to delete all users. Please try again.');
+        return;
       }
-    } catch (error) {
-      console.error('Error deleting all users:', error);
-      alert('Failed to delete all users. Please try again.');
+    }
+    if (res?.ok) {
+      const data = await res.json();
+      setUsers(users.filter(user => user.role === 'admin' || user.source === 'worker'));
+      alert(`All ${data.deletedCount} customer users deleted successfully!`);
+    } else {
+      const errorData = await res?.json().catch(() => ({}));
+      alert(errorData?.message || 'Failed to delete all users. Please try again.');
     }
   };
 
@@ -128,7 +146,7 @@ export default function UsersPage() {
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900">All Users ({users.length})</h3>
-            {users.filter(user => user.role !== 'admin').length > 0 && (
+            {users.filter(user => user.role !== 'admin' && user.source === 'user').length > 0 && (
               <button
                 onClick={handleClearAllUsers}
                 className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors duration-200 flex items-center gap-2"
@@ -166,9 +184,11 @@ export default function UsersPage() {
                   <tr key={user._id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
-                        {user.firstName} {user.lastName}
+                        {user.source === 'worker' ? user.firstName : `${user.firstName} ${user.lastName}`.trim()}
                       </div>
-                      <div className="text-sm text-gray-500">@{user.username}</div>
+                      <div className="text-sm text-gray-500">
+                        {user.source === 'worker' ? user.email : `@${user.username}`}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {user.role === 'admin' ? (
@@ -179,9 +199,11 @@ export default function UsersPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                        user.role === 'admin' 
-                          ? 'bg-purple-100 text-purple-800' 
-                          : 'bg-green-100 text-green-800'
+                        user.role === 'admin'
+                          ? 'bg-purple-100 text-purple-800'
+                          : user.role === 'worker'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-green-100 text-green-800'
                       }`}>
                         {user.role}
                       </span>
@@ -190,9 +212,9 @@ export default function UsersPage() {
                       {new Date(user.createdAt).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      {user.role !== 'admin' && (
+                      {user.role !== 'admin' && user.source === 'user' && (
                         <button
-                          onClick={() => handleDeleteUser(user._id, `${user.firstName} ${user.lastName}`)}
+                          onClick={() => handleDeleteUser(user._id, `${user.firstName} ${user.lastName}`.trim(), user.source)}
                           className="text-red-600 hover:text-red-900 transition-colors duration-200 p-2 hover:bg-red-50 rounded-lg"
                           title="Delete user"
                         >
@@ -203,6 +225,9 @@ export default function UsersPage() {
                       )}
                       {user.role === 'admin' && (
                         <span className="text-gray-400 text-xs">Protected</span>
+                      )}
+                      {user.source === 'worker' && (
+                        <span className="text-gray-400 text-xs">Manage in Workers</span>
                       )}
                     </td>
                   </tr>
