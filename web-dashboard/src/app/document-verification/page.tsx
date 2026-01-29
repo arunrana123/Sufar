@@ -316,6 +316,23 @@ export default function DocumentVerificationPage() {
       if (response.ok) {
         const result = await response.json();
         console.log('✅ Category verification successful:', result);
+
+        // When approving, also update general document verification (profilePhoto, certificate, citizenship, license)
+        // so worker app shows "Verified" for all documents and QR can be generated
+        if (status === 'verified') {
+          const documentTypes = ['profilePhoto', 'certificate', 'citizenship', 'license'];
+          for (const docType of documentTypes) {
+            try {
+              await fetch(`${apiUrl}/api/admin/verify-document`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workerId, documentType: docType, status: 'verified' }),
+              });
+            } catch (e) {
+              console.warn(`Verify general doc ${docType}:`, e);
+            }
+          }
+        }
         
         // Refresh workers to get updated status
         await fetchWorkers();
@@ -323,7 +340,6 @@ export default function DocumentVerificationPage() {
         // Update selected worker if it's the one being verified
         if (selectedWorker?._id === workerId) {
           // Fetch fresh worker data
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
           const workerResponse = await fetch(`${apiUrl}/api/admin/workers`);
           if (workerResponse.ok) {
             const allWorkers = await workerResponse.json();
