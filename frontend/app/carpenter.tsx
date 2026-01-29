@@ -6,23 +6,42 @@ import { ThemedView } from '@/components/ThemedView';
 import { useTheme } from '@/contexts/ThemeContext';
 import BottomNav from '@/components/BottomNav';
 import ServiceCard from '@/components/ServiceCard';
-import { getServicesByCategory, getCategoryInfo } from '@/lib/services';
-import { useState, useMemo, useEffect } from 'react';
+import { getServicesByCategory, getCategoryInfo, getServicesByCategoryFromAPI } from '@/lib/services';
+import { useState, useEffect } from 'react';
 import * as Location from 'expo-location';
 import { getApiUrl } from '@/lib/config';
+import type { Service } from '@/lib/services';
+
+const CATEGORY_SLUG = 'carpenter';
 
 export default function CarpenterScreen() {
   const { theme } = useTheme();
   
-  const categoryInfo = getCategoryInfo('carpenter');
-  const allServices = getServicesByCategory('carpenter');
-  
-  // Search state
+  const categoryInfo = getCategoryInfo(CATEGORY_SLUG);
+  const fallbackServices = getServicesByCategory(CATEGORY_SLUG);
+  const [allServices, setAllServices] = useState<Service[]>(fallbackServices);
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filteredServices, setFilteredServices] = useState(allServices);
+  const [filteredServices, setFilteredServices] = useState<Service[]>(fallbackServices);
   const [workers, setWorkers] = useState<any[]>([]);
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  useEffect(() => {
+    getServicesByCategoryFromAPI(CATEGORY_SLUG).then((api) => {
+      if (api.length > 0) setAllServices(api);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (searchQuery.trim() === '') {
+      setFilteredServices(allServices);
+    } else {
+      setFilteredServices(allServices.filter(service =>
+        service.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (service.description?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false)
+      ));
+    }
+  }, [allServices, searchQuery]);
 
   useEffect(() => {
     (async () => {
@@ -81,20 +100,10 @@ export default function CarpenterScreen() {
   // Filter services based on search query
   const handleSearch = (query: string) => {
     setSearchQuery(query);
-    if (query.trim() === '') {
-      setFilteredServices(allServices);
-    } else {
-      const filtered = allServices.filter(service =>
-        service.title.toLowerCase().includes(query.toLowerCase()) ||
-        service.description?.toLowerCase().includes(query.toLowerCase())
-      );
-      setFilteredServices(filtered);
-    }
   };
 
   const clearSearch = () => {
     setSearchQuery('');
-    setFilteredServices(allServices);
     setSearchVisible(false);
   };
 
